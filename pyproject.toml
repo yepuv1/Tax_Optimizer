@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tax-optimizer"
+version = "0.1.0"
+description = "Retirement tax optimizer notebook for jointly choosing Traditional vs Roth 401(k) contributions, withdrawal sequencing, and Roth conversions."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Vijay Yepuri" },
+]
+keywords = ["retirement", "tax", "roth", "401k", "irmaa", "rmd", "optimizer"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial",
+]
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "matplotlib>=3.8",
+    "scipy>=1.11",
+    "ipython>=8.18",
+]
+
+[project.optional-dependencies]
+notebook = [
+    "jupyter>=1.0",
+    "jupyterlab>=4.0",
+    "notebook>=7.0",
+    "ipykernel>=6.29",
+]
+dev = [
+    "ruff>=0.4",
+    "black>=24.3",
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "nbqa>=1.8",
+]
+
+[project.urls]
+Repository = "https://github.com/vijayyepuri/Tax_Optimizer"
+
+[tool.setuptools]
+py-modules = []
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
