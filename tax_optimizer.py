@@ -37,33 +37,43 @@ plt.rcParams["axes.grid"] = True
 
 # =============================================================================
 # 1. Hardcoded inputs.
-# Generic illustrative defaults for a married-filing-jointly couple in their
-# early 50s. Edit any value here to model your own scenario. All amounts USD.
+# Defaults reflect a *typical* dual-income married-filing-jointly couple
+# turning 50 in 2026:
+#   - Combined household income ~$170k (mid-career professional + a lower-
+#     earning spouse). ~70th percentile of MFJ households per Census 2023 ACS.
+#   - Combined 401(k) balance $375k. Mean 401(k) balance for 50-somethings
+#     is $220-250k per Vanguard/Fidelity 2024 reporting; this assumes
+#     somewhat-better-than-mean savers, typical of tax-optimizer users.
+#   - Modest IRA, HSA, and taxable brokerage balances.
+#   - No private-sector pension (rare today; set if you have one).
+#   - SS estimates are SSA Quick-Calculator PIA figures at FRA for those
+#     career earnings.
+# Edit any value here to model your own scenario. All amounts USD.
 # =============================================================================
 
 starting = {
-    "spouse_a_pretax_401k": 500_000.0,
-    "spouse_b_pretax_401k": 300_000.0,
-    "spouse_a_roth_ira": 50_000.0,
-    "spouse_b_pretax_ira": 50_000.0,
+    "spouse_a_pretax_401k": 225_000.0,
+    "spouse_b_pretax_401k": 150_000.0,
+    "spouse_a_roth_ira": 40_000.0,
+    "spouse_b_pretax_ira": 35_000.0,
     "pension_balance": 0.0,
-    "hsa": 20_000.0,
-    "taxable_brokerage": 200_000.0,
-    "total_nw_excl_real_estate": 1_120_000.0,
+    "hsa": 18_000.0,
+    "taxable_brokerage": 80_000.0,
+    "total_nw_excl_real_estate": 548_000.0,
 }
 
 income = {
-    "spouse_a_gross": 150_000.0,
-    "spouse_b_gross": 100_000.0,
-    "spouse_a_bonus": 0.0,
-    "interest": 1_000.0,
-    "capital_gains": 5_000.0,
-    "dividends": 5_000.0,
+    "spouse_a_gross": 95_000.0,
+    "spouse_b_gross": 70_000.0,
+    "spouse_a_bonus": 5_000.0,
+    "interest": 500.0,
+    "capital_gains": 1_000.0,
+    "dividends": 2_000.0,
 }
 
 current_contrib = {
-    "spouse_a_pct": 0.10,
-    "spouse_b_pct": 0.10,
+    "spouse_a_pct": 0.08,
+    "spouse_b_pct": 0.06,
     "spouse_a_roth_pct": 0.0,
     "spouse_b_roth_pct": 0.0,
     "hsa_family": 8_550.0,
@@ -71,14 +81,14 @@ current_contrib = {
     "baseline_tax": 0.0,
 }
 
-annual_expenses = 80_000.0
+annual_expenses = 85_000.0
 
-pension_balance_today = 0.0
+pension_balance_today = starting["pension_balance"]
 monthly_pension_at_nrd = 0.0
 annual_pension_at_nrd = monthly_pension_at_nrd * 12
 
-ssn_monthly_spouse_a = 3_000.0
-ssn_monthly_spouse_b = 2_500.0
+ssn_monthly_spouse_a = 2_700.0
+ssn_monthly_spouse_b = 2_200.0
 
 
 # =============================================================================
@@ -89,15 +99,28 @@ ssn_monthly_spouse_b = 2_500.0
 @dataclass
 class Config:
     start_year: int = 2026
+
+    # Ages: typical "early 50s couple" planning to retire at Medicare
+    # eligibility (age 65). A 50-year-old MFJ couple has roughly a 50%
+    # joint-survival probability to age 90, so we plan to that horizon.
     spouse_a_age_start: int = 50
     spouse_b_age_start: int = 50
     spouse_a_retire_age: int = 65
     spouse_b_retire_age: int = 65
-    horizon_age: int = 80
+    horizon_age: int = 90
 
-    nominal_growth_rate: float = 0.05
+    # Macro assumptions:
+    #   nominal_growth_rate 6% : long-run nominal return on a diversified
+    #     60/40 portfolio net of fees (1928-2023 trailing 60/40 ~7.5%).
+    #   inflation 2.5%         : Fed long-run target plus small premium
+    #     (1990-2023 trailing CPI is ~2.6%).
+    #   wage_growth 3.0%       : mid-career compensation growth, beats
+    #     inflation by ~50bps (BLS ECEC long-run trend).
+    #   taxable_drag 0.5%      : approximates annual dividend + turnover
+    #     tax friction we don't model line-by-line.
+    nominal_growth_rate: float = 0.06
     inflation: float = 0.025
-    wage_growth: float = 0.025
+    wage_growth: float = 0.030
     taxable_drag: float = 0.005
 
     spouse_a_total_contrib_pct: float = (

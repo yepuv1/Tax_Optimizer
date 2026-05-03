@@ -151,6 +151,59 @@ jupyter nbconvert --to html --execute tax_optimizer_standalone.ipynb
    - pension, Social Security, and starting-balance fields
 3. Re-run the notebook from cell §2 onward. The summary cells at the bottom rebuild themselves from the latest `results` dict, so the final write-up always reflects your inputs.
 
+## Decision variables
+
+The model distinguishes three kinds of "things you can change", from narrowest to broadest:
+
+### 1. Optimizer search variables (S3)
+
+These are the only variables the SciPy optimizer actually searches over in cell §12. Everything else is held fixed at its `CFG` value while the search runs.
+
+| Variable | Domain | Meaning |
+|---|---|---|
+| `spouse_a_roth_401k_pct` | continuous on `[0, 1]` | Fraction of Spouse A's 401(k) deferrals routed to Roth instead of traditional. |
+| `spouse_b_roth_401k_pct` | continuous on `[0, 1]` | Same, for Spouse B. |
+| `roth_conversion_target_bracket` | one of `{0%, 12%, 22%, 24%, 32%}` | Federal ordinary-bracket the converter fills *up to* during gap years. `0%` disables conversions. |
+
+The objective is *terminal after-tax net worth at the horizon*, with a hard penalty on dipping below one year of liquid spending and a soft penalty on lifetime IRMAA.
+
+### 2. Policy knobs in `Config` (the planner's decisions)
+
+Defined in cell §2, read by the simulator as fixed inputs. Edit any of these to model an alternate plan:
+
+| Field | What it controls |
+|---|---|
+| `spouse_a_total_contrib_pct`, `spouse_b_total_contrib_pct` | Total 401(k) deferral as a share of salary. |
+| `spouse_a_roth_401k_pct`, `spouse_b_roth_401k_pct` | Roth fraction of that deferral (when not being optimized). |
+| `withdrawal_strategy` | `'conventional'` (taxable → pretax → Roth), `'proportional'`, or `'bracket_fill'`. |
+| `bracket_fill_target` | Top-of-bracket the `bracket_fill` strategy aims for. |
+| `roth_conversion_target_bracket` | Bracket-fill target for *conversions* during gap years. |
+| `roth_conversion_amount` | Fixed-dollar conversion alternative; takes precedence if `> 0`. |
+| `spouse_a_retire_age`, `spouse_b_retire_age` | When each spouse stops earning wages and becomes eligible for conversions. |
+| `ss_start_age` | When Social Security claiming begins. |
+| `pension_start_age` | When the cash-balance pension converts to an annuity. |
+| `rmd_start_age` | Age IRS-mandated RMDs begin (currently 75). |
+| `annual_expenses_today` | Year-1 spending need; inflated forward by `cfg.inflation`. |
+| `cap_gains_basis_fraction` | Initial cost-basis fraction of the taxable brokerage at year 0; thereafter the simulator tracks the live ratio dynamically. |
+
+### 3. Tornado sensitivity perturbations
+
+Cell §15 perturbs each of these knobs ± a small step around the winning strategy and ranks them by how much terminal NW moves. Use this to spot the highest-leverage changes:
+
+`spouse_*_roth_401k_pct`, `roth_conversion_target_bracket`, `spouse_*_total_contrib_pct`, `spouse_*_retire_age`, `ss_start_age`, `nominal_growth_rate`, `inflation`, `annual_expenses_today`.
+
+> **Note:** `nominal_growth_rate` and `inflation` are perturbed for *stress-testing* only. The recommended-actions output correctly labels them "market assumption / macro assumption — not an action."
+
+### What is *not* a decision variable
+
+These are model parameters or initial conditions, edited in cell §1 or hard-coded in cells §3 / §5. Treat them as data, not levers:
+
+- Federal tax brackets, standard deduction, NIIT threshold, IRMAA tier table.
+- IRS Uniform Lifetime divisors.
+- Pension-formula coefficients.
+- Macro assumptions: `nominal_growth_rate`, `inflation`, `wage_growth`, `taxable_drag`.
+- Starting account balances, current income, current contribution rates.
+
 ## What the notebook produces
 
 - Side-by-side simulation of multiple strategies (e.g. all-Traditional, all-Roth, gap-year conversions, and a solver-optimized hybrid).
