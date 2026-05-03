@@ -28,7 +28,7 @@ from dataclasses import dataclass, replace
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
+from scipy.optimize import differential_evolution
 
 pd.set_option("display.float_format", lambda x: f"{x:,.2f}")
 plt.rcParams["figure.figsize"] = (11, 5)
@@ -429,13 +429,19 @@ def _solve_taxable_for_net(net_target: float, base_kwargs: dict, basis_frac: flo
     return 0.5 * (lo + hi)
 
 
-def withdraw_for_need(net_need, state, cfg, base_kwargs, a_rmd, b_rmd, strategy):
+def withdraw_for_need(net_need, state, cfg, base_kwargs, a_rmd, b_rmd, strategy, basis_frac):
     """Return gross withdrawals split per spouse for pretax.
 
     Each spouse's RMD must be taken from their own account (IRS rule for
     workplace 401(k)/IRA aggregation). Above-RMD pretax withdrawals are
     allocated pro-rata to remaining pretax balances since both spouses' pretax
     dollars hit the same federal tax line on a joint return.
+
+    `basis_frac` is the live cost-basis / current-balance ratio for the
+    taxable account at the start of the year (computed by the caller from
+    `state.cumulative_basis / state.taxable`). Using a static `cfg`
+    fraction would systematically underestimate LTCG once reinvested gains
+    accumulate over a long horizon.
     """
     a_rmd = min(a_rmd, max(state.spouse_a_pretax, 0.0))
     b_rmd = min(b_rmd, max(state.spouse_b_pretax, 0.0))
@@ -468,11 +474,11 @@ def withdraw_for_need(net_need, state, cfg, base_kwargs, a_rmd, b_rmd, strategy)
     if strategy == "conventional":
         if remaining > 0 and state.taxable > 0:
             tw = min(
-                _solve_taxable_for_net(min(remaining, state.taxable), ctx, cfg.cap_gains_basis_fraction),
+                _solve_taxable_for_net(min(remaining, state.taxable), ctx, basis_frac),
                 state.taxable,
             )
             ctx_after = dict(ctx)
-            ctx_after["ltcg"] = ctx_after.get("ltcg", 0.0) + tw * (1 - cfg.cap_gains_basis_fraction)
+            ctx_after["ltcg"] = ctx_after.get("ltcg", 0.0) + tw * (1 - basis_frac)
             net_from_t = tw - (federal_tax(**ctx_after)["tax"] - federal_tax(**ctx)["tax"])
             taxable_w += tw
             ctx = ctx_after
@@ -494,10 +500,10 @@ def withdraw_for_need(net_need, state, cfg, base_kwargs, a_rmd, b_rmd, strategy)
             w_p = remaining * (max(pretax_room, 0) / avail)
             w_r = remaining * (state.roth / avail)
             tw = min(
-                _solve_taxable_for_net(w_t, ctx, cfg.cap_gains_basis_fraction),
+                _solve_taxable_for_net(w_t, ctx, basis_frac),
                 state.taxable,
             )
-            ctx["ltcg"] = ctx.get("ltcg", 0.0) + tw * (1 - cfg.cap_gains_basis_fraction)
+            ctx["ltcg"] = ctx.get("ltcg", 0.0) + tw * (1 - basis_frac)
             taxable_w += tw
             pw = min(_solve_pretax_for_net(w_p, ctx), pretax_room)
             ax, bx = split_extra(pw)
@@ -519,10 +525,10 @@ def withdraw_for_need(net_need, state, cfg, base_kwargs, a_rmd, b_rmd, strategy)
             remaining = max(0.0, remaining - extra * 0.78)
         if remaining > 0 and state.taxable > 0:
             tw = min(
-                _solve_taxable_for_net(min(remaining, state.taxable), ctx, cfg.cap_gains_basis_fraction),
+                _solve_taxable_for_net(min(remaining, state.taxable), ctx, basis_frac),
                 state.taxable,
             )
-            ctx["ltcg"] = ctx.get("ltcg", 0.0) + tw * (1 - cfg.cap_gains_basis_fraction)
+            ctx["ltcg"] = ctx.get("ltcg", 0.0) + tw * (1 - basis_frac)
             taxable_w += tw
             remaining = max(0.0, remaining - tw * 0.97)
         if remaining > 0 and state.roth > 0:
@@ -659,6 +665,15 @@ def simulate(cfg: Config) -> pd.DataFrame:
 
         net_need = cfg.annual_expenses_today * (1 + cfg.inflation) ** year_offset
 
+        # Live cost-basis fraction for the taxable account. After years of
+        # reinvested growth this drifts well below the static config value,
+        # so use the tracked basis to compute LTCG accurately.
+        current_basis_frac = (
+            min(1.0, max(0.0, state.cumulative_basis / state.taxable))
+            if state.taxable > 0
+            else 1.0
+        )
+
         if a_working or b_working:
             withdraws = {
                 "pretax_a": a_rmd,
@@ -669,7 +684,14 @@ def simulate(cfg: Config) -> pd.DataFrame:
             }
         else:
             withdraws = withdraw_for_need(
-                net_need, state, cfg, base_kwargs, a_rmd, b_rmd, cfg.withdrawal_strategy
+                net_need,
+                state,
+                cfg,
+                base_kwargs,
+                a_rmd,
+                b_rmd,
+                cfg.withdrawal_strategy,
+                current_basis_frac,
             )
 
         final_kwargs = dict(base_kwargs)
@@ -678,7 +700,7 @@ def simulate(cfg: Config) -> pd.DataFrame:
         )
         final_kwargs["ltcg"] = (
             final_kwargs.get("ltcg", 0.0)
-            + withdraws["taxable"] * (1 - cfg.cap_gains_basis_fraction)
+            + withdraws["taxable"] * (1 - current_basis_frac)
         )
 
         tax_result = federal_tax(**final_kwargs)
@@ -694,7 +716,7 @@ def simulate(cfg: Config) -> pd.DataFrame:
         state.roth -= withdraws["roth"]
         state.taxable -= withdraws["taxable"]
         state.cumulative_basis = max(
-            state.cumulative_basis - withdraws["taxable"] * cfg.cap_gains_basis_fraction, 0.0
+            state.cumulative_basis - withdraws["taxable"] * current_basis_frac, 0.0
         )
 
         gross_cash_in = withdraws["pretax"] + withdraws["roth"] + withdraws["taxable"]
@@ -710,7 +732,7 @@ def simulate(cfg: Config) -> pd.DataFrame:
                 draw = min(-surplus, state.taxable)
                 state.taxable -= draw
                 state.cumulative_basis = max(
-                    state.cumulative_basis - draw * cfg.cap_gains_basis_fraction, 0.0
+                    state.cumulative_basis - draw * current_basis_frac, 0.0
                 )
         else:
             after_tax_wages = (
@@ -838,8 +860,21 @@ def make_objective(base_cfg: Config):
     return objective
 
 
-def optimize_s3(base_cfg: Config) -> tuple[Config, np.ndarray]:
+def optimize_s3(base_cfg: Config, *, seed: int = 0) -> tuple[Config, np.ndarray]:
+    """Optimize S3 with `scipy.optimize.differential_evolution`.
+
+    Why DE instead of SLSQP: the objective contains hard step-function
+    discontinuities (IRMAA cliffs every $54k of MAGI in retirement, plus
+    an internal `round()` on the bracket index). Gradient-based methods
+    like SLSQP see a flat gradient between cliffs and are blind at them,
+    so they tend to stop at whichever side of a cliff the warm-start
+    happens to be on. DE is derivative-free and population-based: it
+    samples across the whole bounded box and routinely jumps cliffs.
+
+    The coarse grid is still useful as a sanity check on the DE result.
+    """
     objective = make_objective(base_cfg)
+
     grid_results = []
     for v in np.linspace(0, 1, 4):
         for b in np.linspace(0, 1, 4):
@@ -850,15 +885,26 @@ def optimize_s3(base_cfg: Config) -> tuple[Config, np.ndarray]:
     best_grid = grid_results[0]
     print(f"Best grid: terminal=${-best_grid[0]:,.0f}, x={best_grid[1]}")
 
-    res = minimize(
+    bounds = [(0.0, 1.0), (0.0, 1.0), (0.0, len(BRACKET_CHOICES) - 1)]
+    res = differential_evolution(
         objective,
-        x0=best_grid[1],
-        method="SLSQP",
-        bounds=[(0, 1), (0, 1), (0, len(BRACKET_CHOICES) - 1)],
-        options={"maxiter": 20, "ftol": 1e3},
+        bounds=bounds,
+        # `polish=False` because the gradient-based polishing step DE
+        # would otherwise run is exactly the SLSQP-on-cliffs failure mode
+        # we are trying to avoid.
+        polish=False,
+        maxiter=40,
+        popsize=15,
+        tol=1e-3,
+        seed=seed,
+        init="sobol",
+        workers=1,
     )
     x_opt = res.x if -res.fun > -best_grid[0] else best_grid[1]
-    print(f"SLSQP: success={res.success}, terminal=${-res.fun:,.0f}, x={res.x}")
+    print(
+        f"differential_evolution: success={res.success}, "
+        f"terminal=${-res.fun:,.0f}, x={res.x}"
+    )
     return x_to_cfg(x_opt, base_cfg), x_opt
 
 
