@@ -25,9 +25,9 @@ class State:
 
 def initial_state(cfg: Config, inputs: Inputs) -> State:
     s = inputs.starting
-    pretax_a = s.spouse_a_pretax_401k
+    pretax_a = s.spouse_a_pretax_401k + s.spouse_a_pretax_ira
     pretax_b = s.spouse_b_pretax_401k + s.spouse_b_pretax_ira
-    roth = s.spouse_a_roth_ira
+    roth = s.spouse_a_roth_ira + s.spouse_b_roth_ira
     taxable = s.taxable_brokerage
     return State(
         year=cfg.start_year,

@@ -27,10 +27,18 @@ class StartingBalances:
     spouse_a_pretax_401k: float = 225_000.0
     spouse_b_pretax_401k: float = 150_000.0
     spouse_a_roth_ira: float = 40_000.0
+    spouse_b_roth_ira: float = 0.0
+    spouse_a_pretax_ira: float = 0.0
     spouse_b_pretax_ira: float = 35_000.0
     pension_balance: float = 0.0
     hsa: float = 18_000.0
     taxable_brokerage: float = 80_000.0
+
+    # NOTE: the simulator pools all Roth dollars into a single bucket
+    # (state.roth) regardless of which spouse owns them. Pre-tax IRAs are
+    # pooled per-spouse with that spouse's pre-tax 401(k) (so RMDs stay
+    # tied to the right age). The per-account split is preserved here for
+    # documentation and reporting only.
 
     @property
     def total_excl_real_estate(self) -> float:
@@ -38,6 +46,8 @@ class StartingBalances:
             self.spouse_a_pretax_401k
             + self.spouse_b_pretax_401k
             + self.spouse_a_roth_ira
+            + self.spouse_b_roth_ira
+            + self.spouse_a_pretax_ira
             + self.spouse_b_pretax_ira
             + self.pension_balance
             + self.hsa
