@@ -203,6 +203,25 @@ Federal bracket numbers, IRS Uniform Lifetime divisors, pension-formula coeffici
 - Estate-tax planning beyond the 22% step-up assumption in `terminal_after_tax_nw`.
 - Inherited IRA / 10-year-rule treatment.
 
+## Acronyms
+
+| Acronym | Full Form | Context |
+|---------|-----------|---------|
+| **MFJ** | Married Filing Jointly | Tax filing status for couples |
+| **RMD** | Required Minimum Distribution | IRS-mandated annual retirement account withdrawals starting at age 72 |
+| **LTCG** | Long-Term Capital Gains | Investment gains taxed at preferential rates (vs. ordinary income) |
+| **NIIT** | Net Investment Income Tax | 3.8% tax on investment income for high earners |
+| **IRMAA** | Income-Related Monthly Adjustment Amount | Medicare premium surcharge based on modified adjusted gross income |
+| **SS** | Social Security | Federal retirement / survivor benefits program |
+| **IRC** | Internal Revenue Code | U.S. federal tax law |
+| **NW** | Net Worth | Total assets minus liabilities |
+| **CVaR** | Conditional Value at Risk | Expected value in the worst α% of outcomes (risk metric) |
+| **LTC** | Long-Term Care | Extended care / nursing-home expenses |
+| **TCJA** | Tax Cuts and Jobs Act | 2017 U.S. tax reform (many provisions sunset in 2026) |
+| **CLI** | Command-Line Interface | Text-based program interface |
+| **NPV** | Net Present Value | Present-day value of future cash flows |
+| **ACA** | Affordable Care Act | U.S. healthcare law affecting pre-Medicare premium subsidies |
+
 ## Disclaimer
 
 This software is for **educational and illustrative purposes only**. It is not tax, legal, or investment advice. Tax law changes frequently and individual situations vary — consult a qualified professional before acting on any output.
