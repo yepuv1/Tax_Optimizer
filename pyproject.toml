@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tax-optimizer"
-version = "0.1.0"
-description = "Retirement tax optimizer notebook for jointly choosing Traditional vs Roth 401(k) contributions, withdrawal sequencing, and Roth conversions."
+version = "0.2.0"
+description = "Retirement tax planner with Monte Carlo, mortality / widow's-penalty modeling, asset location, smile-shaped spending, and switchable tax regimes."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -50,8 +50,11 @@ dev = [
 [project.urls]
 Repository = "https://github.com/vijayyepuri/Tax_Optimizer"
 
-[tool.setuptools]
-py-modules = []
+[tool.setuptools.packages.find]
+include = ["tax_optimizer*"]
+
+[project.scripts]
+tax-optimizer = "tax_optimizer.__main__:main"
 
 [tool.ruff]
 line-length = 100

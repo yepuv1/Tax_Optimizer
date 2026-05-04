@@ -1,229 +1,211 @@
 # Retirement Tax Optimizer
 
-A standalone Jupyter notebook that jointly optimizes retirement-tax decisions for a married-filing-jointly couple:
+A Python package + notebook + CLI that jointly optimizes retirement-tax decisions for a married-filing-jointly couple, with realistic stochastic and demographic risk modeling:
 
 1. **Pre-retirement** allocation between Traditional 401(k) and Roth 401(k) for each spouse.
 2. **In-retirement** withdrawal sequencing across taxable / pretax / Roth buckets.
 3. **Roth-conversion** sizing during the retirement-to-RMD gap years.
 
-The objective is to maximize after-tax terminal net worth at the planning horizon, subject to never running out of money, while modeling federal brackets, LTCG, NIIT, IRMAA, Social Security provisional-income taxation, and per-spouse RMD rules.
+The deterministic engine models federal brackets, LTCG, NIIT, IRMAA, Social-Security provisional-income taxation, and per-spouse RMDs. The stochastic engine layers on top of it Monte Carlo sequence-of-returns risk, mortality / "widow's-penalty" single-filer transitions, asset location, smile-shaped retirement spending with lump events, and switchable tax regimes.
 
-All inputs are hardcoded in cell §2 (`CFG = Config(...)`) — edit them to model your own scenario, then re-run the notebook from there.
+## What's in the box
+
+```
+.
+├── tax_optimizer/                    # the package (single source of truth)
+│   ├── __init__.py
+│   ├── __main__.py                   # CLI: python -m tax_optimizer
+│   ├── inputs.py                     # StartingBalances / CurrentIncome / Inputs
+│   ├── config.py                     # Config aggregating every knob
+│   ├── state.py                      # mutable per-year State
+│   ├── rmd.py                        # IRS Uniform Lifetime divisors
+│   ├── pension.py                    # cash-balance projector
+│   ├── mortality.py                  # widow's-penalty / single-filer transition
+│   ├── spending.py                   # SpendingProfile + smile + lump events + LTC
+│   ├── market.py                     # Deterministic / Lognormal / Bootstrap + AssetLocation
+│   ├── tax/
+│   │   ├── regimes.py                # TaxRegime + TCJA_EXTENDED / PRE_TCJA_2017 / SUNSET_2026
+│   │   ├── federal.py                # regime + filing-status aware federal_tax
+│   │   └── irmaa.py                  # MFJ + Single IRMAA tiers
+│   ├── withdrawals.py                # withdraw_for_need + per-strategy solvers
+│   ├── conversion.py                 # planned_roth_conversion (gap-year)
+│   ├── simulator.py                  # single-path year loop
+│   ├── monte_carlo.py                # simulate_paths + MonteCarloResult
+│   ├── metrics.py                    # terminal-NW, lifetime-tax-NPV, summarize
+│   ├── optimizer.py                  # optimize_s3 (terminal / cvar / p_success)
+│   ├── sensitivity.py                # tornado + plain-English actions / takeaways
+│   └── plots.py                      # matplotlib helpers
+├── tax_optimizer_standalone.ipynb    # demo notebook (imports from the package)
+├── pyproject.toml
+├── LICENSE
+└── README.md
+```
 
 ## Requirements
 
-- Python **3.10+**
-- macOS, Linux, or Windows
-
-## Installing Python 3
-
-Check whether you already have Python 3.10+:
-
-```bash
-python3 --version
-```
-
-If the command is missing or reports an older version, install it:
-
-### macOS
-
-Use the official installer from [python.org/downloads](https://www.python.org/downloads/), or via Homebrew:
-
-```bash
-brew install python@3.12
-```
-
-### Linux (Debian/Ubuntu)
-
-```bash
-sudo apt update
-sudo apt install -y python3 python3-venv python3-pip
-```
-
-### Linux (Fedora/RHEL)
-
-```bash
-sudo dnf install -y python3 python3-pip
-```
-
-### Windows
-
-Download the installer from [python.org/downloads](https://www.python.org/downloads/) and **check "Add python.exe to PATH"** during install. Verify with:
-
-```powershell
-py -3 --version
-```
+Python **3.10+** on macOS, Linux, or Windows.
 
 ## Setup
 
-Choose **one** of the two workflows below.
-
-### Option A — Standard `venv` + `pip`
-
 ```bash
 git clone https://github.com/vijayyepuri/Tax_Optimizer.git
 cd Tax_Optimizer
-
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-python -m pip install --upgrade pip
-
 pip install -e ".[notebook]"
 ```
 
-If you only want the simulation libraries (no Jupyter), `pip install -e .` is enough.
+(`pip install -e .` is sufficient if you don't want Jupyter.)
 
-### Option B — `uv` (faster, optional)
-
-[`uv`](https://docs.astral.sh/uv/) is an extremely fast Python package and project manager from Astral. It can install Python for you, create the virtual environment, and resolve dependencies in seconds.
-
-**Install `uv`:**
+[`uv`](https://docs.astral.sh/uv/) works equivalently and is much faster:
 
 ```bash
-# macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Windows (PowerShell)
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-
-# or via Homebrew
-brew install uv
-```
-
-**Set up the project:**
-
-```bash
-git clone https://github.com/vijayyepuri/Tax_Optimizer.git
-cd Tax_Optimizer
-
-uv venv --python 3.12          # creates .venv (uv will download Python if needed)
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
-
+uv venv --python 3.12
+source .venv/bin/activate
 uv pip install -e ".[notebook]"
 ```
 
-You can also skip activating the venv and prefix commands with `uv run`, e.g.:
+## Usage
+
+### CLI
 
 ```bash
-uv run jupyter lab tax_optimizer_standalone.ipynb
+# Deterministic 4-strategy comparison + tornado + recommendations.
+python -m tax_optimizer
+
+# Monte Carlo (sequence-of-returns risk).
+python -m tax_optimizer --market lognormal --monte-carlo 1000
+
+# Widow's-penalty stress test (Spouse A dies year 25).
+python -m tax_optimizer --widow 25
+
+# TCJA sunsets in year 5.
+python -m tax_optimizer --regime sunset --regime-change-year 5
+
+# Smile-shaped retirement spending + LTC shock.
+python -m tax_optimizer --spending smile
+
+# Optimize for CVaR(10%) instead of point-estimate terminal NW.
+python -m tax_optimizer --market lognormal --monte-carlo 500 --mc-objective cvar
 ```
 
-## Running the notebook
+`python -m tax_optimizer --help` lists all flags.
 
-### Option 1 — JupyterLab (recommended)
+### Python API
+
+```python
+from tax_optimizer import (
+    Config, Inputs, simulate, simulate_paths, optimize_s3,
+    LognormalModel, Mortality, SpendingProfile, SUNSET_2026,
+)
+from dataclasses import replace
+
+inputs = Inputs()           # defaults match the README scenario
+cfg = Config(market=LognormalModel())
+
+# Single deterministic path:
+df = simulate(cfg, inputs)
+
+# 1000-path Monte Carlo:
+mc = simulate_paths(cfg, inputs, n_paths=1000)
+print(mc.summary())          # prob_success, p5/p50/p95 terminal, CVaR(10%), ...
+
+# Stress-test the widow's penalty:
+cfg_widow = replace(cfg, mortality=Mortality(year_of_death_a=25))
+
+# Optimize for probability of success instead of point-estimate NW:
+cfg_opt, x_opt = optimize_s3(cfg, inputs, objective='p_success', n_paths=500)
+```
+
+### Notebook
 
 ```bash
 jupyter lab tax_optimizer_standalone.ipynb
 ```
 
-Then **Run → Run All Cells**.
+The notebook imports from the package and walks through:
 
-### Option 2 — Classic Jupyter Notebook
-
-```bash
-jupyter notebook tax_optimizer_standalone.ipynb
-```
-
-### Option 3 — VS Code / Cursor
-
-Open `tax_optimizer_standalone.ipynb` directly in the editor. When prompted, select the `.venv` interpreter as the kernel, then click **Run All**.
-
-### Option 4 — Headless execution (no UI)
-
-Execute the notebook end-to-end and write the results back in place:
-
-```bash
-jupyter nbconvert --to notebook --execute tax_optimizer_standalone.ipynb --inplace
-```
-
-Or render a static HTML report:
-
-```bash
-jupyter nbconvert --to html --execute tax_optimizer_standalone.ipynb
-```
-
-## Customizing your scenario
-
-1. Open the notebook.
-2. Edit cell §2 (`CFG = Config(...)`) — for example:
-   - `spouse_a_retire_age=62`
-   - `horizon_age=90`
-   - pension, Social Security, and starting-balance fields
-3. Re-run the notebook from cell §2 onward. The summary cells at the bottom rebuild themselves from the latest `results` dict, so the final write-up always reflects your inputs.
+1. Scenario inputs.
+2. First-year tax sanity check.
+3. S0 / S1 / S2 / S3 strategy comparison.
+4. Visualizations.
+5. Year-by-year detail of the winning strategy.
+6. Tornado sensitivity.
+7. Recommended actions + takeaways.
+8. Monte Carlo (lognormal + bootstrap).
+9. Widow's-penalty stress test.
+10. TCJA-sunset stress test.
+11. Smile-shaped spending + lump events.
+12. Asset location (bonds in pretax, equities in Roth).
 
 ## Decision variables
 
-The model distinguishes three kinds of "things you can change", from narrowest to broadest:
+The model distinguishes four kinds of inputs, from narrowest to broadest:
 
 ### 1. Optimizer search variables (S3)
 
-These are the only variables the SciPy optimizer actually searches over in cell §12. Everything else is held fixed at its `CFG` value while the search runs.
+The only variables `optimize_s3` searches over. Everything else is fixed.
 
 | Variable | Domain | Meaning |
 |---|---|---|
-| `spouse_a_roth_401k_pct` | continuous on `[0, 1]` | Fraction of Spouse A's 401(k) deferrals routed to Roth instead of traditional. |
-| `spouse_b_roth_401k_pct` | continuous on `[0, 1]` | Same, for Spouse B. |
-| `roth_conversion_target_bracket` | one of `{0%, 12%, 22%, 24%, 32%}` | Federal ordinary-bracket the converter fills *up to* during gap years. `0%` disables conversions. |
+| `spouse_a_roth_401k_pct` | `[0, 1]` | Fraction of Spouse A's 401(k) deferrals routed to Roth. |
+| `spouse_b_roth_401k_pct` | `[0, 1]` | Same, for Spouse B. |
+| `roth_conversion_target_bracket` | `{0%, 12%, 22%, 24%, 32%}` | Bracket the converter fills *up to* during gap years. |
 
-The objective is *terminal after-tax net worth at the horizon*, with a hard penalty on dipping below one year of liquid spending and a soft penalty on lifetime IRMAA.
+Three optimizer objectives:
 
-### 2. Policy knobs in `Config` (the planner's decisions)
+- `'terminal'` — point-estimate terminal after-tax NW (deterministic only).
+- `'cvar'` — average terminal NW across the worst α% of Monte Carlo paths.
+- `'p_success'` — probability the plan never runs out of money.
 
-Defined in cell §2, read by the simulator as fixed inputs. Edit any of these to model an alternate plan:
+### 2. Policy knobs in `Config`
 
-| Field | What it controls |
+Edit any field on `Config` to model an alternate plan: contribution rates, retire age, SS start age, withdrawal strategy, conversion target, etc. See `tax_optimizer/config.py` for the full list.
+
+### 3. Modular assumption blocks (v2)
+
+Each is a separate dataclass — set `cfg.<field>` to swap behavior:
+
+| Block | What it does |
 |---|---|
-| `spouse_a_total_contrib_pct`, `spouse_b_total_contrib_pct` | Total 401(k) deferral as a share of salary. |
-| `spouse_a_roth_401k_pct`, `spouse_b_roth_401k_pct` | Roth fraction of that deferral (when not being optimized). |
-| `withdrawal_strategy` | `'conventional'` (taxable → pretax → Roth), `'proportional'`, or `'bracket_fill'`. |
-| `bracket_fill_target` | Top-of-bracket the `bracket_fill` strategy aims for. |
-| `roth_conversion_target_bracket` | Bracket-fill target for *conversions* during gap years. |
-| `roth_conversion_amount` | Fixed-dollar conversion alternative; takes precedence if `> 0`. |
-| `spouse_a_retire_age`, `spouse_b_retire_age` | When each spouse stops earning wages and becomes eligible for conversions. |
-| `ss_start_age` | When Social Security claiming begins. |
-| `pension_start_age` | When the cash-balance pension converts to an annuity. |
-| `rmd_start_age` | Age IRS-mandated RMDs begin (currently 75). |
-| `annual_expenses_today` | Year-1 spending need; inflated forward by `cfg.inflation`. |
-| `cap_gains_basis_fraction` | Initial cost-basis fraction of the taxable brokerage at year 0; thereafter the simulator tracks the live ratio dynamically. |
+| `cfg.tax_regime` (`TaxRegime`) | Active bracket / IRMAA / NIIT / std-deduction tables. Bundled: `TCJA_EXTENDED`, `PRE_TCJA_2017`, `SUNSET_2026`. |
+| `cfg.regime_change_year_offset` + `cfg.regime_change_target` | Mid-simulation regime swap. Use to model TCJA sunset, future legislation, etc. |
+| `cfg.mortality` (`Mortality`) | Per-spouse year of death + survivor pension election. Switches filing status to single. |
+| `cfg.market` (`MarketModel`) | `DeterministicModel` (constant returns), `LognormalModel` (μ/σ draws), or `BootstrapModel` (1928-2023 historical resampling). |
+| `cfg.asset_location` (`AssetLocation`) | Per-account equity/bond mix. Default puts bonds in pretax, equities in Roth. |
+| `cfg.spending` (`SpendingProfile`) | Smile-shaped age multipliers + lump events + LTC shock. |
 
-### 3. Tornado sensitivity perturbations
+### 4. Tornado sensitivity perturbations
 
-Cell §15 perturbs each of these knobs ± a small step around the winning strategy and ranks them by how much terminal NW moves. Use this to spot the highest-leverage changes:
+`tornado_sensitivity(cfg, inputs)` perturbs each knob ± a small step and ranks them by how much terminal NW moves. Use it to spot the highest-leverage changes for your scenario.
 
-`spouse_*_roth_401k_pct`, `roth_conversion_target_bracket`, `spouse_*_total_contrib_pct`, `spouse_*_retire_age`, `ss_start_age`, `nominal_growth_rate`, `inflation`, `annual_expenses_today`.
+### Not a decision variable
 
-> **Note:** `nominal_growth_rate` and `inflation` are perturbed for *stress-testing* only. The recommended-actions output correctly labels them "market assumption / macro assumption — not an action."
+Federal bracket numbers, IRS Uniform Lifetime divisors, pension-formula coefficients, Social-Security provisional-income thresholds. These are *parameters* of the model and live in package data files; treat them as fixed.
 
-### What is *not* a decision variable
+## What's modeled
 
-These are model parameters or initial conditions, edited in cell §1 or hard-coded in cells §3 / §5. Treat them as data, not levers:
+- **Federal income tax** — ordinary brackets, qualified-dividend / LTCG brackets, NIIT, standard deduction.
+- **Social-Security taxation** — IRC §86 provisional-income calculation with the right thresholds for filing status.
+- **IRMAA** — current 2026 tier table for both MFJ and single filers; auto-switches when filing status changes.
+- **RMDs** — IRS Uniform Lifetime divisors for ages 72-110, computed per spouse on their own pretax balances.
+- **Cost-basis tracking** — taxable brokerage basis fraction is dynamic, not constant.
+- **Sequence-of-returns risk** — Monte Carlo with lognormal or block-bootstrap historical resampling.
+- **Asset location** — separate equity/bond allocation per account type.
+- **Mortality** — single-spouse death event with proper survivor SS / pension / filing-status transitions.
+- **Spending phases** — Blanchett-style retirement smile + LTC shock + arbitrary lump events.
+- **Tax legislation change** — switchable regimes, mid-simulation regime swap.
 
-- Federal tax brackets, standard deduction, NIIT threshold, IRMAA tier table.
-- IRS Uniform Lifetime divisors.
-- Pension-formula coefficients.
-- Macro assumptions: `nominal_growth_rate`, `inflation`, `wage_growth`, `taxable_drag`.
-- Starting account balances, current income, current contribution rates.
+## What's not modeled (yet)
 
-## What the notebook produces
-
-- Side-by-side simulation of multiple strategies (e.g. all-Traditional, all-Roth, gap-year conversions, and a solver-optimized hybrid).
-- Year-by-year cash-flow / balance / tax tables.
-- Matplotlib charts comparing trajectories.
-- A plain-English takeaways section that's regenerated from your inputs each run.
-
-## Project layout
-
-```
-.
-├── tax_optimizer_standalone.ipynb   # the notebook (all logic + inputs)
-├── pyproject.toml                    # dependencies and project metadata
-├── LICENSE
-└── README.md
-```
+- State income tax (federal-only today; PRs welcome).
+- ACA premium-tax-credit cliffs in pre-Medicare years.
+- Estate-tax planning beyond the 22% step-up assumption in `terminal_after_tax_nw`.
+- Inherited IRA / 10-year-rule treatment.
 
 ## Disclaimer
 
-This notebook is for **educational and illustrative purposes only**. It is not tax, legal, or investment advice. Tax law changes frequently and individual situations vary — consult a qualified professional before acting on any output.
+This software is for **educational and illustrative purposes only**. It is not tax, legal, or investment advice. Tax law changes frequently and individual situations vary — consult a qualified professional before acting on any output.
 
 ## License
 
