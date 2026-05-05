@@ -1,0 +1,131 @@
+<!-- Generated 2026-05-04 18:57:27 from tax_optimizer_standalone.ipynb -->
+
+# Retirement Tax Optimization — Action Plan
+
+_41-year horizon, ages 50/50 to 90, tax regime `TCJA_extended_2026`._
+
+## 1. Household snapshot
+
+| Item | Value |
+|---|---:|
+| Spouse A age (retire / SS) | 50 (65 / 70) |
+| Spouse B age (retire / SS) | 50 (65 / 70) |
+| Combined gross W-2 income | $170,000 |
+| Annual expenses (today's $) | $85,000 |
+| Total liquid + retirement assets | $548,000 |
+| &nbsp;&nbsp;&nbsp; Spouse A pretax (401k + IRA) | $225,000 |
+| &nbsp;&nbsp;&nbsp; Spouse B pretax (401k + IRA) | $185,000 |
+| &nbsp;&nbsp;&nbsp; Roth (both spouses, pooled) | $40,000 |
+| &nbsp;&nbsp;&nbsp; Taxable brokerage | $80,000 |
+| &nbsp;&nbsp;&nbsp; HSA / pension cash-balance | $18,000 / $0 |
+
+## 2. Recommended plan
+
+**Winning strategy:** `S3_optimized`
+
+| Lever | Recommended | Currently |
+|---|---:|---:|
+| Spouse A 401(k) deferral | 8% of salary | 8% |
+| &nbsp;&nbsp; ↳ Roth share of that deferral | 100% | 0% |
+| Spouse B 401(k) deferral | 6% of salary | 6% |
+| &nbsp;&nbsp; ↳ Roth share of that deferral | 100% | 0% |
+| Roth conversion target bracket (gap years) | 22% | 0% |
+| Withdrawal strategy in retirement | `conventional` | `conventional` |
+
+## 3. Expected outcomes (deterministic, point-estimate)
+
+_For terminal NW higher is better (↑); for tax / IRMAA lower is better (↓)._
+
+| Metric | Optimized | Baseline (S0) | Δ vs S0 | Direction |
+|---|---:|---:|---:|:---:|
+| Terminal after-tax NW | $7,223,035 | $5,629,253 | +$1,593,782 | ✅ |
+| Lifetime federal tax (NPV) | $558,921 | $567,089 | −$8,168 | ✅ |
+| Lifetime IRMAA (NPV) | $13,043 | $15,736 | −$2,693 | ✅ |
+| Peak federal marginal rate | 24% | 24% | — | — |
+| Years with IRMAA surcharge | 5 | 12 | — | ✅ |
+| Peak IRMAA tier | 2 | 2 | — | — |
+
+_Peak federal marginal year: age **62**, AGI ~$245,879, marginal **24%**._
+
+## 4. Risk picture (Monte Carlo)
+
+_Based on 2000 stochastic paths under the `LognormalModel` market model._
+
+| Metric | Value | Reading |
+|---|---:|---|
+| Probability of success | 74.4% | watch — below 90% |
+| Terminal NW p5 / p50 / p95 | $22,397 / $3,721,459 / $42,383,170 | spread of bad-to-good outcomes |
+| CVaR(10%) terminal | $22,043 | expected NW in the worst 10% of paths |
+| Median lifetime tax (NPV) | $535,141 | — |
+| Median ruin year | 32 | **at least half of failure paths run out by year 32** |
+
+## 5. Highest-leverage levers (top 3 by tornado swing)
+
+| Knob | Range tested | Best direction | $ swing |
+|---|---|---|---:|
+| `nominal_growth_rate` | 5% → 7% | higher (+$4,127,842) | $4,127,842 |
+| `inflation` | 2% → 4% | lower (+$2,783,734) | $3,419,272 |
+| `annual_expenses_today` | $76,500 → $93,500 | lower (+$1,916,580) | $1,916,580 |
+
+## 6. Year-by-year action timeline
+
+| Phase | Ages (Spouse A) | What to do |
+|---|---|---|
+| **Accumulation** | 50–64 | Defer 8% of A's salary (100% Roth / 0% Traditional) and 6% of B's (100% Roth / 0% Traditional). Max HSA. Build 1–2 years' expenses in taxable as IRMAA buffer. |
+| **Gap years (conversion window)** | 65–74 | No wages and SS not yet started → fill the 22% bracket each year via pretax → Roth conversions. Pay conversion tax from taxable. |
+| **Medicare / IRMAA** | 65+ | IRMAA tiers depend on AGI from **2 years prior**. Watch the 22% / 24% bracket and the IRMAA cliffs at 65, 67. |
+| **SS claim** | 70 | Both spouses begin Social Security ($58,800/yr today). After this, conversion-window income includes SS. |
+| **RMDs begin** | 75 | Required minimum distributions hit Spouse A's pretax balance. Spouse B's RMDs follow on B's schedule. Reduce or stop conversions. |
+| **Drawdown** | 76–90 | Withdrawal sequence: `conventional`. Take RMDs first, then top up from taxable / Roth as needed. |
+
+## 7. Year-by-year withdrawal & conversion plan
+
+_Retirement years only. Pre-retirement years are pure accumulation (contributions, no withdrawals or conversions). Cells with no activity render as `—`._
+
+| Age (A) | Pretax W/D | Roth conv. | Roth W/D | Taxable W/D | RMD | AGI | Fed tax | IRMAA |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 65 | $0 | $206,700 | — | $130,918 | — | $257,009 | $36,031 | $2,105 |
+| 66 | — | $206,700 | — | $135,114 | — | $262,958 | $37,149 | $2,105 |
+| 67 | — | $206,700 | — | $139,402 | — | $268,985 | $38,282 | $5,287 |
+| 68 | — | $206,700 | — | $143,783 | — | $275,089 | $39,430 | $5,287 |
+| 69 | — | $206,700 | — | $148,259 | — | $281,271 | $40,592 | $5,287 |
+| 70 | — | $79,827 | — | $151,285 | — | $209,819 | $23,303 | — |
+| 71 | — | — | $0 | $144,542 | — | $127,844 | $1,778 | — |
+| 72 | — | — | — | $148,386 | — | $130,728 | $2,052 | — |
+| 73 | — | — | $0 | $152,493 | — | $133,725 | $2,502 | — |
+| 74 | — | — | — | $156,696 | — | $136,740 | $2,954 | — |
+| 75 | — | — | — | $160,993 | — | $139,764 | $3,408 | — |
+| 76 | — | — | $0 | $165,386 | — | $142,791 | $3,862 | — |
+| 77 | — | — | $0 | $169,878 | — | $145,811 | $4,315 | — |
+| 78 | — | — | $0 | $174,467 | — | $148,812 | $4,765 | — |
+| 79 | — | — | $0 | $179,154 | — | $151,779 | $5,210 | — |
+| 80 | — | — | — | $183,940 | — | $154,693 | $5,647 | — |
+| 81 | — | — | $0 | $188,823 | — | $157,529 | $6,072 | — |
+| 82 | — | — | — | $193,801 | — | $160,259 | $6,482 | — |
+| 83 | — | — | $0 | $198,871 | — | $162,841 | $6,869 | — |
+| 84 | — | — | — | $204,029 | — | $165,225 | $7,227 | — |
+| 85 | — | — | $0 | $209,266 | — | $167,340 | $7,544 | — |
+| 86 | — | — | — | $214,573 | — | $169,091 | $7,807 | — |
+| 87 | — | — | $0 | $219,929 | — | $170,341 | $7,994 | — |
+| 88 | — | — | — | $225,310 | — | $170,889 | $8,076 | — |
+| 89 | — | — | $0 | $230,669 | — | $170,415 | $8,005 | — |
+| 90 | — | — | $0 | $235,930 | — | $168,379 | $7,700 | — |
+
+_Pretax W/D = combined Spouse A + B pretax withdrawals; RMD = the IRS-required floor (A and B combined). Roth conversions show up as AGI in the same row but produce no cash to the household — they shift dollars from pretax → Roth and the conversion tax is paid from taxable._
+
+## 8. Always-good hygiene
+
+- **Max the HSA each year** (triple tax-advantaged: deductible, tax-free growth, tax-free qualified withdrawals).
+- **Hold 1–2 years of expenses in taxable** as an IRMAA / sequence-of-returns buffer; it lets you avoid IRA withdrawals in down-market years and to manage AGI around IRMAA cliffs.
+- **Re-run this notebook annually** with updated balances, salaries, and tax-regime assumptions. Roth-conversion targets in particular are very sensitive to bracket changes.
+- **Beneficiary review:** primary + contingent on every account, including the HSA (which becomes ordinary income to a non-spouse beneficiary).
+
+## 9. Caveats — what this plan does NOT model
+
+- **State income tax.** Federal-only today. Add a state-tax overlay if your state taxes retirement income (CA, NY, MA, etc.).
+- **ACA premium-tax-credit cliffs** in the 60–64 pre-Medicare years (can dwarf federal-bracket optimization for some households).
+- **Estate / step-up basis** beyond the simple 22% pretax haircut in `terminal_after_tax_nw`. Inherited-IRA 10-year-rule treatment is not modeled.
+- **Health-care shocks** beyond a single optional LTC stress test.
+- **Tax-law revisions** beyond the bundled regimes (`TCJA_EXTENDED`, `PRE_TCJA_2017`, `SUNSET_2026`). Re-run with `cfg.tax_regime = SUNSET_2026` to stress-test current-law sunset.
+
+_This is decision-support output, not tax/legal/investment advice. Consult a qualified professional before acting._
