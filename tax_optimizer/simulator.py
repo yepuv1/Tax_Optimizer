@@ -54,7 +54,7 @@ def simulate(
     spouse_b_salary = inputs.income.spouse_b_gross
     spouse_a_bonus = inputs.income.spouse_a_bonus
 
-    n_years = cfg.horizon_age - cfg.spouse_a_age_start + 1
+    n_years = cfg.horizon_age - inputs.spouse_a_age_start + 1
 
     market = cfg.resolved_market()
     market.begin_path(n_years, rng)
@@ -67,14 +67,14 @@ def simulate(
     test_balance = project_pension_balance(
         inputs.pension.balance_today,
         inputs.income.spouse_a_gross,
-        max(0, cfg.pension_start_age - cfg.spouse_a_age_start),
+        max(0, cfg.pension_start_age - inputs.spouse_a_age_start),
         wage_growth=cfg.wage_growth,
     )
 
     for year_offset in range(n_years):
         year = cfg.start_year + year_offset
-        a_age = cfg.spouse_a_age_start + year_offset
-        b_age = cfg.spouse_b_age_start + year_offset
+        a_age = inputs.spouse_a_age_start + year_offset
+        b_age = inputs.spouse_b_age_start + year_offset
         state.spouse_a_age = a_age
         state.spouse_b_age = b_age
         state.year = year
@@ -86,20 +86,20 @@ def simulate(
 
         regime = cfg.regime_for_year(year_offset)
 
-        a_working = alive_a and a_age < cfg.spouse_a_retire_age
-        b_working = alive_b and b_age < cfg.spouse_b_retire_age
+        a_working = alive_a and a_age < inputs.spouse_a_retire_age
+        b_working = alive_b and b_age < inputs.spouse_b_retire_age
 
         # ---- Contributions (only while alive AND working) ----
         a_total_contrib = (
-            spouse_a_salary * cfg.spouse_a_total_contrib_pct if a_working else 0.0
+            spouse_a_salary * inputs.spouse_a_total_contrib_pct if a_working else 0.0
         )
         b_total_contrib = (
-            spouse_b_salary * cfg.spouse_b_total_contrib_pct if b_working else 0.0
+            spouse_b_salary * inputs.spouse_b_total_contrib_pct if b_working else 0.0
         )
-        a_pretax_contrib = a_total_contrib * (1 - cfg.spouse_a_roth_401k_pct)
-        a_roth_contrib = a_total_contrib * cfg.spouse_a_roth_401k_pct
-        b_pretax_contrib = b_total_contrib * (1 - cfg.spouse_b_roth_401k_pct)
-        b_roth_contrib = b_total_contrib * cfg.spouse_b_roth_401k_pct
+        a_pretax_contrib = a_total_contrib * (1 - inputs.spouse_a_roth_401k_pct)
+        a_roth_contrib = a_total_contrib * inputs.spouse_a_roth_401k_pct
+        b_pretax_contrib = b_total_contrib * (1 - inputs.spouse_b_roth_401k_pct)
+        b_roth_contrib = b_total_contrib * inputs.spouse_b_roth_401k_pct
 
         state.spouse_a_pretax += a_pretax_contrib
         state.spouse_b_pretax += b_pretax_contrib
@@ -151,7 +151,7 @@ def simulate(
 
         # ---- Roth conversion (gap years, regime-aware) ----
         conv_a, conv_b = planned_roth_conversion(
-            cfg, state, base_kwargs, regime=regime, filing_status=filing_status
+            cfg, inputs, state, base_kwargs, regime=regime, filing_status=filing_status
         )
         # If a spouse is dead, zero out their conversion.
         if not alive_a:

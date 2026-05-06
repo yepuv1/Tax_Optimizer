@@ -3,6 +3,12 @@
 Decision vector x = [spouse_a_roth_pct, spouse_b_roth_pct, conv_bracket_idx]
 where the conversion bracket index maps to {0%, 12%, 22%, 24%, 32%}.
 
+The first two decision variables live on `Inputs` (they're per-spouse
+contribution policy that the household is choosing) and the third lives
+on `Config` (it's a strategy-level conversion target). `x_to_overrides`
+returns a `(Config, Inputs)` pair with the relevant fields applied to
+the right object, so callers only ever simulate `(cfg, inputs)`.
+
 Three objective modes are supported:
 
   * `'terminal'`  — maximize deterministic terminal after-tax NW. The
@@ -40,22 +46,32 @@ ObjectiveType = Literal["terminal", "cvar", "p_success"]
 BRACKET_CHOICES: list[float] = [0.0, 0.12, 0.22, 0.24, 0.32]
 
 
-def x_to_cfg(x: np.ndarray, base_cfg: Config) -> Config:
+def x_to_overrides(
+    x: np.ndarray, base_cfg: Config, base_inputs: Inputs
+) -> tuple[Config, Inputs]:
+    """Apply decision vector `x` to (cfg, inputs) and return the patched pair.
+
+    `x[0]`, `x[1]` map to `inputs.spouse_a_roth_401k_pct` /
+    `inputs.spouse_b_roth_401k_pct`. `x[2]` is a bracket-choice index
+    (rounded) into `BRACKET_CHOICES` and lands on
+    `cfg.roth_conversion_target_bracket`.
+    """
     a_roth = float(np.clip(x[0], 0.0, 1.0))
     b_roth = float(np.clip(x[1], 0.0, 1.0))
     idx = int(np.clip(round(x[2]), 0, len(BRACKET_CHOICES) - 1))
-    return replace(
-        base_cfg,
+    cfg = replace(base_cfg, roth_conversion_target_bracket=BRACKET_CHOICES[idx])
+    inputs = replace(
+        base_inputs,
         spouse_a_roth_401k_pct=a_roth,
         spouse_b_roth_401k_pct=b_roth,
-        roth_conversion_target_bracket=BRACKET_CHOICES[idx],
     )
+    return cfg, inputs
 
 
 def _terminal_objective(
-    x: np.ndarray, base_cfg: Config, inputs: Inputs
+    x: np.ndarray, base_cfg: Config, base_inputs: Inputs
 ) -> float:
-    cfg = x_to_cfg(x, base_cfg)
+    cfg, inputs = x_to_overrides(x, base_cfg, base_inputs)
     df = simulate(cfg, inputs)
     liquid = df["pretax_balance"] + df["roth_balance"] + df["taxable_balance"]
     floor = df["spending_need"]
@@ -66,42 +82,45 @@ def _terminal_objective(
 
 
 def _cvar_objective(
-    x: np.ndarray, base_cfg: Config, inputs: Inputs, n_paths: int, alpha: float
+    x: np.ndarray,
+    base_cfg: Config,
+    base_inputs: Inputs,
+    n_paths: int,
+    alpha: float,
 ) -> float:
-    cfg = x_to_cfg(x, base_cfg)
+    cfg, inputs = x_to_overrides(x, base_cfg, base_inputs)
     mc = simulate_paths(cfg, inputs, n_paths=n_paths, seed=42, keep_paths=False)
     cvar = mc.cvar_terminal(alpha)
-    # Apply same deficit + IRMAA-soft penalty as the terminal mode, but
-    # using mean over paths.
     irmaa_pen = 0.5 * float(np.mean(mc.lifetime_irmaas))
     p_success = mc.prob_success()
-    deficit_pen = (1 - p_success) * 1e6  # heavy penalty for ruin paths
+    deficit_pen = (1 - p_success) * 1e6
     return -(cvar - irmaa_pen - deficit_pen)
 
 
 def _p_success_objective(
-    x: np.ndarray, base_cfg: Config, inputs: Inputs, n_paths: int
+    x: np.ndarray, base_cfg: Config, base_inputs: Inputs, n_paths: int
 ) -> float:
-    cfg = x_to_cfg(x, base_cfg)
+    cfg, inputs = x_to_overrides(x, base_cfg, base_inputs)
     mc = simulate_paths(cfg, inputs, n_paths=n_paths, seed=42, keep_paths=False)
-    # Maximize prob_success; tiebreak on median terminal.
     return -(mc.prob_success() * 1e8 + float(np.median(mc.terminals)))
 
 
 def make_objective(
     base_cfg: Config,
-    inputs: Inputs,
+    base_inputs: Inputs,
     *,
     objective: ObjectiveType = "terminal",
     n_paths: int = 200,
     cvar_alpha: float = 0.10,
 ):
     if objective == "terminal":
-        return lambda x: _terminal_objective(x, base_cfg, inputs)
+        return lambda x: _terminal_objective(x, base_cfg, base_inputs)
     if objective == "cvar":
-        return lambda x: _cvar_objective(x, base_cfg, inputs, n_paths, cvar_alpha)
+        return lambda x: _cvar_objective(
+            x, base_cfg, base_inputs, n_paths, cvar_alpha
+        )
     if objective == "p_success":
-        return lambda x: _p_success_objective(x, base_cfg, inputs, n_paths)
+        return lambda x: _p_success_objective(x, base_cfg, base_inputs, n_paths)
     raise ValueError(f"Unknown objective {objective!r}")
 
 
@@ -115,8 +134,8 @@ def optimize_s3(
     seed: int = 0,
     maxiter: int = 40,
     popsize: int = 15,
-) -> tuple[Config, np.ndarray]:
-    """Run the S3 optimizer and return (best_cfg, x_opt).
+) -> tuple[Config, Inputs, np.ndarray]:
+    """Run the S3 optimizer and return (best_cfg, best_inputs, x_opt).
 
     For `objective='terminal'`, runtime is ~10s on a 41-year horizon.
     For Monte Carlo objectives, runtime is ~`maxiter * popsize *
@@ -129,8 +148,6 @@ def optimize_s3(
         base_cfg, inputs, objective=objective, n_paths=n_paths, cvar_alpha=cvar_alpha
     )
 
-    # Coarse grid as a sanity reference (cheap; only the deterministic
-    # objective uses it as a fallback).
     grid_results = []
     for v in np.linspace(0, 1, 4):
         for b in np.linspace(0, 1, 4):
@@ -159,4 +176,5 @@ def optimize_s3(
         x_opt = best_grid[1]
     else:
         x_opt = res.x
-    return x_to_cfg(x_opt, base_cfg), x_opt
+    best_cfg, best_inputs = x_to_overrides(x_opt, base_cfg, inputs)
+    return best_cfg, best_inputs, x_opt

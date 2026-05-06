@@ -45,9 +45,10 @@ from .optimizer import (
     BRACKET_CHOICES,
     ObjectiveType,
     optimize_s3,
-    x_to_cfg,
+    x_to_overrides,
 )
 from .report import build_action_report
+from .results import StrategyResult
 from .scenario import (
     ScenarioError,
     apply_scenario,
@@ -90,9 +91,10 @@ __all__ = [
     "simulate_paths",
     "MonteCarloResult",
     "optimize_s3",
-    "x_to_cfg",
+    "x_to_overrides",
     "BRACKET_CHOICES",
     "ObjectiveType",
+    "StrategyResult",
     "summarize",
     "terminal_after_tax_nw",
     "lifetime_tax_npv",

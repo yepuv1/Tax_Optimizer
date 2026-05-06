@@ -31,8 +31,8 @@ def initial_state(cfg: Config, inputs: Inputs) -> State:
     taxable = s.taxable_brokerage
     return State(
         year=cfg.start_year,
-        spouse_a_age=cfg.spouse_a_age_start,
-        spouse_b_age=cfg.spouse_b_age_start,
+        spouse_a_age=inputs.spouse_a_age_start,
+        spouse_b_age=inputs.spouse_b_age_start,
         spouse_a_pretax=pretax_a,
         spouse_b_pretax=pretax_b,
         roth=roth,

@@ -72,6 +72,7 @@ from . import (
 )
 from .render import detect_format, render_terminal, write_report
 from .report import build_action_report
+from .results import StrategyResult
 from .scenario import (
     ScenarioError,
     apply_scenario,
@@ -81,21 +82,35 @@ from .scenario import (
 )
 
 
-def _strategy_results(base_cfg: Config, inputs: Inputs) -> dict:
-    s0 = base_cfg
-    s1 = replace(base_cfg, spouse_a_roth_401k_pct=1.0, spouse_b_roth_401k_pct=1.0)
-    s2 = replace(base_cfg, roth_conversion_target_bracket=0.22)
-    s3_cfg, _x = optimize_s3(base_cfg, inputs, objective="terminal")
+def _strategy_results(
+    base_cfg: Config, base_inputs: Inputs
+) -> dict[str, StrategyResult]:
+    """Build the four canonical strategies (baseline / all-Roth-401k /
+    bracket-fill / optimizer) and return their `StrategyResult`s.
 
-    out: dict = {}
-    for name, cfg in [
+    Each strategy ends up with its own `(cfg, inputs)` pair so the
+    report renderer can show "current vs. recommended" cleanly.
+    """
+    s0 = (base_cfg, base_inputs)
+    s1 = (
+        base_cfg,
+        replace(
+            base_inputs, spouse_a_roth_401k_pct=1.0, spouse_b_roth_401k_pct=1.0
+        ),
+    )
+    s2 = (replace(base_cfg, roth_conversion_target_bracket=0.22), base_inputs)
+    s3_cfg, s3_inputs, _x = optimize_s3(base_cfg, base_inputs, objective="terminal")
+    s3 = (s3_cfg, s3_inputs)
+
+    out: dict[str, StrategyResult] = {}
+    for name, (cfg, inputs) in [
         ("S0_baseline", s0),
         ("S1_all_roth_401k", s1),
         ("S2_bracket_fill_22", s2),
-        ("S3_optimized", s3_cfg),
+        ("S3_optimized", s3),
     ]:
         df = simulate(cfg, inputs)
-        out[name] = (cfg, df, summarize(df))
+        out[name] = StrategyResult(cfg=cfg, inputs=inputs, df=df, summary=summarize(df))
     return out
 
 
@@ -391,12 +406,12 @@ def _run_objective_optimizer(
     """`--mc-objective {cvar,p_success}` path: bespoke optimizer summary."""
     print(f"=== Tax optimizer ({cfg.tax_regime.name}) ===")
     print(
-        f"Ages {cfg.spouse_a_age_start}/{cfg.spouse_b_age_start}, "
-        f"retire {cfg.spouse_a_retire_age}/{cfg.spouse_b_retire_age}, "
+        f"Ages {inputs.spouse_a_age_start}/{inputs.spouse_b_age_start}, "
+        f"retire {inputs.spouse_a_retire_age}/{inputs.spouse_b_retire_age}, "
         f"horizon {cfg.horizon_age}"
     )
     print(f"=== Optimizer (objective={args.mc_objective}, paths={args.monte_carlo}) ===")
-    opt_cfg, _x = optimize_s3(
+    opt_cfg, opt_inputs, _x = optimize_s3(
         cfg,
         inputs,
         objective=args.mc_objective,
@@ -404,8 +419,8 @@ def _run_objective_optimizer(
         seed=args.seed,
     )
     print(
-        f"  spouse_a_roth_401k_pct = {opt_cfg.spouse_a_roth_401k_pct:.2f}\n"
-        f"  spouse_b_roth_401k_pct = {opt_cfg.spouse_b_roth_401k_pct:.2f}\n"
+        f"  spouse_a_roth_401k_pct = {opt_inputs.spouse_a_roth_401k_pct:.2f}\n"
+        f"  spouse_b_roth_401k_pct = {opt_inputs.spouse_b_roth_401k_pct:.2f}\n"
         f"  roth_conversion_target = {opt_cfg.roth_conversion_target_bracket:.0%}\n"
     )
 
@@ -414,7 +429,7 @@ def _emit_legacy_text(
     cfg: Config,
     inputs: Inputs,
     args: argparse.Namespace,
-    results: dict,
+    results: dict[str, StrategyResult],
     sens,
     base_terminal: float,
     mc,
@@ -422,8 +437,8 @@ def _emit_legacy_text(
     """The pre-report terse output, kept behind --no-report."""
     print(f"=== Tax optimizer ({cfg.tax_regime.name}) ===")
     print(
-        f"Ages {cfg.spouse_a_age_start}/{cfg.spouse_b_age_start}, "
-        f"retire {cfg.spouse_a_retire_age}/{cfg.spouse_b_retire_age}, "
+        f"Ages {inputs.spouse_a_age_start}/{inputs.spouse_b_age_start}, "
+        f"retire {inputs.spouse_a_retire_age}/{inputs.spouse_b_retire_age}, "
         f"horizon {cfg.horizon_age}"
     )
     if args.scenario:
@@ -444,16 +459,17 @@ def _emit_legacy_text(
 
     print("=== Strategy comparison (deterministic) ===")
     print(f"{'strategy':<22}  {'tax_npv':>14}  {'irmaa_npv':>12}  {'terminal_atx':>16}")
-    for name, (_c, _df, summ) in results.items():
+    for name, r in results.items():
+        summ = r.summary
         print(
             f"{name:<22}  {summ['lifetime_tax_npv']:>14,.0f}  "
             f"{summ['lifetime_irmaa_npv']:>12,.0f}  "
             f"{summ['terminal_after_tax']:>16,.0f}"
         )
     print()
-    print(render_takeaways(results, cfg))
+    print(render_takeaways(results, cfg, inputs))
     print()
-    print(render_actions(results, sens, cfg, base_terminal))
+    print(render_actions(results, sens, cfg, base_terminal, inputs))
 
 
 if __name__ == "__main__":

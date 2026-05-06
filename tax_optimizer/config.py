@@ -1,9 +1,17 @@
 """Aggregated simulation configuration.
 
-`Config` bundles every knob the simulator and optimizer touch. It's
-designed for backward compatibility with the original flat-field layout
-(so `replace(cfg, spouse_a_roth_401k_pct=0.5)` still works) while adding
-the modular types introduced in v2:
+`Config` bundles the simulation knobs (macro assumptions, policy
+choices, modular blocks). The household-specific "about me" data --
+spouse ages, retire ages, contribution rates, Roth-401(k) splits,
+starting balances, salaries, Social Security amounts, etc. -- lives
+on `Inputs` instead so the two concerns don't bleed into each other.
+A clean rule of thumb:
+
+  * If a number describes the *household*, it goes on `Inputs`.
+  * If a number describes the *simulation / strategy / world*, it
+    goes on `Config`.
+
+Modular blocks on `Config`:
 
   * `tax_regime`           : which `TaxRegime` is active
   * `regime_change_*`      : optional mid-simulation regime swap
@@ -15,7 +23,7 @@ the modular types introduced in v2:
 
 When `market` is a `DeterministicModel(equity=cfg.nominal_growth_rate,
 bond=cfg.nominal_growth_rate)` AND `asset_location` is uniform AND
-`spending` is the flat default, the v2 simulator reproduces the v1
+`spending` is the flat default, the simulator reproduces the v1
 deterministic numbers byte-for-byte.
 """
 
@@ -35,10 +43,6 @@ class Config:
     # Timing
     # ------------------------------------------------------------------
     start_year: int = 2026
-    spouse_a_age_start: int = 50
-    spouse_b_age_start: int = 50
-    spouse_a_retire_age: int = 65
-    spouse_b_retire_age: int = 65
     horizon_age: int = 90
 
     # ------------------------------------------------------------------
@@ -50,14 +54,6 @@ class Config:
     inflation: float = 0.025
     wage_growth: float = 0.030
     taxable_drag: float = 0.005
-
-    # ------------------------------------------------------------------
-    # Contribution policy (the optimizer's first 2 decision variables)
-    # ------------------------------------------------------------------
-    spouse_a_total_contrib_pct: float = 0.08
-    spouse_b_total_contrib_pct: float = 0.06
-    spouse_a_roth_401k_pct: float = 0.0
-    spouse_b_roth_401k_pct: float = 0.0
 
     # ------------------------------------------------------------------
     # Withdrawal & conversion strategy

@@ -1,16 +1,9 @@
 """Scenario file loading and ad-hoc override parsing.
 
 A *scenario* is a JSON document that overrides the built-in `Config` and
-`Inputs` defaults. The shape mirrors the dataclasses (any field omitted
-keeps its default). Complex objects use a small tagged-dict form.
-
-For ergonomic grouping the scenario layer treats every spouse-specific
-"about me" field (ages, retire ages, contribution rates, Roth-401(k)
-splits) as part of the `inputs` section even though some of them
-internally live on `Config`. The mapping is one-way and transparent:
-write them under `inputs.<field>` in the JSON or pass them as
-`--set inputs.<field>=...`, and the scenario layer routes them onto
-the right object.
+`Inputs` defaults. The shape mirrors the dataclasses one-to-one (any
+field omitted keeps its default); complex objects use a small
+tagged-dict form.
 
     {
       "config": {
@@ -44,8 +37,8 @@ the right object.
     }
 
 Unknown keys raise `ScenarioError` so typos don't silently no-op. If a
-user puts one of the rerouted fields under `config.<field>` the error
-message points them at the new location.
+legacy scenario file puts one of the spouse_* fields under `config`,
+the error message points at the new location on `inputs`.
 
 This module is also responsible for `--set DOTTED.PATH=VALUE` parsing
 and for serializing the current effective scenario back to JSON for
@@ -88,21 +81,23 @@ _REGIMES_BY_NAME: dict[str, TaxRegime] = {
 }
 
 
-# Spouse-specific Config fields that the scenario layer surfaces under
-# `inputs` instead of `config`. These still live on the Config dataclass
-# at runtime; we just route them through the JSON's `inputs` section so
-# the scenario file groups all "about me" data together.
-_INPUTS_REROUTED_TO_CONFIG: tuple[str, ...] = (
-    "spouse_a_age_start",
-    "spouse_b_age_start",
-    "spouse_a_retire_age",
-    "spouse_b_retire_age",
-    "spouse_a_total_contrib_pct",
-    "spouse_b_total_contrib_pct",
-    "spouse_a_roth_401k_pct",
-    "spouse_b_roth_401k_pct",
+# Old layout: these spouse_* fields used to live on `Config` and were
+# accepted under the JSON `config` section. They now live on `Inputs`.
+# We keep the set around purely so that legacy scenario files / --set
+# expressions get a targeted migration hint instead of a generic
+# "Unknown config field" error.
+_LEGACY_CONFIG_SPOUSE_FIELDS: frozenset[str] = frozenset(
+    {
+        "spouse_a_age_start",
+        "spouse_b_age_start",
+        "spouse_a_retire_age",
+        "spouse_b_retire_age",
+        "spouse_a_total_contrib_pct",
+        "spouse_b_total_contrib_pct",
+        "spouse_a_roth_401k_pct",
+        "spouse_b_roth_401k_pct",
+    }
 )
-_REROUTED_SET = frozenset(_INPUTS_REROUTED_TO_CONFIG)
 
 
 # ---------------------------------------------------------------------------
@@ -141,19 +136,14 @@ def apply_scenario(
     config_patch = dict(scenario.get("config") or {})
     inputs_patch = dict(scenario.get("inputs") or {})
 
-    legacy = _REROUTED_SET & set(config_patch)
+    legacy = _LEGACY_CONFIG_SPOUSE_FIELDS & set(config_patch)
     if legacy:
         names = ", ".join(f"inputs.{f}" for f in sorted(legacy))
         raise ScenarioError(
-            f"These spouse_* fields now live under `inputs`, not `config`: "
-            f"{sorted(legacy)}. Move them in your JSON file (e.g. {names})."
+            f"These spouse_* fields moved to `inputs`: {sorted(legacy)}. "
+            f"Move them under the `inputs` section of your scenario JSON "
+            f"(e.g. {names})."
         )
-
-    rerouted: dict[str, Any] = {}
-    for name in list(inputs_patch):
-        if name in _REROUTED_SET:
-            rerouted[name] = inputs_patch.pop(name)
-    config_patch.update(rerouted)
 
     if config_patch:
         cfg = _apply_config_dict(cfg, config_patch)
@@ -209,16 +199,16 @@ def apply_set_overrides(
                 f"--set key {key!r} is missing a field after the root."
             )
 
-        # Reroute spouse_* fields written under `inputs.` to the cfg patch,
-        # and reject the legacy `config.<rerouted>` form with a hint.
-        if len(rest) == 1 and rest[0] in _REROUTED_SET:
-            if root == "config":
-                raise ScenarioError(
-                    f"--set key {key!r} moved: use inputs.{rest[0]} instead "
-                    f"(spouse_* fields now live under `inputs`)."
-                )
-            cfg_patch[rest[0]] = value
-            continue
+        # Reject the legacy `config.spouse_*` form with a targeted hint.
+        if (
+            root == "config"
+            and len(rest) == 1
+            and rest[0] in _LEGACY_CONFIG_SPOUSE_FIELDS
+        ):
+            raise ScenarioError(
+                f"--set key {key!r} moved: use inputs.{rest[0]} instead "
+                f"(spouse_* fields now live on Inputs)."
+            )
 
         target = cfg_patch if root == "config" else inputs_patch
         _nest_set(target, rest, value)
@@ -250,21 +240,18 @@ def scenario_to_dict(cfg: Config, inputs: Inputs) -> dict[str, Any]:
     """Serialize the current cfg / inputs back to a scenario-shaped dict.
 
     Round-trip property: `apply_scenario(Config(), Inputs(),
-    scenario_to_dict(cfg, inputs))` reproduces (cfg, inputs) for all
-    fields this module knows how to encode -- including the spouse_*
-    fields, which are emitted under `inputs` to match the input format.
+    scenario_to_dict(cfg, inputs))` reproduces (cfg, inputs) for every
+    field this module knows how to encode.
     """
     return {
         "config": _config_to_dict(cfg),
-        "inputs": _inputs_to_dict(inputs, cfg),
+        "inputs": _inputs_to_dict(inputs),
     }
 
 
 def _config_to_dict(cfg: Config) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for f in fields(cfg):
-        if f.name in _REROUTED_SET:
-            continue  # surfaced under `inputs` instead
         v = getattr(cfg, f.name)
         if f.name == "tax_regime":
             out[f.name] = _regime_name(v)
@@ -283,10 +270,8 @@ def _config_to_dict(cfg: Config) -> dict[str, Any]:
     return out
 
 
-def _inputs_to_dict(inp: Inputs, cfg: Config) -> dict[str, Any]:
+def _inputs_to_dict(inp: Inputs) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    for name in _INPUTS_REROUTED_TO_CONFIG:
-        out[name] = getattr(cfg, name)
     for f in fields(inp):
         v = getattr(inp, f.name)
         if is_dataclass(v):
@@ -352,6 +337,13 @@ def _apply_config_dict(cfg: Config, patch: dict[str, Any]) -> Config:
     valid = {f.name for f in fields(cfg)}
     unknown = set(patch) - valid
     if unknown:
+        legacy = unknown & _LEGACY_CONFIG_SPOUSE_FIELDS
+        if legacy:
+            names = ", ".join(f"inputs.{f}" for f in sorted(legacy))
+            raise ScenarioError(
+                f"These spouse_* fields moved to `inputs`: {sorted(legacy)}. "
+                f"Move them under the `inputs` section (e.g. {names})."
+            )
         raise ScenarioError(
             f"Unknown config field(s): {sorted(unknown)}. "
             f"Valid fields include: {sorted(valid)}."
@@ -542,13 +534,9 @@ def _apply_inputs_dict(inputs: Inputs, patch: dict[str, Any]) -> Inputs:
     valid = {f.name for f in fields(inputs)}
     unknown = set(patch) - valid
     if unknown:
-        # Rerouted spouse_* fields are valid under `inputs` even though they
-        # live on Config; surface them in the help so typos suggest the right
-        # spelling.
-        valid_with_rerouted = sorted(valid | _REROUTED_SET)
         raise ScenarioError(
             f"Unknown inputs field(s): {sorted(unknown)}. "
-            f"Valid: {valid_with_rerouted}."
+            f"Valid: {sorted(valid)}."
         )
 
     kwargs: dict[str, Any] = {}

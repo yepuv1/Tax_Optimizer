@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .config import Config
+from .inputs import Inputs
 from .state import State
 from .tax.federal import amount_to_fill_bracket, federal_tax
 from .tax.regimes import TaxRegime
@@ -10,6 +11,7 @@ from .tax.regimes import TaxRegime
 
 def planned_roth_conversion(
     cfg: Config,
+    inputs: Inputs,
     state: State,
     base_kwargs: dict,
     *,
@@ -23,11 +25,11 @@ def planned_roth_conversion(
     target is split pro-rata across their available pretax balances.
     """
     a_in_gap = (
-        state.spouse_a_age >= cfg.spouse_a_retire_age
+        state.spouse_a_age >= inputs.spouse_a_retire_age
         and state.spouse_a_age < cfg.rmd_start_age
     )
     b_in_gap = (
-        state.spouse_b_age >= cfg.spouse_b_retire_age
+        state.spouse_b_age >= inputs.spouse_b_retire_age
         and state.spouse_b_age < cfg.rmd_start_age
     )
     a_avail = state.spouse_a_pretax if a_in_gap else 0.0

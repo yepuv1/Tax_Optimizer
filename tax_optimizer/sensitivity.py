@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 
 import numpy as np
 import pandas as pd
@@ -10,34 +10,66 @@ import pandas as pd
 from .config import Config
 from .inputs import Inputs
 from .metrics import terminal_after_tax_nw
+from .results import StrategyResult
 from .simulator import simulate
 
 
-def _ranked_strategies(results: dict) -> list[tuple[str, tuple]]:
+def _ranked_strategies(results: dict[str, StrategyResult]) -> list[tuple[str, StrategyResult]]:
     return sorted(
         results.items(),
-        key=lambda kv: kv[1][2]["terminal_after_tax"],
+        key=lambda kv: kv[1].summary["terminal_after_tax"],
         reverse=True,
     )
 
 
-def winning_cfg(results: dict, default_cfg: Config) -> tuple[str, Config]:
+def winning_strategy(
+    results: dict[str, StrategyResult], default_cfg: Config, default_inputs: Inputs
+) -> tuple[str, Config, Inputs]:
+    if not results:
+        return "S0_baseline", default_cfg, default_inputs
+    name, r = _ranked_strategies(results)[0]
+    return name, r.cfg, r.inputs
+
+
+# Backward-compat shim for any external caller. Returns (name, cfg) only.
+def winning_cfg(results: dict[str, StrategyResult], default_cfg: Config) -> tuple[str, Config]:
     if not results:
         return "S0_baseline", default_cfg
-    name, (cfg, _df, _summary) = _ranked_strategies(results)[0]
-    return name, cfg
+    name, r = _ranked_strategies(results)[0]
+    return name, r.cfg
+
+
+def _resolve_owner(field_name: str) -> str:
+    """Return 'cfg' or 'inputs' depending on which dataclass owns `field_name`."""
+    if field_name in {f.name for f in fields(Config)}:
+        return "cfg"
+    if field_name in {f.name for f in fields(Inputs)}:
+        return "inputs"
+    raise KeyError(f"Field {field_name!r} not found on Config or Inputs.")
 
 
 def tornado_sensitivity(
     base_cfg: Config, inputs: Inputs | None = None
 ) -> tuple[pd.DataFrame, float]:
-    """Per-knob tornado around `base_cfg`. Returns (df, base_terminal)."""
+    """Per-knob tornado around `(base_cfg, inputs)`. Returns (df, base_terminal).
+
+    Each perturbation auto-routes to whichever dataclass actually owns
+    the field, so adding a new tornado knob doesn't require touching
+    this function's plumbing -- just append the (name, lo, hi) tuple.
+    """
     if inputs is None:
         inputs = Inputs()
     base_terminal = terminal_after_tax_nw(simulate(base_cfg, inputs))
 
-    def _terminal(**overrides) -> float:
-        return terminal_after_tax_nw(simulate(replace(base_cfg, **overrides), inputs))
+    def _terminal(param: str, value) -> float:
+        owner = _resolve_owner(param)
+        if owner == "cfg":
+            return terminal_after_tax_nw(
+                simulate(replace(base_cfg, **{param: value}), inputs)
+            )
+        return terminal_after_tax_nw(
+            simulate(base_cfg, replace(inputs, **{param: value}))
+        )
 
     def int_clamp(v: int, lo: int, hi: int) -> int:
         return int(max(lo, min(hi, v)))
@@ -47,17 +79,17 @@ def tornado_sensitivity(
         ("spouse_b_roth_401k_pct", 0.0, 1.0),
         ("roth_conversion_target_bracket", 0.0, 0.32),
         ("spouse_a_total_contrib_pct",
-            max(0.0, base_cfg.spouse_a_total_contrib_pct - 0.05),
-            min(1.0, base_cfg.spouse_a_total_contrib_pct + 0.05)),
+            max(0.0, inputs.spouse_a_total_contrib_pct - 0.05),
+            min(1.0, inputs.spouse_a_total_contrib_pct + 0.05)),
         ("spouse_b_total_contrib_pct",
-            max(0.0, base_cfg.spouse_b_total_contrib_pct - 0.05),
-            min(1.0, base_cfg.spouse_b_total_contrib_pct + 0.05)),
+            max(0.0, inputs.spouse_b_total_contrib_pct - 0.05),
+            min(1.0, inputs.spouse_b_total_contrib_pct + 0.05)),
         ("spouse_a_retire_age",
-            int_clamp(base_cfg.spouse_a_retire_age - 2, 50, 75),
-            int_clamp(base_cfg.spouse_a_retire_age + 2, 50, 75)),
+            int_clamp(inputs.spouse_a_retire_age - 2, 50, 75),
+            int_clamp(inputs.spouse_a_retire_age + 2, 50, 75)),
         ("spouse_b_retire_age",
-            int_clamp(base_cfg.spouse_b_retire_age - 2, 50, 75),
-            int_clamp(base_cfg.spouse_b_retire_age + 2, 50, 75)),
+            int_clamp(inputs.spouse_b_retire_age - 2, 50, 75),
+            int_clamp(inputs.spouse_b_retire_age + 2, 50, 75)),
         ("ss_start_age",
             int_clamp(base_cfg.ss_start_age - 3, 62, 70),
             int_clamp(base_cfg.ss_start_age + 3, 62, 70)),
@@ -76,8 +108,8 @@ def tornado_sensitivity(
     for param, lo, hi in perturbations:
         if lo == hi:
             continue
-        delta_lo = _terminal(**{param: lo}) - base_terminal
-        delta_hi = _terminal(**{param: hi}) - base_terminal
+        delta_lo = _terminal(param, lo) - base_terminal
+        delta_hi = _terminal(param, hi) - base_terminal
         rows.append(
             {
                 "param": param,
@@ -93,9 +125,19 @@ def tornado_sensitivity(
 
 
 def _action_for_param(
-    param: str, direction: str, lo: float, hi: float, base_cfg: Config
+    param: str,
+    direction: str,
+    lo: float,
+    hi: float,
+    base_cfg: Config,
+    base_inputs: Inputs,
 ) -> str:
-    base_val = getattr(base_cfg, param, None)
+    # Auto-route the lookup to whichever object owns the field.
+    try:
+        owner = _resolve_owner(param)
+    except KeyError:
+        owner = "cfg"
+    base_val = getattr(base_cfg if owner == "cfg" else base_inputs, param, None)
     if param.endswith("_roth_401k_pct"):
         spouse = "Spouse A" if param.startswith("spouse_a") else "Spouse B"
         target = hi if direction == "higher" else lo
@@ -136,18 +178,28 @@ def _action_for_param(
 
 
 def render_actions(
-    results: dict, sens_df: pd.DataFrame, base_cfg: Config, base_terminal: float
+    results: dict[str, StrategyResult],
+    sens_df: pd.DataFrame,
+    base_cfg: Config,
+    base_terminal: float,
+    base_inputs: Inputs | None = None,
 ) -> str:
-    winner_name, winner_cfg = winning_cfg(results, base_cfg)
-    baseline_sum = results.get("S0_baseline", (None, None, {}))[2]
-    winner_sum = results[winner_name][2]
+    if base_inputs is None:
+        base_inputs = Inputs()
+    winner_name, winner_cfg, winner_inputs = winning_strategy(
+        results, base_cfg, base_inputs
+    )
+    baseline_sum = (
+        results["S0_baseline"].summary if "S0_baseline" in results else {}
+    )
+    winner_sum = results[winner_name].summary
 
     lines: list[str] = ["### Recommended actions", ""]
     if winner_name == "S0_baseline":
         lines.append("1. Stay the course. Baseline already maximizes terminal after-tax NW.")
     elif winner_name == "S1_all_roth_401k":
-        a_pct = winner_cfg.spouse_a_total_contrib_pct
-        b_pct = winner_cfg.spouse_b_total_contrib_pct
+        a_pct = winner_inputs.spouse_a_total_contrib_pct
+        b_pct = winner_inputs.spouse_b_total_contrib_pct
         lines.append(
             f"1. Switch contributions to Roth 401(k). Direct 100% of Spouse A's "
             f"{a_pct:.0%} and Spouse B's {b_pct:.0%} salary deferrals into the Roth bucket."
@@ -159,8 +211,8 @@ def render_actions(
             f"{winner_cfg.roth_conversion_target_bracket:.0%} federal bracket each gap year."
         )
     elif winner_name == "S3_optimized":
-        a_roth = winner_cfg.spouse_a_roth_401k_pct
-        b_roth = winner_cfg.spouse_b_roth_401k_pct
+        a_roth = winner_inputs.spouse_a_roth_401k_pct
+        b_roth = winner_inputs.spouse_b_roth_401k_pct
         conv = winner_cfg.roth_conversion_target_bracket
         bits = []
         if a_roth > 0.05 or b_roth > 0.05:
@@ -189,7 +241,7 @@ def render_actions(
         d_lo, d_hi = row["delta_low"], row["delta_high"]
         better_dir = "higher" if d_hi > d_lo else "lower"
         better_delta = max(d_hi, d_lo)
-        action = _action_for_param(param, better_dir, lo, hi, base_cfg)
+        action = _action_for_param(param, better_dir, lo, hi, base_cfg, base_inputs)
         lines.append(
             f"   - {param} - swing ${row['swing']:,.0f}; pushing it {better_dir} "
             f"adds ~${better_delta:,.0f}. {action}"
@@ -203,17 +255,22 @@ def render_actions(
     return "\n".join(lines)
 
 
-def render_takeaways(results: dict, cfg: Config) -> str:
+def render_takeaways(
+    results: dict[str, StrategyResult], cfg: Config, inputs: Inputs | None = None
+) -> str:
     if not results:
         return "(No strategies have been simulated yet.)"
+    if inputs is None:
+        inputs = Inputs()
     ranked = sorted(
         results.items(),
-        key=lambda kv: kv[1][2]["terminal_after_tax"],
+        key=lambda kv: kv[1].summary["terminal_after_tax"],
         reverse=True,
     )
-    winner_name, (_w_cfg, _winner_df, winner_sum) = ranked[0]
+    winner_name, winner_r = ranked[0]
+    winner_sum = winner_r.summary
     baseline_name = "S0_baseline" if "S0_baseline" in results else ranked[-1][0]
-    baseline_sum = results[baseline_name][2]
+    baseline_sum = results[baseline_name].summary
 
     def fmt(v: float) -> str:
         return f"${v:,.0f}"
@@ -240,9 +297,9 @@ def render_takeaways(results: dict, cfg: Config) -> str:
         f"- Peak federal marginal rate ({winner_name}): {winner_sum['peak_marginal']:.0%}."
     )
 
-    horizon_years = cfg.horizon_age - cfg.spouse_a_age_start + 1
+    horizon_years = cfg.horizon_age - inputs.spouse_a_age_start + 1
     header = (
         f"### Run summary ({horizon_years}-year horizon, ages "
-        f"{cfg.spouse_a_age_start}-{cfg.horizon_age})\n"
+        f"{inputs.spouse_a_age_start}-{cfg.horizon_age})\n"
     )
     return header + "\n".join(lines)

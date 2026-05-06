@@ -243,7 +243,7 @@ household data:
 }
 ```
 
-The eight rerouted fields are:
+The household-specific fields under `inputs` are:
 
 | `inputs.<field>` | Range | What it does |
 |---|---|---|
@@ -252,8 +252,11 @@ The eight rerouted fields are:
 | `spouse_a_total_contrib_pct`, `spouse_b_total_contrib_pct` | 0.0–1.0 | Fraction of salary deferred into 401(k) (Traditional + Roth combined). |
 | `spouse_a_roth_401k_pct`, `spouse_b_roth_401k_pct` | 0.0–1.0 | Of that deferral, the fraction routed to Roth (the rest is Traditional). |
 
-Putting these under `config.<field>` in the JSON or via `--set
-config.<field>=…` raises a clear error pointing at the new location.
+These fields used to live on `Config`; they're now part of `Inputs`
+together with the rest of the "about me" data so the same `Config`
+strategy can be reused across households. Old scenario files that put
+them under `config.<field>` (or `--set config.spouse_*=…`) get a clear
+migration error pointing at the new location.
 
 See `scenarios/example.json` for a full-featured example, and run
 `--print-defaults` against any scenario to see the resolved values.
@@ -382,11 +385,11 @@ The model distinguishes four kinds of inputs, from narrowest to broadest:
 
 The only variables `optimize_s3` searches over. Everything else is fixed.
 
-| Variable | Domain | Meaning |
-|---|---|---|
-| `spouse_a_roth_401k_pct` | `[0, 1]` | Fraction of Spouse A's 401(k) deferrals routed to Roth. |
-| `spouse_b_roth_401k_pct` | `[0, 1]` | Same, for Spouse B. |
-| `roth_conversion_target_bracket` | `{0%, 12%, 22%, 24%, 32%}` | Bracket the converter fills *up to* during gap years. |
+| Variable | Lives on | Domain | Meaning |
+|---|---|---|---|
+| `spouse_a_roth_401k_pct` | `Inputs` | `[0, 1]` | Fraction of Spouse A's 401(k) deferrals routed to Roth. |
+| `spouse_b_roth_401k_pct` | `Inputs` | `[0, 1]` | Same, for Spouse B. |
+| `roth_conversion_target_bracket` | `Config` | `{0%, 12%, 22%, 24%, 32%}` | Bracket the converter fills *up to* during gap years. |
 
 Three optimizer objectives:
 
@@ -394,9 +397,14 @@ Three optimizer objectives:
 - `'cvar'` — average terminal NW across the worst α% of Monte Carlo paths.
 - `'p_success'` — probability the plan never runs out of money.
 
-### 2. Policy knobs in `Config`
+### 2. Where each knob lives — `Config` vs. `Inputs`
 
-Edit any field on `Config` to model an alternate plan: contribution rates, retire age, SS start age, withdrawal strategy, conversion target, etc. See `tax_optimizer/config.py` for the full list.
+The split is intentional and keeps the same `Config` reusable across households:
+
+- **`Inputs`** — the *household*. Spouse ages, retire ages, salaries, contribution rates, Roth-401(k) splits, starting balances, Social Security amounts, expected expenses, etc. See `tax_optimizer/inputs.py`.
+- **`Config`** — the *simulation / strategy*. Macro assumptions (`nominal_growth_rate`, `inflation`, `wage_growth`), age-gated policy events (`ss_start_age`, `pension_start_age`, `rmd_start_age`), the withdrawal / conversion strategy, and the modular assumption blocks below. See `tax_optimizer/config.py`.
+
+The optimizer's three decision variables follow the same split: the Roth-401(k) splits land on `Inputs` (a household-level deferral choice) and the conversion bracket target lands on `Config` (a strategy-level rule). `optimize_s3` therefore returns `(best_cfg, best_inputs, x_opt)`, and each of the four canonical strategies in the CLI carries its own `(cfg, inputs)` pair packaged as a `StrategyResult`.
 
 ### 3. Modular assumption blocks (v2)
 

@@ -20,10 +20,11 @@ import pandas as pd
 from .config import Config
 from .inputs import Inputs
 from .monte_carlo import MonteCarloResult
+from .results import StrategyResult
 
 
-def _winning_strategy(results: dict) -> str:
-    return max(results, key=lambda n: results[n][2]["terminal_after_tax"])
+def _winning_strategy(results: dict[str, StrategyResult]) -> str:
+    return max(results, key=lambda n: results[n].summary["terminal_after_tax"])
 
 
 def _peak_marginal_year(df: pd.DataFrame) -> dict[str, Any]:
@@ -37,10 +38,10 @@ def _peak_marginal_year(df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def _conversion_window(cfg: Config) -> tuple[int, int]:
+def _conversion_window(inputs: Inputs, cfg: Config) -> tuple[int, int]:
     """Age range where Roth conversions are most useful: from the later-
     retiring spouse's retire age until RMDs hit."""
-    start_age = max(cfg.spouse_a_retire_age, cfg.spouse_b_retire_age)
+    start_age = max(inputs.spouse_a_retire_age, inputs.spouse_b_retire_age)
     end_age = cfg.rmd_start_age - 1
     return start_age, end_age
 
@@ -48,7 +49,7 @@ def _conversion_window(cfg: Config) -> tuple[int, int]:
 def build_action_report(
     cfg: Config,
     inputs: Inputs,
-    results: dict,
+    results: dict[str, StrategyResult],
     sens_df: pd.DataFrame,
     base_terminal: float,
     mc: MonteCarloResult | None = None,
@@ -61,9 +62,10 @@ def build_action_report(
     single markdown string (no trailing newline).
     """
     winner = _winning_strategy(results)
-    w_cfg, w_df, w_sum = results[winner]
-    base_sum = results.get("S0_baseline", (None, None, {}))[2]
-    horizon = cfg.horizon_age - cfg.spouse_a_age_start + 1
+    w = results[winner]
+    w_cfg, w_inputs, w_df, w_sum = w.cfg, w.inputs, w.df, w.summary
+    base_sum = results["S0_baseline"].summary if "S0_baseline" in results else {}
+    horizon = cfg.horizon_age - inputs.spouse_a_age_start + 1
     starting_total = inputs.starting.total_excl_real_estate
     household_wages = (
         inputs.income.spouse_a_gross
@@ -71,14 +73,14 @@ def build_action_report(
         + inputs.income.spouse_a_bonus
     )
     peak = _peak_marginal_year(w_df)
-    conv_start_age, conv_end_age = _conversion_window(cfg)
+    conv_start_age, conv_end_age = _conversion_window(inputs, cfg)
 
     md: list[str] = []
     md.append("# Retirement Tax Optimization — Action Plan")
     md.append("")
     md.append(
-        f"_{horizon}-year horizon, ages {cfg.spouse_a_age_start}"
-        f"/{cfg.spouse_b_age_start} to {cfg.horizon_age}, "
+        f"_{horizon}-year horizon, ages {inputs.spouse_a_age_start}"
+        f"/{inputs.spouse_b_age_start} to {cfg.horizon_age}, "
         f"tax regime `{cfg.tax_regime.name}`._"
     )
     if scenario_path:
@@ -92,12 +94,12 @@ def build_action_report(
     md.append("| Item | Value |")
     md.append("|---|---:|")
     md.append(
-        f"| Spouse A age (retire / SS) | {cfg.spouse_a_age_start} "
-        f"({cfg.spouse_a_retire_age} / {cfg.ss_start_age}) |"
+        f"| Spouse A age (retire / SS) | {inputs.spouse_a_age_start} "
+        f"({inputs.spouse_a_retire_age} / {cfg.ss_start_age}) |"
     )
     md.append(
-        f"| Spouse B age (retire / SS) | {cfg.spouse_b_age_start} "
-        f"({cfg.spouse_b_retire_age} / {cfg.ss_start_age}) |"
+        f"| Spouse B age (retire / SS) | {inputs.spouse_b_age_start} "
+        f"({inputs.spouse_b_retire_age} / {cfg.ss_start_age}) |"
     )
     md.append(f"| Combined gross W-2 income | ${household_wages:,.0f} |")
     md.append(f"| Annual expenses (today's $) | ${inputs.annual_expenses:,.0f} |")
@@ -132,20 +134,20 @@ def build_action_report(
     md.append("| Lever | Recommended | Currently |")
     md.append("|---|---:|---:|")
     md.append(
-        f"| Spouse A 401(k) deferral | {w_cfg.spouse_a_total_contrib_pct:.0%} of salary "
-        f"| {cfg.spouse_a_total_contrib_pct:.0%} |"
+        f"| Spouse A 401(k) deferral | {w_inputs.spouse_a_total_contrib_pct:.0%} of salary "
+        f"| {inputs.spouse_a_total_contrib_pct:.0%} |"
     )
     md.append(
-        f"| &nbsp;&nbsp; ↳ Roth share of that deferral | {w_cfg.spouse_a_roth_401k_pct:.0%} "
-        f"| {cfg.spouse_a_roth_401k_pct:.0%} |"
+        f"| &nbsp;&nbsp; ↳ Roth share of that deferral | {w_inputs.spouse_a_roth_401k_pct:.0%} "
+        f"| {inputs.spouse_a_roth_401k_pct:.0%} |"
     )
     md.append(
-        f"| Spouse B 401(k) deferral | {w_cfg.spouse_b_total_contrib_pct:.0%} of salary "
-        f"| {cfg.spouse_b_total_contrib_pct:.0%} |"
+        f"| Spouse B 401(k) deferral | {w_inputs.spouse_b_total_contrib_pct:.0%} of salary "
+        f"| {inputs.spouse_b_total_contrib_pct:.0%} |"
     )
     md.append(
-        f"| &nbsp;&nbsp; ↳ Roth share of that deferral | {w_cfg.spouse_b_roth_401k_pct:.0%} "
-        f"| {cfg.spouse_b_roth_401k_pct:.0%} |"
+        f"| &nbsp;&nbsp; ↳ Roth share of that deferral | {w_inputs.spouse_b_roth_401k_pct:.0%} "
+        f"| {inputs.spouse_b_roth_401k_pct:.0%} |"
     )
     md.append(
         f"| Roth conversion target bracket (gap years) "
@@ -274,13 +276,13 @@ def build_action_report(
     md.append("| Phase | Ages (Spouse A) | What to do |")
     md.append("|---|---|---|")
     md.append(
-        f"| **Accumulation** | {cfg.spouse_a_age_start}–{cfg.spouse_a_retire_age - 1} | "
-        f"Defer {w_cfg.spouse_a_total_contrib_pct:.0%} of A's salary "
-        f"({w_cfg.spouse_a_roth_401k_pct:.0%} Roth / "
-        f"{1 - w_cfg.spouse_a_roth_401k_pct:.0%} Traditional) and "
-        f"{w_cfg.spouse_b_total_contrib_pct:.0%} of B's "
-        f"({w_cfg.spouse_b_roth_401k_pct:.0%} Roth / "
-        f"{1 - w_cfg.spouse_b_roth_401k_pct:.0%} Traditional). "
+        f"| **Accumulation** | {inputs.spouse_a_age_start}–{inputs.spouse_a_retire_age - 1} | "
+        f"Defer {w_inputs.spouse_a_total_contrib_pct:.0%} of A's salary "
+        f"({w_inputs.spouse_a_roth_401k_pct:.0%} Roth / "
+        f"{1 - w_inputs.spouse_a_roth_401k_pct:.0%} Traditional) and "
+        f"{w_inputs.spouse_b_total_contrib_pct:.0%} of B's "
+        f"({w_inputs.spouse_b_roth_401k_pct:.0%} Roth / "
+        f"{1 - w_inputs.spouse_b_roth_401k_pct:.0%} Traditional). "
         f"Max HSA. Build 1–2 years' expenses in taxable as IRMAA buffer. |"
     )
     if conv_start_age <= conv_end_age and w_cfg.roth_conversion_target_bracket > 0:
@@ -336,7 +338,7 @@ def build_action_report(
     def _money(v: float | None) -> str:
         return "—" if v is None or float(v) == 0.0 else f"${float(v):,.0f}"
 
-    retire_age = min(cfg.spouse_a_retire_age, cfg.spouse_b_retire_age)
+    retire_age = min(inputs.spouse_a_retire_age, inputs.spouse_b_retire_age)
     retire_rows = w_df[w_df["spouse_a_age"] >= retire_age]
     for _, r in retire_rows.iterrows():
         md.append(

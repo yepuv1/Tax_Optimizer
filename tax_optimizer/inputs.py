@@ -1,8 +1,11 @@
 """Default scenario inputs.
 
-These are the user-editable starting balances, income, and contribution
-settings. They're separated from `Config` so users can edit just the
-"about me" data without touching the simulation knobs.
+These are the user-editable household-specific values: spouse ages,
+retire ages, salaries, contribution rates, Roth-401(k) splits, starting
+balances, Social Security amounts, etc. They're separated from `Config`
+so users can edit just the "about me" data without touching the
+simulation knobs (and so the same `Inputs` can drive different `Config`
+strategies side-by-side).
 
 Defaults reflect a typical dual-income married-filing-jointly couple turning
 50 in 2026:
@@ -94,7 +97,25 @@ class SocialSecurity:
 
 @dataclass
 class Inputs:
-    """Container for all user-editable scenario data."""
+    """Container for all user-editable household scenario data.
+
+    The first block (ages, retire ages, contribution rates, Roth-401(k)
+    splits) lives directly on `Inputs` rather than nested under
+    `contrib` because they're used independently throughout the
+    simulator (timing, salary deferral math, optimizer decision
+    variables) and grouping them top-level keeps the JSON scenario
+    layout readable.
+    """
+
+    spouse_a_age_start: int = 50
+    spouse_b_age_start: int = 50
+    spouse_a_retire_age: int = 65
+    spouse_b_retire_age: int = 65
+
+    spouse_a_total_contrib_pct: float = 0.08
+    spouse_b_total_contrib_pct: float = 0.06
+    spouse_a_roth_401k_pct: float = 0.0
+    spouse_b_roth_401k_pct: float = 0.0
 
     starting: StartingBalances = field(default_factory=StartingBalances)
     income: CurrentIncome = field(default_factory=CurrentIncome)
