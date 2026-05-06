@@ -197,6 +197,8 @@ dotted paths into either `config` or `inputs`):
 
 ```bash
 python -m tax_optimizer \
+    --set inputs.spouse_a_age_start=55 \
+    --set inputs.spouse_a_retire_age=67 \
     --set config.horizon_age=95 \
     --set inputs.starting.hsa=25000 \
     --set 'config.market={"kind":"lognormal","equity_mu":0.07,"equity_sigma":0.18}'
@@ -205,12 +207,15 @@ python -m tax_optimizer \
 Precedence (low → high): built-in defaults → `--scenario` file → high-level
 flags (`--regime`, `--market`, `--spending`, …) → `--set` overrides.
 
-Scenario schema (every key is optional):
+Scenario schema (every key is optional). All "about me" data — including
+spouse ages, retire ages, contribution rates, and Roth-401(k) splits —
+lives under `inputs`. The scenario layer routes those fields onto the
+right internal object for you, so you only have one place to edit
+household data:
 
 ```json
 {
   "config": {
-    "spouse_a_age_start": 52,
     "horizon_age": 95,
     "tax_regime": "sunset",
     "regime_change_year_offset": 5,
@@ -222,6 +227,14 @@ Scenario schema (every key is optional):
     "asset_location": { "uniform_equity_pct": 0.7 }
   },
   "inputs": {
+    "spouse_a_age_start": 52,
+    "spouse_b_age_start": 50,
+    "spouse_a_retire_age": 65,
+    "spouse_b_retire_age": 67,
+    "spouse_a_total_contrib_pct": 0.10,
+    "spouse_b_total_contrib_pct": 0.08,
+    "spouse_a_roth_401k_pct": 0.0,
+    "spouse_b_roth_401k_pct": 0.0,
     "starting": { "spouse_a_pretax_401k": 400000, "hsa": 25000 },
     "income":   { "spouse_a_gross": 140000, "spouse_a_bonus": 15000 },
     "ss":       { "monthly_spouse_a": 3100, "monthly_spouse_b": 2500 },
@@ -229,6 +242,18 @@ Scenario schema (every key is optional):
   }
 }
 ```
+
+The eight rerouted fields are:
+
+| `inputs.<field>` | Range | What it does |
+|---|---|---|
+| `spouse_a_age_start`, `spouse_b_age_start` | int (years) | Each spouse's age at simulation start. |
+| `spouse_a_retire_age`, `spouse_b_retire_age` | int (years) | Age each spouse stops earning W-2 income. |
+| `spouse_a_total_contrib_pct`, `spouse_b_total_contrib_pct` | 0.0–1.0 | Fraction of salary deferred into 401(k) (Traditional + Roth combined). |
+| `spouse_a_roth_401k_pct`, `spouse_b_roth_401k_pct` | 0.0–1.0 | Of that deferral, the fraction routed to Roth (the rest is Traditional). |
+
+Putting these under `config.<field>` in the JSON or via `--set
+config.<field>=…` raises a clear error pointing at the new location.
 
 See `scenarios/example.json` for a full-featured example, and run
 `--print-defaults` against any scenario to see the resolved values.
