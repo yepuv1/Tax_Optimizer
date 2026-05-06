@@ -47,6 +47,14 @@ from .optimizer import (
     optimize_s3,
     x_to_cfg,
 )
+from .report import build_action_report
+from .scenario import (
+    ScenarioError,
+    apply_scenario,
+    apply_set_overrides,
+    load_scenario_file,
+    scenario_to_dict,
+)
 from .sensitivity import render_actions, render_takeaways, tornado_sensitivity
 from .simulator import simulate
 from .spending import LongTermCareShock, LumpEvent, SpendingPhase, SpendingProfile
@@ -92,4 +100,10 @@ __all__ = [
     "tornado_sensitivity",
     "render_actions",
     "render_takeaways",
+    "ScenarioError",
+    "load_scenario_file",
+    "apply_scenario",
+    "apply_set_overrides",
+    "scenario_to_dict",
+    "build_action_report",
 ]

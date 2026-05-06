@@ -69,11 +69,34 @@ uv pip install -e ".[notebook]"
 
 ### CLI
 
+By default the CLI emits the same action plan the standalone notebook
+renders (household snapshot, recommended levers, expected outcomes,
+top sensitivities, year-by-year action timeline, year-by-year
+withdrawal & conversion table, hygiene, caveats), pretty-printed to
+the terminal via [Rich](https://rich.readthedocs.io/). When stdout is
+piped or redirected, raw markdown is emitted instead so the report
+composes cleanly with other tools (`glow`, `pandoc`, `less`, etc.).
+
+For a saved deliverable use `--report PATH.html` for a styled HTML
+document or `--report PATH.pdf` for a PDF (PDF requires the optional
+`[pdf]` extra plus WeasyPrint's system libraries — see below).
+Markdown file output is intentionally not supported by the CLI; if
+you need raw markdown, use the `build_action_report()` Python API.
+
 ```bash
-# Deterministic 4-strategy comparison + tornado + recommendations.
+# Pretty terminal report (default).
 python -m tax_optimizer
 
-# Monte Carlo (sequence-of-returns risk).
+# Styled HTML.
+python -m tax_optimizer --report action_report.html
+
+# PDF (after installing the optional [pdf] extra + system libs).
+python -m tax_optimizer --report action_report.pdf
+
+# Drop a timestamped HTML archive under reports/ in addition to stdout.
+python -m tax_optimizer --report-archive
+
+# Monte Carlo (sequence-of-returns risk) — adds a "Risk picture" section.
 python -m tax_optimizer --market lognormal --monte-carlo 1000
 
 # Widow's-penalty stress test (Spouse A dies year 25).
@@ -87,9 +110,197 @@ python -m tax_optimizer --spending smile
 
 # Optimize for CVaR(10%) instead of point-estimate terminal NW.
 python -m tax_optimizer --market lognormal --monte-carlo 500 --mc-objective cvar
+
+# Older terse text output (strategy table + plain-English actions only).
+python -m tax_optimizer --no-report
+
+# Pipe raw markdown into another renderer.
+python -m tax_optimizer | glow -
 ```
 
 `python -m tax_optimizer --help` lists all flags.
+
+#### Report output flags
+
+| Flag | Effect |
+|---|---|
+| (none) | Pretty-print to stdout when stdout is a TTY; raw markdown when piped. |
+| `--report PATH` | Write the report to `PATH`. Extension must be `.html` or `.pdf`. If `PATH` is an existing directory, the file lands as `PATH/action_report.html`. Stdout is suppressed when this flag is used (pair with `--also-stdout` to keep both). |
+| `--report-archive` | Also drop a timestamped HTML copy under `./reports/action_report_YYYY-MM-DD_HHMMSS.html` so re-runs don't clobber prior plans. |
+| `--also-stdout` | When `--report PATH` writes a file, *also* print the report to stdout. |
+| `--quiet` | Suppress stdout output of the report (useful with `--report PATH`). |
+| `--no-report` | Skip the action plan entirely; emit the older short-form text summary instead. |
+
+##### PDF output
+
+PDF rendering is provided by [WeasyPrint](https://weasyprint.org/),
+which is an optional dependency because it relies on system libraries
+(pango, cairo, gdk-pixbuf):
+
+```bash
+# Python side
+pip install 'tax-optimizer[pdf]'    # installs weasyprint
+
+# System libraries
+brew install pango                   # macOS
+sudo apt install libpango-1.0-0 libpangoft2-1.0-0   # Debian/Ubuntu
+```
+
+If WeasyPrint or its system libs are missing, `--report foo.pdf` exits
+with a clear install hint. HTML output requires no extras and works
+out of the box.
+
+The Python API exposes the same renderer plus the new HTML/PDF helpers:
+
+```python
+from tax_optimizer import (
+    Config, Inputs, simulate, summarize, build_action_report,
+    optimize_s3, tornado_sensitivity,
+)
+from tax_optimizer.render import write_html, write_pdf, render_terminal
+from pathlib import Path
+
+cfg, inputs = Config(), Inputs()
+results = {
+    "S0_baseline": (cfg, simulate(cfg, inputs), summarize(simulate(cfg, inputs))),
+}
+opt_cfg, _ = optimize_s3(cfg, inputs, objective="terminal")
+df_opt = simulate(opt_cfg, inputs)
+results["S3_optimized"] = (opt_cfg, df_opt, summarize(df_opt))
+
+sens, base_terminal = tornado_sensitivity(cfg, inputs)
+report_md = build_action_report(cfg, inputs, results, sens, base_terminal)
+
+render_terminal(report_md)                       # pretty stdout
+write_html(report_md, Path("action_report.html"))
+# write_pdf(report_md, Path("action_report.pdf"))  # needs [pdf] extra
+```
+
+#### Custom scenarios
+
+The CLI also accepts a JSON scenario file for everything that isn't covered
+by the high-level flags (starting balances, salaries, contribution rates, SS
+amounts, custom market / spending objects, etc.). All sections are optional —
+omitted fields keep their built-in defaults. Unknown keys raise an error so
+typos don't silently no-op.
+
+```bash
+# Run with the bundled example scenario.
+python -m tax_optimizer --scenario scenarios/example.json
+
+# Generate a starting template you can edit.
+python -m tax_optimizer --print-defaults > my_plan.json
+```
+
+Quick one-off tweaks without writing a file (repeatable, JSON literals,
+dotted paths into either `config` or `inputs`):
+
+```bash
+python -m tax_optimizer \
+    --set config.horizon_age=95 \
+    --set inputs.starting.hsa=25000 \
+    --set 'config.market={"kind":"lognormal","equity_mu":0.07,"equity_sigma":0.18}'
+```
+
+Precedence (low → high): built-in defaults → `--scenario` file → high-level
+flags (`--regime`, `--market`, `--spending`, …) → `--set` overrides.
+
+Scenario schema (every key is optional):
+
+```json
+{
+  "config": {
+    "spouse_a_age_start": 52,
+    "horizon_age": 95,
+    "tax_regime": "sunset",
+    "regime_change_year_offset": 5,
+    "regime_change_target": "tcja",
+    "market":   { "kind": "lognormal", "equity_mu": 0.07, "equity_sigma": 0.18 },
+    "spending": { "kind": "smile", "base_spending": 95000,
+                  "ltc_years": 4, "ltc_annual_today": 100000 },
+    "mortality": { "year_of_death_a": 25, "pension_survivor_pct": 0.5 },
+    "asset_location": { "uniform_equity_pct": 0.7 }
+  },
+  "inputs": {
+    "starting": { "spouse_a_pretax_401k": 400000, "hsa": 25000 },
+    "income":   { "spouse_a_gross": 140000, "spouse_a_bonus": 15000 },
+    "ss":       { "monthly_spouse_a": 3100, "monthly_spouse_b": 2500 },
+    "annual_expenses": 95000
+  }
+}
+```
+
+See `scenarios/example.json` for a full-featured example, and run
+`--print-defaults` against any scenario to see the resolved values.
+
+##### Allowed values for enum-style fields
+
+Anywhere a string name appears below, it is case-insensitive.
+
+**`config.tax_regime`** and **`config.regime_change_target`** — pick the
+active bracket / IRMAA / NIIT / standard-deduction tables. Aliases in
+parentheses are accepted equivalents.
+
+| Value | Bundled regime | Notes |
+|---|---|---|
+| `"tcja"` (`"tcja_extended"`) | `TCJA_EXTENDED` | Default. TCJA brackets extended past 2025. |
+| `"pre_tcja"` (`"pre_tcja_2017"`) | `PRE_TCJA_2017` | 2017-style brackets, higher top rate, smaller std deduction. |
+| `"sunset"` (`"sunset_2026"`) | `SUNSET_2026` | TCJA sunset variant: rates revert, std deduction drops. |
+
+`regime_change_target` accepts the same set of values, plus `null` to
+disable a previously-set mid-simulation regime change. Combine with
+`regime_change_year_offset` (an integer year-offset from start) to flip
+regimes mid-plan.
+
+**`config.market.kind`** — yearly return source. Each kind has its own
+parameter set; only the parameters listed for that kind are accepted.
+
+| `kind` | Parameters (all optional; defaults shown) | Meaning |
+|---|---|---|
+| `"deterministic"` | `equity` (0.07), `bond` (0.04) | Constant returns every year. |
+| `"lognormal"` | `equity_mu` (0.07), `equity_sigma` (0.18), `bond_mu` (0.04), `bond_sigma` (0.06) | Independent yearly draws from a normal distribution on returns. |
+| `"bootstrap"` | `block_size` (5), `equity_history` (1928–2023 S&P 500), `bond_history` (1928–2023 10y Treasury) | Block-bootstrap from a historical series. Pass your own histories as JSON arrays of annual returns to override the defaults. |
+
+`config.market` can also be `null` to fall back to a `DeterministicModel`
+seeded from `config.nominal_growth_rate` (the v1-compatible behavior).
+
+**`config.spending.kind`** — retirement-spending shape. `base_spending`
+is required for every kind.
+
+| `kind` | Parameters | Meaning |
+|---|---|---|
+| `"flat"` | `base_spending`, `inflation` (0.025) | Single phase, inflation-adjusted forward. |
+| `"smile"` | `base_spending`, `inflation` (0.025), `ltc_years` (3), `ltc_annual_today` (80000) | Blanchett retirement smile (working/go-go/slow-go/no-go) plus an LTC shock in the final `ltc_years` years. |
+| `"custom"` | `base_spending`, `inflation` (0.025), `phases` (list of `{age_lo, age_hi, multiplier, label}`), `lump_events` (list of `{year_offset, amount_today, label, preferred_source}`), `ltc_shock` (`{years, annual_cost_today}` or `null`) | Fully user-defined phases, one-off cash outflows, and optional LTC shock. |
+
+`config.spending` can also be `null` to use a flat profile derived from
+`config.annual_expenses_today` and `config.inflation`.
+
+**`config.asset_location`** — per-account equity/bond mix. Two forms,
+mutually exclusive:
+
+```json
+"asset_location": { "uniform_equity_pct": 0.7 }
+```
+…sets every account to the same equity %, or:
+
+```json
+"asset_location": {
+  "pretax_equity_pct":  0.4,
+  "roth_equity_pct":    1.0,
+  "taxable_equity_pct": 0.8,
+  "hsa_equity_pct":     0.8
+}
+```
+
+**`config.mortality`** — accepts the full `Mortality` field set:
+`year_of_death_a` (int year-offset or `null`), `year_of_death_b` (same),
+`pension_survivor_pct` (0.0–1.0, default 0.5), `ss_survivor_keeps_higher`
+(bool, default `true`).
+
+For `lump_events[].preferred_source` (inside a custom spending profile),
+the allowed values are `"taxable"`, `"pretax"`, `"roth"`, `"any"`
+(default).
 
 ### Python API
 
