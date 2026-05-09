@@ -77,7 +77,7 @@ def _terminal_objective(
     floor = df["spending_need"]
     deficit = float((floor - liquid).clip(lower=0).sum())
     irmaa_total = float(df["irmaa"].sum())
-    terminal = terminal_after_tax_nw(df)
+    terminal = terminal_after_tax_nw(df, heir_marginal_rate=cfg.heir_marginal_rate)
     return -(terminal - 1e3 * deficit - 0.5 * irmaa_total)
 
 

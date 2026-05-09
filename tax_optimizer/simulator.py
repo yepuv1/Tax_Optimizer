@@ -19,7 +19,8 @@ import pandas as pd
 from .config import Config
 from .conversion import planned_roth_conversion
 from .inputs import Inputs, claim_age_factor
-from .limits import elective_deferral_cap, hsa_family_cap
+from .ira import allocate_ira_contributions
+from .limits import SECTION_415C_LIMIT, elective_deferral_cap, hsa_family_cap
 from .payroll import OASDI_WAGE_BASE_2026, fica_employee
 from .pension import (
     PENSION_INTEREST,
@@ -30,6 +31,7 @@ from .rmd import rmd_amount
 from .state import State, initial_state
 from .tax.federal import federal_tax
 from .tax.irmaa import MEDICARE_ELIGIBLE_AGE, irmaa_annual_surcharge
+from .tax.state import state_tax
 from .withdrawals import cover_deficit, withdraw_for_need
 
 
@@ -126,6 +128,7 @@ def simulate(
             rollover_event = "b_to_a"
 
         regime = cfg.effective_regime(year_offset)
+        state_regime = cfg.effective_state_regime(year_offset)
 
         a_working = alive_a and a_age < inputs.spouse_a_retire_age
         b_working = alive_b and b_age < inputs.spouse_b_retire_age
@@ -176,6 +179,42 @@ def simulate(
         state.spouse_b_pretax += b_pretax_contrib + b_employer_match
         state.roth += a_roth_contrib + b_roth_contrib
 
+        # Mega-backdoor Roth (after-tax 401(k) → in-plan Roth conversion).
+        # Available room each year is §415(c) overall cap minus
+        # employee elective deferrals and employer match; catch-up
+        # contributions sit *outside* §415(c) per IRS so we use the
+        # raw deferral total (not deferral + catch-up) here. After-tax
+        # dollars come from after-tax paycheck cash → Roth balance,
+        # with no income-tax impact.
+        a_after_tax_pct = (
+            inputs.spouse_a_after_tax_401k_pct
+            if (a_working and inputs.spouse_a_mega_backdoor_enabled)
+            else 0.0
+        )
+        b_after_tax_pct = (
+            inputs.spouse_b_after_tax_401k_pct
+            if (b_working and inputs.spouse_b_mega_backdoor_enabled)
+            else 0.0
+        )
+        a_after_tax_room = max(
+            0.0,
+            SECTION_415C_LIMIT - a_total_contrib - a_employer_match,
+        )
+        b_after_tax_room = max(
+            0.0,
+            SECTION_415C_LIMIT - b_total_contrib - b_employer_match,
+        )
+        a_after_tax = (
+            min(spouse_a_salary * a_after_tax_pct, a_after_tax_room)
+            if a_working else 0.0
+        )
+        b_after_tax = (
+            min(spouse_b_salary * b_after_tax_pct, b_after_tax_room)
+            if b_working else 0.0
+        )
+        state.roth += a_after_tax + b_after_tax
+        mega_backdoor_total = a_after_tax + b_after_tax
+
         # HSA family contribution: capped at IRS family limit + 55+
         # catch-up, only valid while at least one spouse works AND is
         # Medicare-ineligible. Pre-tax: reduces wages_box1 below.
@@ -183,13 +222,70 @@ def simulate(
         hsa_contrib = min(max(0.0, inputs.contrib.hsa_family), hsa_cap)
         state.hsa += hsa_contrib
 
+        # IRA contributions (Traditional / direct Roth / backdoor Roth).
+        # Eligibility: alive AND either spouse working (spousal IRA
+        # rule). MAGI for the phase-out is approximated by the federal
+        # AGI on this year's gross income line; close enough since the
+        # phase-out window is wide ($10k for MFJ direct-Roth) and the
+        # IRA dollars themselves only shift AGI by ~$7k.
+        magi_estimate = (
+            (spouse_a_salary + spouse_a_bonus if a_working else 0.0)
+            + (spouse_b_salary if b_working else 0.0)
+        )
+        ira_eligible_either = (a_working or b_working)
+        ira_a = allocate_ira_contributions(
+            age=a_age,
+            eligible=alive_a and ira_eligible_either,
+            pretax_existing=state.spouse_a_pretax,
+            traditional_target=inputs.spouse_a_traditional_ira_contrib,
+            roth_direct_target=inputs.spouse_a_roth_ira_contrib,
+            backdoor_enabled=inputs.spouse_a_backdoor_roth,
+            magi_estimate=magi_estimate,
+            filing_status=filing_status,
+        )
+        ira_b = allocate_ira_contributions(
+            age=b_age,
+            eligible=alive_b and ira_eligible_either,
+            pretax_existing=state.spouse_b_pretax,
+            traditional_target=inputs.spouse_b_traditional_ira_contrib,
+            roth_direct_target=inputs.spouse_b_roth_ira_contrib,
+            backdoor_enabled=inputs.spouse_b_backdoor_roth,
+            magi_estimate=magi_estimate,
+            filing_status=filing_status,
+        )
+
+        # Apply IRA contributions to balances. Cash outflow (subtracted
+        # from working-year cash_inflow below) is the sum of all three
+        # paths — the Traditional deduction comes back as a smaller
+        # federal tax bill, not as cash that didn't leave the household.
+        state.spouse_a_pretax += ira_a.traditional
+        state.spouse_b_pretax += ira_b.traditional
+        state.roth += ira_a.roth_direct + ira_b.roth_direct
+        # Backdoor: contribute to non-deductible Traditional → convert
+        # in same year. Net pretax balance change is zero (in then out);
+        # the taxable-fraction lands as ordinary income via roth_conversion.
+        state.roth += ira_a.backdoor + ira_b.backdoor
+
+        ira_total_outflow = ira_a.total_cash_outflow + ira_b.total_cash_outflow
+        ira_traditional_deduction = ira_a.traditional + ira_b.traditional
+        ira_backdoor_taxable_conv = (
+            ira_a.backdoor_taxable_conversion + ira_b.backdoor_taxable_conversion
+        )
+
         # ---- Income items ----
         a_w2_wages = (spouse_a_salary + spouse_a_bonus) if a_working else 0.0
         b_w2_wages = spouse_b_salary if b_working else 0.0
         wages = a_w2_wages + b_w2_wages
         # HSA contributions are pre-tax (Box 1 wage reducer alongside
-        # traditional 401(k) deferrals).
-        wages_box1 = wages - a_pretax_contrib - b_pretax_contrib - hsa_contrib
+        # traditional 401(k) deferrals). Deductible Traditional IRA
+        # contributions reduce AGI via Schedule 1 (not Box 1 directly,
+        # but mathematically equivalent for our wages-driven AGI).
+        wages_box1 = (
+            wages
+            - a_pretax_contrib - b_pretax_contrib
+            - hsa_contrib
+            - ira_traditional_deduction
+        )
 
         # FICA on per-spouse W-2 wages. Applies to GROSS wages (Box 3) —
         # traditional 401(k) does NOT reduce FICA wages. Each spouse has
@@ -281,6 +377,14 @@ def simulate(
             pension=pension_income,
             social_security=ssn_income,
         )
+        # Backdoor's taxable conversion (the pro-rata-taxable portion
+        # of the same-year Roth conversion) lands as ordinary income.
+        # We seed it onto base_kwargs so it shows up before
+        # `planned_roth_conversion` adds any *additional* conversion.
+        if ira_backdoor_taxable_conv > 0:
+            base_kwargs["roth_conversion"] = (
+                base_kwargs.get("roth_conversion", 0.0) + ira_backdoor_taxable_conv
+            )
 
         # ---- RMDs first (required income; eats bracket headroom) ----
         # IRS rule: at age ≥ rmd_start_age, satisfy RMD BEFORE any
@@ -374,6 +478,31 @@ def simulate(
         tax_result = federal_tax(regime=regime, filing_status=filing_status, **final_kwargs)
         federal = tax_result["tax"]
 
+        # ---- State income tax ----
+        # Computed on the same income line as federal; differences are
+        # handled inside `state_tax` (HSA add-back for CA, retirement
+        # exclusions for IL / NY, SS taxability fraction, etc.).
+        state_result = state_tax(
+            regime=state_regime,
+            filing_status=filing_status,
+            wages_box1=final_kwargs.get("wages", 0.0),
+            interest=final_kwargs.get("interest", 0.0),
+            ordinary_div=final_kwargs.get("ordinary_div", 0.0),
+            qualified_div=final_kwargs.get("qualified_div", 0.0),
+            ltcg=final_kwargs.get("ltcg", 0.0),
+            pension=final_kwargs.get("pension", 0.0),
+            pretax_withdrawal=final_kwargs.get("pretax_withdrawal", 0.0),
+            roth_conversion=final_kwargs.get("roth_conversion", 0.0),
+            social_security=final_kwargs.get("social_security", 0.0),
+            ss_taxable_federal=tax_result["ss_taxable"],
+            hsa_contrib=hsa_contrib,
+            age_a=a_age,
+            age_b=b_age,
+            alive_a=alive_a,
+            alive_b=alive_b,
+        )
+        state_income_tax = state_result["state_tax"]
+
         # ---- IRMAA (Medicare premium surcharge) ----
         n_medicare = (
             int(alive_a and a_age >= MEDICARE_ELIGIBLE_AGE)
@@ -415,7 +544,13 @@ def simulate(
         else:
             cash_inflow = pension_income + ssn_income + gross_cash_in
 
-        delta = cash_inflow - federal - irmaa_cost - net_need
+        delta = (
+            cash_inflow
+            - federal - state_income_tax - irmaa_cost
+            - net_need
+            - ira_total_outflow
+            - mega_backdoor_total
+        )
         unfunded = 0.0
 
         if delta > 0:
@@ -427,6 +562,10 @@ def simulate(
             # gap-year tax overrun, ...). Cascade through tax-efficient
             # buckets and gross up properly. Tracks any genuinely
             # unfunded gap so monte-carlo can see it.
+            # HSA acts as a tax-deferred bucket only after either
+            # spouse hits 65 (the IRS no-penalty age). Used for general
+            # spending it grosses up at ordinary rate just like pretax.
+            hsa_unlocked = max(a_age, b_age) >= 65
             extra, unfunded = cover_deficit(
                 deficit=-delta,
                 state=state,
@@ -436,6 +575,8 @@ def simulate(
                 pretax_b_already=withdraws["pretax_b"],
                 taxable_already=withdraws["taxable"],
                 roth_already=withdraws["roth"],
+                hsa_already=hsa_withdrawal,
+                hsa_unlocked=hsa_unlocked,
                 regime=regime,
                 filing_status=filing_status,
             )
@@ -452,6 +593,12 @@ def simulate(
             if extra["roth"] > 0:
                 state.roth = max(0.0, state.roth - extra["roth"])
                 withdraws["roth"] += extra["roth"]
+            if extra.get("hsa", 0.0) > 0:
+                state.hsa = max(0.0, state.hsa - extra["hsa"])
+                final_kwargs["pretax_withdrawal"] = (
+                    final_kwargs.get("pretax_withdrawal", 0.0) + extra["hsa"]
+                )
+                hsa_withdrawal += extra["hsa"]
             if extra["pretax"] > 0:
                 state.spouse_a_pretax = max(0.0, state.spouse_a_pretax - extra["pretax_a"])
                 state.spouse_b_pretax = max(0.0, state.spouse_b_pretax - extra["pretax_b"])
@@ -462,13 +609,33 @@ def simulate(
                 withdraws["pretax_b"] += extra["pretax_b"]
                 withdraws["pretax"] = withdraws["pretax_a"] + withdraws["pretax_b"]
 
-            # Recompute federal / IRMAA against the post-cascade kwargs
-            # so the recorded numbers reflect the additional draws.
-            if extra["pretax"] > 0 or extra["taxable"] > 0:
+            # Recompute federal / state / IRMAA against the post-cascade
+            # kwargs so the recorded numbers reflect the additional draws.
+            if extra["pretax"] > 0 or extra["taxable"] > 0 or extra.get("hsa", 0.0) > 0:
                 tax_result = federal_tax(
                     regime=regime, filing_status=filing_status, **final_kwargs
                 )
                 federal = tax_result["tax"]
+                state_result = state_tax(
+                    regime=state_regime,
+                    filing_status=filing_status,
+                    wages_box1=final_kwargs.get("wages", 0.0),
+                    interest=final_kwargs.get("interest", 0.0),
+                    ordinary_div=final_kwargs.get("ordinary_div", 0.0),
+                    qualified_div=final_kwargs.get("qualified_div", 0.0),
+                    ltcg=final_kwargs.get("ltcg", 0.0),
+                    pension=final_kwargs.get("pension", 0.0),
+                    pretax_withdrawal=final_kwargs.get("pretax_withdrawal", 0.0),
+                    roth_conversion=final_kwargs.get("roth_conversion", 0.0),
+                    social_security=final_kwargs.get("social_security", 0.0),
+                    ss_taxable_federal=tax_result["ss_taxable"],
+                    hsa_contrib=hsa_contrib,
+                    age_a=a_age,
+                    age_b=b_age,
+                    alive_a=alive_a,
+                    alive_b=alive_b,
+                )
+                state_income_tax = state_result["state_tax"]
                 irmaa = irmaa_annual_surcharge(
                     tax_result["agi"], n_medicare,
                     regime=regime, filing_status=filing_status,
@@ -527,6 +694,9 @@ def simulate(
                 "taxable_income": tax_result["taxable_income"],
                 "federal_tax": federal,
                 "marginal": tax_result["marginal"],
+                "state_tax": state_income_tax,
+                "state_marginal": state_result["state_marginal"],
+                "state_regime": state_regime.name,
                 "irmaa": irmaa_cost,
                 "irmaa_tier": irmaa_tier,
                 "spending_need": net_need,
@@ -535,6 +705,15 @@ def simulate(
                 "hsa_withdrawal": hsa_withdrawal,
                 "elective_deferral_a": a_total_contrib,
                 "elective_deferral_b": b_total_contrib,
+                "ira_traditional_a": ira_a.traditional,
+                "ira_traditional_b": ira_b.traditional,
+                "ira_roth_direct_a": ira_a.roth_direct,
+                "ira_roth_direct_b": ira_b.roth_direct,
+                "ira_backdoor_a": ira_a.backdoor,
+                "ira_backdoor_b": ira_b.backdoor,
+                "ira_backdoor_taxable_conv": ira_backdoor_taxable_conv,
+                "mega_backdoor_a": a_after_tax,
+                "mega_backdoor_b": b_after_tax,
                 "employer_match_a": a_employer_match,
                 "employer_match_b": b_employer_match,
                 "fica": fica_total,

@@ -24,9 +24,13 @@ A field-by-field reference for `scenarios/*.json` files (the input format consum
 - [`config.ss_cola_rate` — Social Security annual COLA](#configss_cola_rate--social-security-annual-cola)
 - [`config.bracket_indexing_rate` — annual indexing of brackets, std deduction, and IRMAA](#configbracket_indexing_rate--annual-indexing-of-brackets-std-deduction-and-irmaa)
 - [`config.taxable_equity_div_yield` / `taxable_bond_interest_yield` — explicit yield on taxable-account holdings](#configtaxable_equity_div_yield--taxable_bond_interest_yield--explicit-yield-on-taxable-account-holdings)
+- [`config.state_regime` — state income tax regime (CA / NY / IL / MA / stateless)](#configstate_regime--state-income-tax-regime-ca--ny--il--ma--stateless)
+- [`config.heir_marginal_rate` — bequest tax in terminal-NW objective](#configheir_marginal_rate--bequest-tax-in-terminal-nw-objective)
 - [`inputs.ss` — Social Security claim age, FRA, and benefits](#inputsss--social-security-claim-age-fra-and-benefits)
 - [`inputs.pension` — pension cash balance and start age](#inputspension--pension-cash-balance-and-start-age)
 - [`inputs.spouse_*_employer_match_*` — employer 401(k) match](#inputsspouse__employer_match__--employer-401k-match)
+- [`inputs.spouse_*_traditional_ira_contrib` / `_roth_ira_contrib` / `_backdoor_roth` — IRA contribution paths](#inputsspouse__traditional_ira_contrib--_roth_ira_contrib--_backdoor_roth--ira-contribution-paths)
+- [`inputs.spouse_*_mega_backdoor_enabled` / `_after_tax_401k_pct` — mega-backdoor Roth](#inputsspouse__mega_backdoor_enabled--_after_tax_401k_pct--mega-backdoor-roth)
 - [`inputs.contrib.hsa_family` — household HSA contribution target](#inputscontribhsa_family--household-hsa-contribution-target)
 - [Migration: `config.ss_start_age` / `config.pension_start_age`](#migration-configss_start_age--configpension_start_age)
 - [Output metric: `median_ruin_year_offset`](#output-metric-median_ruin_year_offset)
@@ -316,6 +320,48 @@ Defaults reflect a roughly-2024 broad-market portfolio: ~1.6% qualified-div yiel
 
 ---
 
+## `config.state_regime` — state income tax regime (CA / NY / IL / MA / stateless)
+
+```json
+"config": {
+  "state_regime": "CA",
+  "state_regime_change_year_offset": null,
+  "state_regime_change_target": null
+}
+```
+
+State income tax can swing optimal Roth-conversion timing, optimal claim-age, and "stay vs. move" decisions in the high-tax states by hundreds of thousands of dollars over a 30-year horizon. The simulator ships five regime presets (string lookup, case-insensitive):
+
+| Key | Description |
+| --- | --- |
+| `"stateless"` (or `"none"`) | No state income tax. Correct for FL / TX / WA / NV / TN / NH / AK / SD / WY. Default. |
+| `"CA"` | California progressive brackets (1% – 12.3%), 9.3% top bracket on most working-age income, **HSA contributions NOT deductible at the state level**, SS exempt. |
+| `"NY"` | New York progressive brackets (4% – 10.9%), SS exempt, **$20k/filer pension+IRA+Roth-conversion exclusion at 59½+** (so two-spouse couples shelter $40k/yr of retirement income from NY tax). |
+| `"IL"` | Illinois flat 4.95% on wages but **all retirement income exempt** (SS, pension, IRA, 401(k), Roth conversion). The cleanest "great state to retire in if you converted aggressively beforehand" regime. |
+| `"MA"` | Massachusetts flat 5%, SS exempt, IRA/pension taxed normally. The 9% MA millionaire surtax is intentionally not modeled. |
+
+Change of regime mid-horizon (e.g. retire to FL after working in CA): set `state_regime_change_year_offset` to the move year and `state_regime_change_target` to the destination preset. The simulator switches over from that year onward.
+
+Bracket thresholds + standard deduction + retirement exclusion all index annually using the same `bracket_indexing_rate` as federal, so a CA scenario run for 30 years doesn't suffer phantom bracket creep at the state level either.
+
+For a state not bundled (OR / NJ / HI / MD / etc.), construct a custom `StateTaxRegime` instance in Python and pass it to `cfg.state_regime` directly — see `tax_optimizer/tax/state.py` for the dataclass shape and the bundled regimes as worked examples.
+
+---
+
+## `config.heir_marginal_rate` — bequest tax in terminal-NW objective
+
+```json
+"config": { "heir_marginal_rate": 0.22 }
+```
+
+Default `0.22`. The marginal rate the optimizer assumes heirs will pay on inherited *pretax* (and HSA) balances. Roth and taxable balances (stepped-up cost basis at death) flow through tax-free; pretax + HSA must be drained over 10 years post-inheritance under the SECURE Act and incur the heir's ordinary-income rate.
+
+Set higher (`0.28` – `0.35`) if your heirs are themselves high earners; set to `0.0` to recover the v1 behavior of treating $1 pretax = $1 Roth at horizon (which silently over-rewards "leave it pretax" plans). The exact intra-decade timing of the SECURE 10-year drawdown isn't modeled — the simulator applies a flat haircut on the terminal pretax + HSA balance.
+
+This knob only affects the **terminal-NW objective** (used by the optimizer, sensitivity, and Monte Carlo terminal stats). It does not change the simulated cash-flow path itself.
+
+---
+
 ## `inputs.ss` — Social Security claim age, FRA, and benefits
 
 ```json
@@ -432,6 +478,59 @@ Visible in the per-year DataFrame as `employer_match_a` and `employer_match_b`.
 
 ---
 
+## `inputs.spouse_*_traditional_ira_contrib` / `_roth_ira_contrib` / `_backdoor_roth` — IRA contribution paths
+
+```json
+"inputs": {
+  "spouse_a_traditional_ira_contrib": 0,
+  "spouse_b_traditional_ira_contrib": 0,
+  "spouse_a_roth_ira_contrib": 7000,
+  "spouse_b_roth_ira_contrib": 7000,
+  "spouse_a_backdoor_roth": false,
+  "spouse_b_backdoor_roth": false
+}
+```
+
+Three independent IRA contribution paths per spouse, all sharing one annual cap:
+
+| Field | Vehicle | Tax effect |
+|---|---|---|
+| `spouse_*_traditional_ira_contrib` | Traditional IRA (deductible) | Reduces Box-1 wages by the contribution; balance lands in pretax. Modeled as universally deductible — IRS deductibility phase-out for 401(k)-covered filers is **not** modeled. If your AGI is past that phase-out, prefer the backdoor below. |
+| `spouse_*_roth_ira_contrib` | Direct Roth IRA | Subject to MAGI phase-out (MFJ $236k–$246k 2026). Above the upper bound the contribution is silently zeroed. Below, full amount flows to Roth. From after-tax cash. |
+| `spouse_*_backdoor_roth` (`bool`) | Backdoor Roth IRA | Non-deductible Traditional IRA contribution + same-year Roth conversion. Income-uncapped. **Pro-rata-aware**: if the spouse's pretax 401(k)/IRA balance is non-zero, a fraction of the conversion is taxable as ordinary income. With zero pretax, the backdoor is fully tax-free. |
+
+**Cap stack:** the simulator enforces one annual IRA cap per spouse ($7k under 50, $8k 50+) across all three lines, allocated in priority order Traditional → direct Roth (after phase-out) → backdoor on the leftover room. So setting `traditional_ira_contrib=7000` AND `backdoor_roth=true` consumes the cap with the Traditional contribution; the backdoor toggle is silently a no-op.
+
+**Eligibility:** requires earned income (own or spousal), so the contribution lines are gated on (alive AND either spouse working). Stops cleanly at retirement.
+
+Visible in the per-year DataFrame as `ira_traditional_*`, `ira_roth_direct_*`, `ira_backdoor_*`, plus `ira_backdoor_taxable_conv` for the pro-rata-taxable portion.
+
+---
+
+## `inputs.spouse_*_mega_backdoor_enabled` / `_after_tax_401k_pct` — mega-backdoor Roth
+
+```json
+"inputs": {
+  "spouse_a_mega_backdoor_enabled": true,
+  "spouse_a_after_tax_401k_pct": 0.10,
+  "spouse_b_mega_backdoor_enabled": false,
+  "spouse_b_after_tax_401k_pct": 0.0
+}
+```
+
+The **single most powerful Roth-savings lever** when available. Routes additional dollars into Roth via after-tax 401(k) contributions + same-day in-plan Roth conversion. Plan-dependent: most workplace 401(k)s do NOT allow this (you need both *after-tax* contributions AND *in-plan Roth conversion* or *in-service rollover*). Check plan documents before enabling.
+
+| Field | Type | Default | Means |
+|---|---|---:|---|
+| `spouse_*_mega_backdoor_enabled` | bool | `false` | Master toggle. When `false`, `_after_tax_401k_pct` is ignored. |
+| `spouse_*_after_tax_401k_pct` | float | `0.0` | Fraction of salary routed to after-tax 401(k). |
+
+The simulator caps the after-tax dollars annually at the §415(c) overall plan-additions limit ($70k 2026) minus the employee's elective deferrals minus employer match — typically $25k–$45k of additional Roth headroom for a high earner who's also maxing the regular elective limit. After-tax contributions are NOT pre-tax (no Box-1 reduction) and NOT FICA-exempt; they come from take-home pay, so they reduce the household's after-tax cash surplus and add to the Roth balance with zero income-tax impact at conversion.
+
+Visible in the per-year DataFrame as `mega_backdoor_a` / `mega_backdoor_b`.
+
+---
+
 ## `inputs.contrib.hsa_family` — household HSA contribution target
 
 ```json
@@ -448,7 +547,7 @@ Visible in the per-year DataFrame as `employer_match_a` and `employer_match_b`.
 
 The simulator caps this at the IRS family-coverage limit + the 55+ catch-up if either spouse qualifies, and zeroes it once both spouses hit Medicare eligibility (65). HSA contributions are pre-tax (reduce Box 1 wages alongside traditional 401(k)) and **also FICA-exempt in real life via cafeteria plans**, though the simulator's FICA pass currently uses gross W-2 wages — a known small approximation.
 
-The HSA balance is **only spent against the long-term-care shock** (`spending.ltc_shock`), tax-free. Other qualified medical expenses (routine, Medicare premiums after 65, the receipt-shoebox method) are NOT yet modeled — the HSA is effectively a trapped balance otherwise. That's a known modeling gap (see Tier-B item "HSA after 65" in the package's review notes).
+**Spending the HSA, age-aware:** before age 65, the HSA balance is only spent tax-free against the long-term-care shock (`spending.ltc_shock`). After either spouse hits 65, the HSA *unlocks* as a fourth retirement bucket: the deficit cascade now draws from HSA before pretax (taxable → Roth → HSA → pretax), with HSA non-medical withdrawals taxed at ordinary income rate (no 20% penalty per IRS post-65). Because the HSA has no RMD obligation and dodges several state-tax frictions, it's strictly preferred over pretax for any deficit the cascade has to cover.
 
 ---
 

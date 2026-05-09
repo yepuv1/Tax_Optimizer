@@ -219,24 +219,34 @@ def cover_deficit(
     pretax_b_already: float = 0.0,
     taxable_already: float = 0.0,
     roth_already: float = 0.0,
+    hsa_already: float = 0.0,
+    hsa_unlocked: bool = False,
     regime: TaxRegime,
     filing_status: str,
 ) -> tuple[dict[str, float], float]:
     """Pull `deficit` net dollars from accounts in tax-efficient order.
 
-    Cascades through taxable -> roth -> pretax (per-spouse pro-rata).
-    Each step grosses up for the appropriate tax (LTCG on the taxable
-    gain portion, ordinary on pretax). Roth is treated as fully tax-free
-    (we deliberately don't model the 5-year clock here -- that's a
-    documented blind spot).
+    Cascades through taxable -> roth -> hsa-after-65 -> pretax.
+    Each step grosses up for the appropriate tax (LTCG on the
+    taxable gain portion, ordinary on pretax / HSA-non-medical).
+    Roth is treated as fully tax-free (we deliberately don't model
+    the 5-year clock here -- that's a documented blind spot).
+
+    `hsa_unlocked=True` ⇒ at least one spouse is 65+. After 65 HSA
+    non-medical withdrawals incur ordinary tax but no 20% penalty,
+    so the HSA acts like a Traditional IRA without RMDs. We cascade
+    HSA *before* pretax because the HSA has no RMD obligation, no
+    state-tax friction in some regimes, and no widow's-penalty
+    risk on a pretax balance the survivor inherits.
 
     `*_already` is the gross already withdrawn from each bucket this
     year (so room calculations stay correct). `base_kwargs` already
     reflects those prior withdrawals' AGI contributions.
 
     Returns ``(extra_withdrawals, unfunded)`` where ``extra_withdrawals``
-    has the same shape as ``withdraw_for_need``'s output and
-    ``unfunded`` is dollars still un-met after exhausting every bucket.
+    has the same shape as ``withdraw_for_need``'s output (with an
+    extra ``hsa`` key) and ``unfunded`` is dollars still un-met after
+    exhausting every bucket.
     """
     out = {
         "pretax_a": 0.0,
@@ -244,6 +254,7 @@ def cover_deficit(
         "pretax": 0.0,
         "roth": 0.0,
         "taxable": 0.0,
+        "hsa": 0.0,
     }
     if deficit <= 0:
         return out, 0.0
@@ -276,6 +287,27 @@ def cover_deficit(
         if rw > 0:
             out["roth"] += rw
             deficit = max(0.0, deficit - rw)
+
+    # 2.5 HSA-after-65: ordinary income, no penalty. Treated as pretax
+    # for tax purposes (federal_tax sees `pretax_withdrawal` and grosses
+    # up identically). No RMD on HSA, so it's strictly preferred over
+    # the pretax buckets when both are available — that's the "stealth
+    # IRA" property of an HSA.
+    hsa_room = max(0.0, state.hsa - hsa_already) if hsa_unlocked else 0.0
+    if deficit > 0 and hsa_room > 0:
+        gross = min(
+            _solve_pretax_for_net(
+                deficit, kw, regime=regime, filing_status=filing_status
+            ),
+            hsa_room,
+        )
+        if gross > 0:
+            out["hsa"] += gross
+            base_tax = federal_tax(regime=regime, filing_status=filing_status, **kw)["tax"]
+            kw["pretax_withdrawal"] = kw.get("pretax_withdrawal", 0.0) + gross
+            new_tax = federal_tax(regime=regime, filing_status=filing_status, **kw)["tax"]
+            net_produced = gross - max(0.0, new_tax - base_tax)
+            deficit = max(0.0, deficit - net_produced)
 
     # 3. Pretax: gross up for marginal ordinary rate; split pro-rata.
     pretax_a_room = max(0.0, state.spouse_a_pretax - pretax_a_already)

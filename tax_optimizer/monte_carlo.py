@@ -139,7 +139,9 @@ def simulate_paths(
     for i, s in enumerate(seeds):
         rng = np.random.default_rng(int(s))
         df = simulate(cfg, inputs, rng=rng)
-        terminals[i] = terminal_after_tax_nw(df)
+        terminals[i] = terminal_after_tax_nw(
+            df, heir_marginal_rate=cfg.heir_marginal_rate
+        )
         taxes[i] = lifetime_tax_npv(df)
         irmaas[i] = lifetime_irmaa_npv(df)
         ruins[i] = _ruin_year_offset(df)

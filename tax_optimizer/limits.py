@@ -21,6 +21,29 @@ ELECTIVE_DEFERRAL_LIMIT: float = 23_500.0
 ELECTIVE_DEFERRAL_CATCH_UP_50: float = 7_500.0
 ELECTIVE_DEFERRAL_CATCH_UP_AGE: int = 50
 
+# 401(k) §415(c) overall annual additions limit. Combines employee
+# elective deferrals + employer match + after-tax (mega-backdoor)
+# contributions. 2026 nominal. Catch-up ($7,500 50+) is NOT included
+# in §415(c); it sits on top per IRS rules.
+SECTION_415C_LIMIT: float = 70_000.0
+
+# Traditional / Roth IRA contribution limit and 50+ catch-up.
+# Applies separately per spouse. The "backdoor Roth IRA" path uses
+# the same dollar cap (it's an after-tax IRA contribution + same-day
+# Roth conversion).
+IRA_CONTRIBUTION_LIMIT: float = 7_000.0
+IRA_CATCH_UP_50: float = 1_000.0
+IRA_CATCH_UP_AGE: int = 50
+
+# Direct Roth IRA contribution MAGI phase-outs (2025/2026 nominal).
+# Below `lo` ⇒ full contribution allowed.
+# Between `lo` and `hi` ⇒ pro-rata phaseout.
+# Above `hi` ⇒ direct contribution disallowed (backdoor still works).
+ROTH_IRA_PHASEOUT_LO_MFJ: float = 236_000.0
+ROTH_IRA_PHASEOUT_HI_MFJ: float = 246_000.0
+ROTH_IRA_PHASEOUT_LO_SINGLE: float = 150_000.0
+ROTH_IRA_PHASEOUT_HI_SINGLE: float = 165_000.0
+
 # HSA family-coverage cap and 55+ catch-up. Catch-up applies per
 # spouse, but our model pools one HSA balance, so we apply one
 # catch-up if *either* spouse is 55+. Medicare enrollment (age 65+)
@@ -37,6 +60,40 @@ def elective_deferral_cap(age: int) -> float:
     if age >= ELECTIVE_DEFERRAL_CATCH_UP_AGE:
         cap += ELECTIVE_DEFERRAL_CATCH_UP_50
     return cap
+
+
+def ira_contribution_cap(age: int) -> float:
+    """Traditional / Roth IRA annual contribution cap including 50+ catch-up.
+
+    Applies separately to each spouse. Spousal IRA contributions
+    (non-working spouse using working spouse's earned income) get the
+    same cap. The MAGI phase-out for direct Roth IRA is enforced
+    separately by `roth_ira_phaseout_factor()`.
+    """
+    cap = IRA_CONTRIBUTION_LIMIT
+    if age >= IRA_CATCH_UP_AGE:
+        cap += IRA_CATCH_UP_50
+    return cap
+
+
+def roth_ira_phaseout_factor(magi: float, filing_status: str) -> float:
+    """Return the fraction of the IRA cap a direct Roth contribution
+    is allowed under the IRS MAGI phase-out.
+
+    Below the lower bound ⇒ 1.0 (full contribution).
+    Above the upper bound ⇒ 0.0 (no direct contribution; the backdoor
+    is still legal, modeled separately).
+    Linear pro-rata in between.
+    """
+    if filing_status == "single":
+        lo, hi = ROTH_IRA_PHASEOUT_LO_SINGLE, ROTH_IRA_PHASEOUT_HI_SINGLE
+    else:
+        lo, hi = ROTH_IRA_PHASEOUT_LO_MFJ, ROTH_IRA_PHASEOUT_HI_MFJ
+    if magi <= lo:
+        return 1.0
+    if magi >= hi:
+        return 0.0
+    return (hi - magi) / (hi - lo)
 
 
 def hsa_family_cap(age_a: int, age_b: int, *, either_working: bool) -> float:

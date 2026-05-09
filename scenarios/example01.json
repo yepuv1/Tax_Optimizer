@@ -14,6 +14,12 @@
     "taxable_equity_div_yield": 0.016,
     "taxable_bond_interest_yield": 0.035,
 
+    "state_regime": "stateless",
+    "state_regime_change_year_offset": null,
+    "state_regime_change_target": null,
+
+    "heir_marginal_rate": 0.22,
+
     "market": {
       "kind": "lognormal",
       "equity_mu": 0.07,
@@ -51,6 +57,18 @@
     "spouse_a_employer_match_max_pct": 0.06,
     "spouse_b_employer_match_rate": 0.50,
     "spouse_b_employer_match_max_pct": 0.06,
+
+    "spouse_a_roth_ira_contrib": 7000,
+    "spouse_b_roth_ira_contrib": 7000,
+    "spouse_a_traditional_ira_contrib": 0,
+    "spouse_b_traditional_ira_contrib": 0,
+    "spouse_a_backdoor_roth": false,
+    "spouse_b_backdoor_roth": false,
+
+    "spouse_a_mega_backdoor_enabled": false,
+    "spouse_b_mega_backdoor_enabled": false,
+    "spouse_a_after_tax_401k_pct": 0.0,
+    "spouse_b_after_tax_401k_pct": 0.0,
 
     "starting": {
       "spouse_a_pretax_401k": 400000,

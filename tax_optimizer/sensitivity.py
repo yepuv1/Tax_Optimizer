@@ -71,23 +71,30 @@ def tornado_sensitivity(
     """
     if inputs is None:
         inputs = Inputs()
-    base_terminal = terminal_after_tax_nw(simulate(base_cfg, inputs))
+    bequest_rate = base_cfg.heir_marginal_rate
+    base_terminal = terminal_after_tax_nw(
+        simulate(base_cfg, inputs), heir_marginal_rate=bequest_rate
+    )
 
     def _terminal(param: str, value) -> float:
         owner = _resolve_owner(param)
         if owner == "cfg":
+            new_cfg = replace(base_cfg, **{param: value})
             return terminal_after_tax_nw(
-                simulate(replace(base_cfg, **{param: value}), inputs)
+                simulate(new_cfg, inputs),
+                heir_marginal_rate=new_cfg.heir_marginal_rate,
             )
         if owner == "inputs_nested":
             sub_attr, leaf_attr = _NESTED_INPUTS_FIELDS[param]
             sub_obj = getattr(inputs, sub_attr)
             new_sub = replace(sub_obj, **{leaf_attr: value})
             return terminal_after_tax_nw(
-                simulate(base_cfg, replace(inputs, **{sub_attr: new_sub}))
+                simulate(base_cfg, replace(inputs, **{sub_attr: new_sub})),
+                heir_marginal_rate=bequest_rate,
             )
         return terminal_after_tax_nw(
-            simulate(base_cfg, replace(inputs, **{param: value}))
+            simulate(base_cfg, replace(inputs, **{param: value})),
+            heir_marginal_rate=bequest_rate,
         )
 
     def int_clamp(v: int, lo: int, hi: int) -> int:

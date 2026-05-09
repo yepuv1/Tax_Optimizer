@@ -110,7 +110,12 @@ def _strategy_results(
         ("S3_optimized", s3),
     ]:
         df = simulate(cfg, inputs)
-        out[name] = StrategyResult(cfg=cfg, inputs=inputs, df=df, summary=summarize(df))
+        out[name] = StrategyResult(
+            cfg=cfg,
+            inputs=inputs,
+            df=df,
+            summary=summarize(df, heir_marginal_rate=cfg.heir_marginal_rate),
+        )
     return out
 
 

@@ -65,6 +65,7 @@ from .market import (
 from .mortality import Mortality
 from .spending import LongTermCareShock, LumpEvent, SpendingPhase, SpendingProfile
 from .tax.regimes import PRE_TCJA_2017, SUNSET_2026, TCJA_EXTENDED, TaxRegime
+from .tax.state import StateTaxRegime, lookup as lookup_state_regime
 
 
 class ScenarioError(ValueError):
@@ -290,6 +291,8 @@ def _config_to_dict(cfg: Config) -> dict[str, Any]:
             out[f.name] = _regime_name(v)
         elif f.name == "regime_change_target":
             out[f.name] = _regime_name(v) if v is not None else None
+        elif f.name in ("state_regime", "state_regime_change_target"):
+            out[f.name] = v.name if v is not None else None
         elif f.name == "mortality":
             out[f.name] = asdict(v)
         elif f.name == "market":
@@ -405,6 +408,12 @@ def _coerce_config_field(name: str, v: Any, *, current: Any) -> Any:
         if v is None:
             return None
         return _coerce_regime(v, field_label="regime_change_target")
+    if name == "state_regime":
+        return _coerce_state_regime(v, field_label="state_regime")
+    if name == "state_regime_change_target":
+        if v is None:
+            return None
+        return _coerce_state_regime(v, field_label="state_regime_change_target")
     if name == "mortality":
         return _coerce_mortality(v, current=current)
     if name == "market":
@@ -414,6 +423,21 @@ def _coerce_config_field(name: str, v: Any, *, current: Any) -> Any:
     if name == "spending":
         return _coerce_spending(v)
     return v
+
+
+def _coerce_state_regime(v: Any, *, field_label: str) -> StateTaxRegime:
+    if isinstance(v, StateTaxRegime):
+        return v
+    if isinstance(v, str):
+        try:
+            return lookup_state_regime(v)
+        except KeyError as exc:
+            raise ScenarioError(str(exc)) from exc
+    raise ScenarioError(
+        f"{field_label} must be a string abbreviation "
+        f"(e.g. 'CA', 'NY', 'IL', 'MA', 'stateless'); "
+        f"got {type(v).__name__}."
+    )
 
 
 def _coerce_regime(v: Any, *, field_label: str) -> TaxRegime:

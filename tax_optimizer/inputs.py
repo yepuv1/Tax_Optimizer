@@ -183,6 +183,62 @@ class Inputs:
     spouse_a_roth_401k_pct: float = 0.0
     spouse_b_roth_401k_pct: float = 0.0
 
+    # Mega-backdoor Roth (after-tax 401(k) → in-plan Roth conversion).
+    # Plan-dependent: requires the employer's 401(k) to allow both
+    # after-tax (non-Roth, non-traditional) contributions AND
+    # in-plan Roth conversions or in-service rollovers. Most plans
+    # do NOT support this, but for those that do, it's the single
+    # most powerful Roth-savings lever (~$40-50k/yr/spouse extra).
+    #
+    #   * `*_after_tax_401k_pct` — fraction of salary routed to
+    #     after-tax 401(k) (then converted same-day to Roth). Capped
+    #     each year by the §415(c) overall annual additions limit:
+    #     §415(c) cap - elective deferrals - employer match.
+    #   * `*_mega_backdoor_enabled` — boolean toggle (defaults False
+    #     since most plans don't support it; setting True without
+    #     plan support won't change the math but is logically wrong).
+    #
+    # After-tax dollars are NOT pre-tax (no Box 1 reduction) and NOT
+    # FICA-exempt (already in wages_box1). They draw from after-tax
+    # paycheck cash → Roth balance, with no income tax on the
+    # contribution (already taxed) or the conversion (basis = 100%
+    # of contribution, the same-day conversion has no earnings).
+    spouse_a_after_tax_401k_pct: float = 0.0
+    spouse_b_after_tax_401k_pct: float = 0.0
+    spouse_a_mega_backdoor_enabled: bool = False
+    spouse_b_mega_backdoor_enabled: bool = False
+
+    # IRA contribution paths (Traditional, Roth, backdoor Roth).
+    # Each spouse can contribute up to `IRA_CONTRIBUTION_LIMIT` (+50
+    # catch-up) split across these three lines per year. The simulator
+    # enforces the cap and the MAGI phase-out for direct Roth.
+    #
+    #   * `*_traditional_ira_contrib` — Traditional IRA contribution
+    #     dollars/year. Treated here as **non-deductible** by default
+    #     (the typical case for households with a workplace 401(k);
+    #     deductibility phase-out is not modeled). The contribution
+    #     adds to the Roth pretax basis only if you also do a
+    #     same-year backdoor — otherwise it's a stranded after-tax
+    #     IRA balance the simulator parks in `state.spouse_*_pretax`
+    #     for simplicity (a modeling approximation).
+    #   * `*_roth_ira_contrib` — direct Roth IRA contribution.
+    #     Subject to MAGI phase-out (zeroed out above the limit).
+    #   * `*_backdoor_roth` — boolean toggle. When True, the simulator
+    #     contributes the full IRA cap as a non-deductible Traditional
+    #     IRA, then immediately converts to Roth (the "backdoor"). If
+    #     pretax-IRA balance is non-zero, the **pro-rata rule** taxes
+    #     the conversion proportionally — the simulator models this.
+    #     Income-uncapped (the whole point of the backdoor).
+    #
+    # Eligibility: requires earned income (own or spousal). The
+    # simulator gates on "either spouse working AND alive".
+    spouse_a_traditional_ira_contrib: float = 0.0
+    spouse_b_traditional_ira_contrib: float = 0.0
+    spouse_a_roth_ira_contrib: float = 0.0
+    spouse_b_roth_ira_contrib: float = 0.0
+    spouse_a_backdoor_roth: bool = False
+    spouse_b_backdoor_roth: bool = False
+
     # Employer 401(k) match. Default 0 = no match (backward compat).
     # Modeled as: matched_dollars = salary
     #           * min(employee_pct, employer_match_max_pct)

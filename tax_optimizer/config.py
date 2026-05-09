@@ -35,6 +35,7 @@ from .market import AssetLocation, DeterministicModel, MarketModel
 from .mortality import Mortality
 from .spending import SpendingProfile
 from .tax.regimes import TCJA_EXTENDED, TaxRegime
+from .tax.state import STATELESS, StateTaxRegime
 
 
 @dataclass
@@ -99,6 +100,22 @@ class Config:
     annual_expenses_today: float = 85_000.0  # overridden by `spending` if set
 
     # ------------------------------------------------------------------
+    # Bequest tax (terminal-NW objective)
+    # ------------------------------------------------------------------
+    # Marginal rate the simulator assumes heirs will pay on inherited
+    # pretax (and HSA) balances. Roth and taxable (stepped-up basis)
+    # bequests are tax-free to heirs; pretax / HSA must be drained at
+    # ordinary rates. The SECURE Act 10-year rule's exact intra-period
+    # timing isn't modeled — this is a flat haircut on the terminal
+    # pretax + HSA balance.
+    #
+    # Default 0.22 is the typical adult-child marginal rate under TCJA
+    # brackets. Set higher (28-32%) if heirs are themselves high earners,
+    # or zero to recover the v1 behavior of $1-pretax = $1-Roth at
+    # horizon (which silently over-rewards "leave it pretax" plans).
+    heir_marginal_rate: float = 0.22
+
+    # ------------------------------------------------------------------
     # Taxable-account yield model
     # ------------------------------------------------------------------
     # Dividends and interest produced by the taxable brokerage every
@@ -123,6 +140,20 @@ class Config:
     tax_regime: TaxRegime = TCJA_EXTENDED
     regime_change_year_offset: int | None = None
     regime_change_target: TaxRegime | None = None
+
+    # State income tax regime. Default is `STATELESS` (no state
+    # income tax, correct for FL / TX / WA / NV / TN / NH / AK /
+    # SD / WY). Bundled non-zero presets: CA, NY, IL, MA. Pass a
+    # custom `StateTaxRegime` for other states. State brackets index
+    # annually using `bracket_indexing_rate` (same as federal).
+    #
+    # State income tax can flip optimal Roth-conversion timing:
+    # converting in a high-tax state vs. in retirement after moving
+    # to a no-tax state is one of the largest decisions a household
+    # in CA / NY can make, and is invisible without this.
+    state_regime: StateTaxRegime = STATELESS
+    state_regime_change_year_offset: int | None = None
+    state_regime_change_target: StateTaxRegime | None = None
 
     mortality: Mortality = field(default_factory=Mortality)
 
@@ -161,6 +192,29 @@ class Config:
         to `cfg.inflation`).
         """
         raw = self.regime_for_year(year_offset)
+        rate = (
+            self.bracket_indexing_rate
+            if self.bracket_indexing_rate is not None
+            else self.inflation
+        )
+        return raw.inflated((1.0 + rate) ** year_offset)
+
+    def state_regime_for_year(self, year_offset: int) -> StateTaxRegime:
+        """Pick the state regime active in `year_offset`. Mirrors
+        `regime_for_year`. Lets users model a move (e.g. CA → STATELESS
+        after retiring to FL).
+        """
+        if (
+            self.state_regime_change_year_offset is not None
+            and self.state_regime_change_target is not None
+            and year_offset >= self.state_regime_change_year_offset
+        ):
+            return self.state_regime_change_target
+        return self.state_regime
+
+    def effective_state_regime(self, year_offset: int) -> StateTaxRegime:
+        """State-regime equivalent of `effective_regime`."""
+        raw = self.state_regime_for_year(year_offset)
         rate = (
             self.bracket_indexing_rate
             if self.bracket_indexing_rate is not None
