@@ -83,6 +83,7 @@ class CurrentContrib:
 class PensionInputs:
     balance_today: float = 0.0
     monthly_at_nrd: float = 0.0
+    start_age: int = 65  # NRD: age Spouse A's pension annuity begins.
 
     @property
     def annual_at_nrd(self) -> float:
@@ -93,6 +94,7 @@ class PensionInputs:
 class SocialSecurity:
     monthly_spouse_a: float = 2_700.0
     monthly_spouse_b: float = 2_200.0
+    start_age: int = 70  # Claim age applied to both spouses (single knob).
 
 
 @dataclass

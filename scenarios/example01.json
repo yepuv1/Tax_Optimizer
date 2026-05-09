@@ -1,0 +1,63 @@
+{
+  "config": {
+    "horizon_age": 95,
+    "inflation": 0.025,
+    "annual_expenses_today": 95000,
+    "tax_regime": "tcja",
+    "regime_change_year_offset": 5,
+    "regime_change_target": "sunset",
+    "rmd_start_age": 75,
+    "market": {
+      "kind": "lognormal",
+      "equity_mu": 0.07,
+      "equity_sigma": 0.18,
+      "bond_mu": 0.04,
+      "bond_sigma": 0.06
+    },
+    "spending": {
+      "kind": "smile",
+      "base_spending": 95000,
+      "inflation": 0.025,
+      "ltc_years": 4,
+      "ltc_annual_today": 100000
+    },
+    "mortality": {
+      "year_of_death_a": 30,
+      "pension_survivor_pct": 0.5
+    },
+    "asset_location": {
+      "uniform_equity_pct": 0.7
+    }
+  },
+  "inputs": {
+    "spouse_a_age_start": 52,
+    "spouse_b_age_start": 50,
+    "spouse_a_retire_age": 65,
+    "spouse_b_retire_age": 67,
+    "spouse_a_total_contrib_pct": 0.10,
+    "spouse_b_total_contrib_pct": 0.08,
+    "spouse_a_roth_401k_pct": 0.0,
+    "spouse_b_roth_401k_pct": 0.0,
+    "starting": {
+      "spouse_a_pretax_401k": 400000,
+      "spouse_b_pretax_401k": 250000,
+      "spouse_a_roth_ira": 60000,
+      "hsa": 25000,
+      "taxable_brokerage": 120000
+    },
+    "income": {
+      "spouse_a_gross": 140000,
+      "spouse_b_gross": 95000,
+      "spouse_a_bonus": 15000
+    },
+    "ss": {
+      "monthly_spouse_a": 3100,
+      "monthly_spouse_b": 2500,
+      "start_age": 70
+    },
+    "pension": {
+      "start_age": 65
+    },
+    "annual_expenses": 95000
+  }
+}

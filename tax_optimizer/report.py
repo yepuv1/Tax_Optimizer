@@ -95,11 +95,11 @@ def build_action_report(
     md.append("|---|---:|")
     md.append(
         f"| Spouse A age (retire / SS) | {inputs.spouse_a_age_start} "
-        f"({inputs.spouse_a_retire_age} / {cfg.ss_start_age}) |"
+        f"({inputs.spouse_a_retire_age} / {inputs.ss.start_age}) |"
     )
     md.append(
         f"| Spouse B age (retire / SS) | {inputs.spouse_b_age_start} "
-        f"({inputs.spouse_b_retire_age} / {cfg.ss_start_age}) |"
+        f"({inputs.spouse_b_retire_age} / {inputs.ss.start_age}) |"
     )
     md.append(f"| Combined gross W-2 income | ${household_wages:,.0f} |")
     md.append(f"| Annual expenses (today's $) | ${inputs.annual_expenses:,.0f} |")
@@ -304,7 +304,7 @@ def build_action_report(
         "Watch the 22% / 24% bracket and the IRMAA cliffs at 65, 67. |"
     )
     md.append(
-        f"| **SS claim** | {cfg.ss_start_age} | "
+        f"| **SS claim** | {inputs.ss.start_age} | "
         f"Both spouses begin Social Security "
         f"(${(inputs.ss.monthly_spouse_a + inputs.ss.monthly_spouse_b) * 12:,.0f}/yr today). "
         f"After this, conversion-window income includes SS. |"

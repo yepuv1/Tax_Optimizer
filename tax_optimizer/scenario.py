@@ -30,8 +30,8 @@ tagged-dict form.
         "starting": { "spouse_a_pretax_401k": 400000, "hsa": 25000 },
         "income":   { "spouse_a_gross": 140000 },
         "contrib":  { "hsa_family": 9000 },
-        "pension":  { "monthly_at_nrd": 1200 },
-        "ss":       { "monthly_spouse_a": 3100 },
+        "pension":  { "monthly_at_nrd": 1200, "start_age": 65 },
+        "ss":       { "monthly_spouse_a": 3100, "start_age": 70 },
         "annual_expenses": 95000
       }
     }
@@ -100,6 +100,16 @@ _LEGACY_CONFIG_SPOUSE_FIELDS: frozenset[str] = frozenset(
 )
 
 
+# Old layout: SS claim age and pension NRD used to live on `Config`.
+# They now live on the nested Inputs blocks.
+#   config.ss_start_age      -> inputs.ss.start_age
+#   config.pension_start_age -> inputs.pension.start_age
+_LEGACY_CONFIG_AGE_GATES: dict[str, str] = {
+    "ss_start_age": "inputs.ss.start_age",
+    "pension_start_age": "inputs.pension.start_age",
+}
+
+
 # ---------------------------------------------------------------------------
 # Loading from JSON
 # ---------------------------------------------------------------------------
@@ -143,6 +153,17 @@ def apply_scenario(
             f"These spouse_* fields moved to `inputs`: {sorted(legacy)}. "
             f"Move them under the `inputs` section of your scenario JSON "
             f"(e.g. {names})."
+        )
+
+    legacy_ages = set(_LEGACY_CONFIG_AGE_GATES) & set(config_patch)
+    if legacy_ages:
+        moves = ", ".join(
+            f"{old} -> {_LEGACY_CONFIG_AGE_GATES[old]}"
+            for old in sorted(legacy_ages)
+        )
+        raise ScenarioError(
+            f"These age-gate fields moved out of `config`: {sorted(legacy_ages)}. "
+            f"Update your scenario JSON: {moves}."
         )
 
     if config_patch:
@@ -208,6 +229,18 @@ def apply_set_overrides(
             raise ScenarioError(
                 f"--set key {key!r} moved: use inputs.{rest[0]} instead "
                 f"(spouse_* fields now live on Inputs)."
+            )
+
+        # Reject the legacy `config.{ss,pension}_start_age` form too.
+        if (
+            root == "config"
+            and len(rest) == 1
+            and rest[0] in _LEGACY_CONFIG_AGE_GATES
+        ):
+            new_path = _LEGACY_CONFIG_AGE_GATES[rest[0]]
+            raise ScenarioError(
+                f"--set key {key!r} moved: use {new_path} instead "
+                f"(age-gate fields now live on Inputs)."
             )
 
         target = cfg_patch if root == "config" else inputs_patch
@@ -343,6 +376,16 @@ def _apply_config_dict(cfg: Config, patch: dict[str, Any]) -> Config:
             raise ScenarioError(
                 f"These spouse_* fields moved to `inputs`: {sorted(legacy)}. "
                 f"Move them under the `inputs` section (e.g. {names})."
+            )
+        legacy_ages = unknown & set(_LEGACY_CONFIG_AGE_GATES)
+        if legacy_ages:
+            moves = ", ".join(
+                f"{old} -> {_LEGACY_CONFIG_AGE_GATES[old]}"
+                for old in sorted(legacy_ages)
+            )
+            raise ScenarioError(
+                f"These age-gate fields moved out of `config`: "
+                f"{sorted(legacy_ages)}. Update your JSON: {moves}."
             )
         raise ScenarioError(
             f"Unknown config field(s): {sorted(unknown)}. "

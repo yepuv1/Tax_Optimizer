@@ -401,8 +401,8 @@ Three optimizer objectives:
 
 The split is intentional and keeps the same `Config` reusable across households:
 
-- **`Inputs`** — the *household*. Spouse ages, retire ages, salaries, contribution rates, Roth-401(k) splits, starting balances, Social Security amounts, expected expenses, etc. See `tax_optimizer/inputs.py`.
-- **`Config`** — the *simulation / strategy*. Macro assumptions (`nominal_growth_rate`, `inflation`, `wage_growth`), age-gated policy events (`ss_start_age`, `pension_start_age`, `rmd_start_age`), the withdrawal / conversion strategy, and the modular assumption blocks below. See `tax_optimizer/config.py`.
+- **`Inputs`** — the *household*. Spouse ages, retire ages, salaries, contribution rates, Roth-401(k) splits, starting balances, Social Security amounts (incl. claim age `inputs.ss.start_age`), pension data (incl. start age `inputs.pension.start_age`), expected expenses, etc. See `tax_optimizer/inputs.py`.
+- **`Config`** — the *simulation / strategy*. Macro assumptions (`nominal_growth_rate`, `inflation`, `wage_growth`), the one remaining age-gated policy event (`rmd_start_age`), the withdrawal / conversion strategy, and the modular assumption blocks below. See `tax_optimizer/config.py`.
 
 The optimizer's three decision variables follow the same split: the Roth-401(k) splits land on `Inputs` (a household-level deferral choice) and the conversion bracket target lands on `Config` (a strategy-level rule). `optimize_s3` therefore returns `(best_cfg, best_inputs, x_opt)`, and each of the four canonical strategies in the CLI carries its own `(cfg, inputs)` pair packaged as a `StrategyResult`.
 

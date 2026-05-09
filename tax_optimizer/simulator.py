@@ -67,7 +67,7 @@ def simulate(
     test_balance = project_pension_balance(
         inputs.pension.balance_today,
         inputs.income.spouse_a_gross,
-        max(0, cfg.pension_start_age - inputs.spouse_a_age_start),
+        max(0, inputs.pension.start_age - inputs.spouse_a_age_start),
         wage_growth=cfg.wage_growth,
     )
 
@@ -111,20 +111,20 @@ def simulate(
         )
         wages_box1 = wages - a_pretax_contrib - b_pretax_contrib
 
-        if a_age == cfg.pension_start_age and state.pension_annuity == 0.0 and alive_a:
+        if a_age == inputs.pension.start_age and state.pension_annuity == 0.0 and alive_a:
             scale = state.pension_balance / max(test_balance, 1.0)
             state.pension_annuity = inputs.pension.annual_at_nrd * scale
         # Surviving spouse pension election applied if A has died.
-        if a_age >= cfg.pension_start_age and alive_a:
+        if a_age >= inputs.pension.start_age and alive_a:
             pension_income = state.pension_annuity
-        elif a_age >= cfg.pension_start_age and not alive_a and alive_b:
+        elif a_age >= inputs.pension.start_age and not alive_a and alive_b:
             pension_income = state.pension_annuity * cfg.mortality.pension_survivor_pct
         else:
             pension_income = 0.0
 
         ssn_income = 0.0
-        a_ss_eligible = alive_a and a_age >= cfg.ss_start_age
-        b_ss_eligible = alive_b and b_age >= cfg.ss_start_age
+        a_ss_eligible = alive_a and a_age >= inputs.ss.start_age
+        b_ss_eligible = alive_b and b_age >= inputs.ss.start_age
         if alive_a and alive_b:
             if a_ss_eligible:
                 ssn_income += inputs.ss.monthly_spouse_a * 12
@@ -269,7 +269,7 @@ def simulate(
         state.roth *= 1 + asset_loc.roth.annual_return(eq_r, bd_r)
         state.taxable *= 1 + asset_loc.taxable.annual_return(eq_r, bd_r) - cfg.taxable_drag
         state.hsa *= 1 + asset_loc.hsa.annual_return(eq_r, bd_r)
-        if a_age < cfg.pension_start_age:
+        if a_age < inputs.pension.start_age:
             state.pension_balance *= 1 + PENSION_INTEREST
             state.pension_balance += pension_annual_credit(
                 spouse_a_salary if a_working else 0.0

@@ -39,8 +39,20 @@ def winning_cfg(results: dict[str, StrategyResult], default_cfg: Config) -> tupl
     return name, r.cfg
 
 
+# Tornado knobs that live on a nested Inputs sub-dataclass. Map each
+# flat tornado label to a (sub_attr, leaf_attr) pair on Inputs so the
+# sensitivity loop can route the perturbation without leaking the
+# nested path into the displayed param name.
+_NESTED_INPUTS_FIELDS: dict[str, tuple[str, str]] = {
+    "ss_start_age": ("ss", "start_age"),
+    "pension_start_age": ("pension", "start_age"),
+}
+
+
 def _resolve_owner(field_name: str) -> str:
-    """Return 'cfg' or 'inputs' depending on which dataclass owns `field_name`."""
+    """Return 'cfg', 'inputs', or 'inputs_nested' depending on owner."""
+    if field_name in _NESTED_INPUTS_FIELDS:
+        return "inputs_nested"
     if field_name in {f.name for f in fields(Config)}:
         return "cfg"
     if field_name in {f.name for f in fields(Inputs)}:
@@ -67,6 +79,13 @@ def tornado_sensitivity(
             return terminal_after_tax_nw(
                 simulate(replace(base_cfg, **{param: value}), inputs)
             )
+        if owner == "inputs_nested":
+            sub_attr, leaf_attr = _NESTED_INPUTS_FIELDS[param]
+            sub_obj = getattr(inputs, sub_attr)
+            new_sub = replace(sub_obj, **{leaf_attr: value})
+            return terminal_after_tax_nw(
+                simulate(base_cfg, replace(inputs, **{sub_attr: new_sub}))
+            )
         return terminal_after_tax_nw(
             simulate(base_cfg, replace(inputs, **{param: value}))
         )
@@ -91,8 +110,8 @@ def tornado_sensitivity(
             int_clamp(inputs.spouse_b_retire_age - 2, 50, 75),
             int_clamp(inputs.spouse_b_retire_age + 2, 50, 75)),
         ("ss_start_age",
-            int_clamp(base_cfg.ss_start_age - 3, 62, 70),
-            int_clamp(base_cfg.ss_start_age + 3, 62, 70)),
+            int_clamp(inputs.ss.start_age - 3, 62, 70),
+            int_clamp(inputs.ss.start_age + 3, 62, 70)),
         ("nominal_growth_rate",
             max(0.0, base_cfg.nominal_growth_rate - 0.01),
             base_cfg.nominal_growth_rate + 0.01),
@@ -137,7 +156,13 @@ def _action_for_param(
         owner = _resolve_owner(param)
     except KeyError:
         owner = "cfg"
-    base_val = getattr(base_cfg if owner == "cfg" else base_inputs, param, None)
+    if owner == "inputs_nested":
+        sub_attr, leaf_attr = _NESTED_INPUTS_FIELDS[param]
+        base_val = getattr(getattr(base_inputs, sub_attr), leaf_attr, None)
+    else:
+        base_val = getattr(
+            base_cfg if owner == "cfg" else base_inputs, param, None
+        )
     if param.endswith("_roth_401k_pct"):
         spouse = "Spouse A" if param.startswith("spouse_a") else "Spouse B"
         target = hi if direction == "higher" else lo

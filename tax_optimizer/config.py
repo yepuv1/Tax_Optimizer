@@ -66,8 +66,10 @@ class Config:
     # ------------------------------------------------------------------
     # Age-gated income events
     # ------------------------------------------------------------------
-    ss_start_age: int = 70
-    pension_start_age: int = 65
+    # SS claim age and pension NRD now live on the nested Inputs blocks
+    # (`inputs.ss.start_age`, `inputs.pension.start_age`) so all "about
+    # the household" timing knobs cluster with the dollar amounts they
+    # gate.
     rmd_start_age: int = 75
 
     # ------------------------------------------------------------------
