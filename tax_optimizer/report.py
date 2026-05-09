@@ -132,6 +132,23 @@ def build_action_report(
         f"| &nbsp;&nbsp;&nbsp; HSA / pension cash-balance | "
         f"${inputs.starting.hsa:,.0f} / ${inputs.starting.pension_balance:,.0f} |"
     )
+    if (
+        inputs.spouse_a_employer_match_rate > 0
+        or inputs.spouse_b_employer_match_rate > 0
+    ):
+        a_match = (
+            f"{inputs.spouse_a_employer_match_rate:.0%} on first "
+            f"{inputs.spouse_a_employer_match_max_pct:.0%}"
+            if inputs.spouse_a_employer_match_rate > 0
+            else "—"
+        )
+        b_match = (
+            f"{inputs.spouse_b_employer_match_rate:.0%} on first "
+            f"{inputs.spouse_b_employer_match_max_pct:.0%}"
+            if inputs.spouse_b_employer_match_rate > 0
+            else "—"
+        )
+        md.append(f"| Employer 401(k) match (A / B) | {a_match} / {b_match} |")
     md.append("")
 
     # ---- 2. Recommended plan ----------------------------------------------

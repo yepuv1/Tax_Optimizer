@@ -128,6 +128,22 @@ class Inputs:
     spouse_a_roth_401k_pct: float = 0.0
     spouse_b_roth_401k_pct: float = 0.0
 
+    # Employer 401(k) match. Default 0 = no match (backward compat).
+    # Modeled as: matched_dollars = salary
+    #           * min(employee_pct, employer_match_max_pct)
+    #           * employer_match_rate
+    # i.e. "rate" is the fraction of the employee's deferral that the
+    # employer matches, and "max_pct" caps the match at that fraction
+    # of salary. The classic "100% on first 6%" plan is rate=1.0,
+    # max_pct=0.06; a "50% on first 6%" plan (= 3% of pay) is rate=0.5,
+    # max_pct=0.06. Regardless of the employee's Roth-vs-Traditional
+    # election, the match always lands in the pre-tax bucket (IRS
+    # rule), and it does NOT count against the elective-deferral cap.
+    spouse_a_employer_match_rate: float = 0.0
+    spouse_a_employer_match_max_pct: float = 0.0
+    spouse_b_employer_match_rate: float = 0.0
+    spouse_b_employer_match_max_pct: float = 0.0
+
     starting: StartingBalances = field(default_factory=StartingBalances)
     income: CurrentIncome = field(default_factory=CurrentIncome)
     contrib: CurrentContrib = field(default_factory=CurrentContrib)

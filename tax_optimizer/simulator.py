@@ -108,8 +108,32 @@ def simulate(
         b_pretax_contrib = b_total_contrib * (1 - inputs.spouse_b_roth_401k_pct)
         b_roth_contrib = b_total_contrib * inputs.spouse_b_roth_401k_pct
 
-        state.spouse_a_pretax += a_pretax_contrib
-        state.spouse_b_pretax += b_pretax_contrib
+        # Employer 401(k) match. Pays in pre-tax (per IRS rules) on top
+        # of the employee's elective deferral, regardless of whether
+        # the employee chose Roth. Sized on the actually-deferred
+        # percentage (already capped by elective_deferral_cap above)
+        # rather than the user's pre-cap target.
+        a_effective_pct = (
+            (a_total_contrib / spouse_a_salary) if (a_working and spouse_a_salary > 0) else 0.0
+        )
+        b_effective_pct = (
+            (b_total_contrib / spouse_b_salary) if (b_working and spouse_b_salary > 0) else 0.0
+        )
+        a_employer_match = (
+            spouse_a_salary
+            * min(a_effective_pct, inputs.spouse_a_employer_match_max_pct)
+            * inputs.spouse_a_employer_match_rate
+            if a_working else 0.0
+        )
+        b_employer_match = (
+            spouse_b_salary
+            * min(b_effective_pct, inputs.spouse_b_employer_match_max_pct)
+            * inputs.spouse_b_employer_match_rate
+            if b_working else 0.0
+        )
+
+        state.spouse_a_pretax += a_pretax_contrib + a_employer_match
+        state.spouse_b_pretax += b_pretax_contrib + b_employer_match
         state.roth += a_roth_contrib + b_roth_contrib
 
         # HSA family contribution: capped at IRS family limit + 55+
@@ -423,6 +447,8 @@ def simulate(
                 "hsa_withdrawal": hsa_withdrawal,
                 "elective_deferral_a": a_total_contrib,
                 "elective_deferral_b": b_total_contrib,
+                "employer_match_a": a_employer_match,
+                "employer_match_b": b_employer_match,
                 "equity_return": eq_r,
                 "bond_return": bd_r,
                 "pretax_balance": state.spouse_a_pretax + state.spouse_b_pretax,
