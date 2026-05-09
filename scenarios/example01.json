@@ -7,6 +7,13 @@
     "regime_change_year_offset": 5,
     "regime_change_target": "sunset",
     "rmd_start_age": 75,
+
+    "ss_cola_rate": null,
+    "bracket_indexing_rate": null,
+
+    "taxable_equity_div_yield": 0.016,
+    "taxable_bond_interest_yield": 0.035,
+
     "market": {
       "kind": "lognormal",
       "equity_mu": 0.07,
@@ -34,10 +41,17 @@
     "spouse_b_age_start": 50,
     "spouse_a_retire_age": 65,
     "spouse_b_retire_age": 67,
+
     "spouse_a_total_contrib_pct": 0.10,
     "spouse_b_total_contrib_pct": 0.08,
     "spouse_a_roth_401k_pct": 0.0,
     "spouse_b_roth_401k_pct": 0.0,
+
+    "spouse_a_employer_match_rate": 0.50,
+    "spouse_a_employer_match_max_pct": 0.06,
+    "spouse_b_employer_match_rate": 0.50,
+    "spouse_b_employer_match_max_pct": 0.06,
+
     "starting": {
       "spouse_a_pretax_401k": 400000,
       "spouse_b_pretax_401k": 250000,
@@ -50,10 +64,16 @@
       "spouse_b_gross": 95000,
       "spouse_a_bonus": 15000
     },
+    "contrib": {
+      "hsa_family": 8550
+    },
     "ss": {
       "monthly_spouse_a": 3100,
       "monthly_spouse_b": 2500,
-      "start_age": 70
+      "start_age_a": 70,
+      "start_age_b": 67,
+      "fra_a": 67,
+      "fra_b": 67
     },
     "pension": {
       "start_age": 65

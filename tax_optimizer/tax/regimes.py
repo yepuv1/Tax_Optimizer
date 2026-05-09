@@ -28,11 +28,38 @@ partD_monthly) tuples. Surcharges are per enrollee per month.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Sequence
 
 Bracket = tuple[float, float, float]
 IRMAATier = tuple[float, float, float]
+
+
+def _scale_brackets(brackets: Sequence[Bracket], factor: float) -> list[Bracket]:
+    out: list[Bracket] = []
+    for lo, hi, rate in brackets:
+        new_lo = lo * factor
+        new_hi = hi * factor if math.isfinite(hi) else math.inf
+        out.append((new_lo, new_hi, rate))
+    return out
+
+
+def _scale_irmaa(tiers: Sequence[IRMAATier], factor: float) -> list[IRMAATier]:
+    """Scale both the MAGI threshold AND the surcharge dollar amounts.
+
+    In real life IRMAA MAGI thresholds index annually (CMS publishes new
+    boundaries each year); the Part B / Part D surcharge dollars also
+    grow each year, faster than CPI on average (medical inflation). For
+    a clean projection we scale both at the same rate so real IRMAA stays
+    roughly constant — under-estimating the medical-inflation premium
+    growth, but avoiding the much-larger error of leaving the 2026
+    surcharges flat-nominal across a 30-year horizon.
+    """
+    out: list[IRMAATier] = []
+    for cap, partB, partD in tiers:
+        new_cap = cap * factor if math.isfinite(cap) else math.inf
+        out.append((new_cap, partB * factor, partD * factor))
+    return out
 
 
 @dataclass(frozen=True)
@@ -84,6 +111,38 @@ class TaxRegime:
 
     def ss_provisional(self, filing_status: str) -> tuple[float, float]:
         return self.ss_provisional_mfj if filing_status == "mfj" else self.ss_provisional_single
+
+    def inflated(self, factor: float) -> "TaxRegime":
+        """Return a copy with widely-indexed thresholds scaled by `factor`.
+
+        Scales: ordinary brackets, LTCG brackets, the standard deduction,
+        and IRMAA tier thresholds + surcharge dollar amounts.
+
+        Does NOT scale: the NIIT MAGI threshold (statutory $250k MFJ /
+        $200k single, unindexed since 2013) or the SS-provisional-income
+        thresholds ($32k/$44k MFJ, unindexed since 1993). Both are
+        intentionally left flat-nominal to match the IRC.
+
+        Use case: in a long-horizon simulation, real IRS practice is to
+        index brackets annually to chained CPI. Leaving them at the
+        regime's quoted-year nominals while income inflates produces a
+        slow, stealth bracket-creep that biases conversion-sizing and
+        all post-deduction tax math. This helper rebuilds the regime
+        per year with `factor = (1 + bracket_indexing_rate) ** year_offset`.
+        """
+        if factor == 1.0:
+            return self
+        return replace(
+            self,
+            ord_brackets_mfj=_scale_brackets(self.ord_brackets_mfj, factor),
+            ord_brackets_single=_scale_brackets(self.ord_brackets_single, factor),
+            ltcg_brackets_mfj=_scale_brackets(self.ltcg_brackets_mfj, factor),
+            ltcg_brackets_single=_scale_brackets(self.ltcg_brackets_single, factor),
+            std_deduction_mfj=self.std_deduction_mfj * factor,
+            std_deduction_single=self.std_deduction_single * factor,
+            irmaa_tiers_mfj=_scale_irmaa(self.irmaa_tiers_mfj, factor),
+            irmaa_tiers_single=_scale_irmaa(self.irmaa_tiers_single, factor),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -200,23 +259,14 @@ PRE_TCJA_2017: TaxRegime = TaxRegime(
 # SUNSET_2026  (TCJA expires; pre-TCJA structure inflation-adjusted forward
 # to 2026 nominal dollars per JCT extrapolation, ~1.30x 2017 widths.)
 # ---------------------------------------------------------------------------
-def _scale(brackets: Sequence[Bracket], factor: float) -> list[Bracket]:
-    out: list[Bracket] = []
-    for lo, hi, rate in brackets:
-        new_lo = lo * factor
-        new_hi = hi * factor if math.isfinite(hi) else math.inf
-        out.append((new_lo, new_hi, rate))
-    return out
-
-
 _SUNSET_FACTOR = 1.30  # cumulative CPI 2017->2026 per BLS projection
 
 SUNSET_2026: TaxRegime = TaxRegime(
     name="tcja_sunset_2026",
-    ord_brackets_mfj=_scale(PRE_TCJA_2017.ord_brackets_mfj, _SUNSET_FACTOR),
-    ord_brackets_single=_scale(PRE_TCJA_2017.ord_brackets_single, _SUNSET_FACTOR),
-    ltcg_brackets_mfj=_scale(PRE_TCJA_2017.ltcg_brackets_mfj, _SUNSET_FACTOR),
-    ltcg_brackets_single=_scale(PRE_TCJA_2017.ltcg_brackets_single, _SUNSET_FACTOR),
+    ord_brackets_mfj=_scale_brackets(PRE_TCJA_2017.ord_brackets_mfj, _SUNSET_FACTOR),
+    ord_brackets_single=_scale_brackets(PRE_TCJA_2017.ord_brackets_single, _SUNSET_FACTOR),
+    ltcg_brackets_mfj=_scale_brackets(PRE_TCJA_2017.ltcg_brackets_mfj, _SUNSET_FACTOR),
+    ltcg_brackets_single=_scale_brackets(PRE_TCJA_2017.ltcg_brackets_single, _SUNSET_FACTOR),
     std_deduction_mfj=PRE_TCJA_2017.std_deduction_mfj * _SUNSET_FACTOR,
     std_deduction_single=PRE_TCJA_2017.std_deduction_single * _SUNSET_FACTOR,
     niit_threshold_mfj=250_000.0,

@@ -21,8 +21,13 @@ A field-by-field reference for `scenarios/*.json` files (the input format consum
   - [The per-bucket form](#the-per-bucket-form)
   - [Effect at simulation time](#effect-at-simulation-time)
   - [When to use which](#when-to-use-which)
-- [`inputs.ss` — Social Security claim age and benefits](#inputsss--social-security-claim-age-and-benefits)
+- [`config.ss_cola_rate` — Social Security annual COLA](#configss_cola_rate--social-security-annual-cola)
+- [`config.bracket_indexing_rate` — annual indexing of brackets, std deduction, and IRMAA](#configbracket_indexing_rate--annual-indexing-of-brackets-std-deduction-and-irmaa)
+- [`config.taxable_equity_div_yield` / `taxable_bond_interest_yield` — explicit yield on taxable-account holdings](#configtaxable_equity_div_yield--taxable_bond_interest_yield--explicit-yield-on-taxable-account-holdings)
+- [`inputs.ss` — Social Security claim age, FRA, and benefits](#inputsss--social-security-claim-age-fra-and-benefits)
 - [`inputs.pension` — pension cash balance and start age](#inputspension--pension-cash-balance-and-start-age)
+- [`inputs.spouse_*_employer_match_*` — employer 401(k) match](#inputsspouse__employer_match__--employer-401k-match)
+- [`inputs.contrib.hsa_family` — household HSA contribution target](#inputscontribhsa_family--household-hsa-contribution-target)
 - [Migration: `config.ss_start_age` / `config.pension_start_age`](#migration-configss_start_age--configpension_start_age)
 - [Output metric: `median_ruin_year_offset`](#output-metric-median_ruin_year_offset)
 - [CLI stress-test recipes](#cli-stress-test-recipes)
@@ -40,8 +45,8 @@ A field-by-field reference for `scenarios/*.json` files (the input format consum
 
 Both sections are optional and fields are optional within each. Unknown keys raise a `ScenarioError` so typos don't silently no-op. The two top-level keys reflect the runtime `Config` and `Inputs` dataclasses one-to-one:
 
-- **`Config`** — the *simulation / strategy*. Macro assumptions (`nominal_growth_rate`, `inflation`, `wage_growth`), `rmd_start_age`, withdrawal / conversion strategy, and the modular blocks `market` / `asset_location` / `spending` / `mortality`.
-- **`Inputs`** — the *household*. Spouse ages, retire ages, salaries, contribution rates, Roth-401(k) splits, starting balances, Social Security amounts (incl. claim age `inputs.ss.start_age`), pension data (incl. start age `inputs.pension.start_age`), expected expenses, etc.
+- **`Config`** — the *simulation / strategy*. Macro assumptions (`nominal_growth_rate`, `inflation`, `wage_growth`, `ss_cola_rate`, `bracket_indexing_rate`, `taxable_equity_div_yield`, `taxable_bond_interest_yield`), `rmd_start_age`, withdrawal / conversion strategy, and the modular blocks `market` / `asset_location` / `spending` / `mortality`.
+- **`Inputs`** — the *household*. Spouse ages, retire ages, salaries, contribution rates, Roth-401(k) splits, **employer 401(k) match** (`spouse_*_employer_match_rate` / `_max_pct`), starting balances, Social Security amounts and per-spouse claim ages (`inputs.ss.start_age_a` / `start_age_b`, `fra_a` / `fra_b`), HSA contribution target (`inputs.contrib.hsa_family`), pension data (incl. start age `inputs.pension.start_age`), expected expenses, etc.
 
 ---
 
@@ -251,27 +256,102 @@ vs. the textbook split where pretax compounds at ~5.2% (40/60), Roth at ~7% (100
 
 ---
 
-## `inputs.ss` — Social Security claim age and benefits
+## `config.ss_cola_rate` — Social Security annual COLA
+
+```json
+"config": {
+  "ss_cola_rate": null
+}
+```
+
+| Value | Means |
+|---|---|
+| `null` (default) | Follow `cfg.inflation` (so SS keeps real-dollar value across the horizon) |
+| `0.0` | Disable COLA — SS stays flat-nominal forever (the v1 behavior; only useful as a regression hedge) |
+| `0.025` | Pin SS COLA to a constant 2.5%/yr regardless of `cfg.inflation` |
+
+SSA grants an annual cost-of-living adjustment based on Q3 CPI-W each year. We approximate that with a constant rate, applied as `(1 + ss_cola_rate) ** year_offset` to the FRA-PIA before it lands on the income line. **Without this on, a $32k MFJ benefit at 2.5% inflation under-counts SS PV by ~40-50% over a 30-year retirement** — that was the v1 bug.
+
+---
+
+## `config.bracket_indexing_rate` — annual indexing of brackets, std deduction, and IRMAA
+
+```json
+"config": {
+  "bracket_indexing_rate": null
+}
+```
+
+| Value | Means |
+|---|---|
+| `null` (default) | Follow `cfg.inflation` |
+| `0.0` | Freeze brackets at the regime's quoted-year nominals across the entire horizon (the v1 stealth-bracket-creep behavior; useful as a "what if Congress freezes brackets" stress test) |
+| `0.02` | Pin indexing to a constant rate (e.g. simulate slow-CPI environments) |
+
+In real life the IRS indexes ordinary brackets, LTCG brackets, the standard deduction, and IRMAA tier MAGI thresholds + surcharges annually to chained CPI. The simulator applies `factor = (1 + bracket_indexing_rate) ** year_offset` to those four. **NIIT** ($250k MFJ / $200k single) and **SS provisional-income thresholds** ($32k/$44k MFJ) are intentionally NOT scaled — they're statutory and have not been indexed since 2013 and 1993 respectively.
+
+Setting `bracket_indexing_rate=0.0` is also useful for stress-testing the impact of NIIT non-indexing: more and more retirees will cross the $250k MFJ MAGI threshold over time.
+
+---
+
+## `config.taxable_equity_div_yield` / `taxable_bond_interest_yield` — explicit yield on taxable-account holdings
+
+```json
+"config": {
+  "taxable_equity_div_yield":   0.016,
+  "taxable_bond_interest_yield": 0.035
+}
+```
+
+| Field | Default | Means |
+|---|---:|---|
+| `taxable_equity_div_yield` | `0.016` | Qualified-dividend yield on the equity portion of `state.taxable` |
+| `taxable_bond_interest_yield` | `0.035` | Ordinary-interest yield on the bond portion of `state.taxable` |
+
+Each year the simulator hits AGI / NIIT / IRMAA / SS-provisional-income with this yield against the taxable account's start-of-year balance, allocated to equity vs bond using `asset_location.taxable`. Without this, post-retirement AGI has nothing in it during the gap-year between retirement and SS — implausible, and the bug it patched made tax-line projections look ~3% too low across the back half of retirement.
+
+Set both to `0.0` to reproduce the v1 "taxable account is invisible to AGI between withdrawals" behavior.
+
+Defaults reflect a roughly-2024 broad-market portfolio: ~1.6% qualified-div yield on US equities, ~3.5% interest on the bond sleeve.
+
+---
+
+## `inputs.ss` — Social Security claim age, FRA, and benefits
 
 ```json
 "inputs": {
   "ss": {
     "monthly_spouse_a": 4030,
     "monthly_spouse_b": 2208,
-    "start_age": 70
+    "start_age_a":     70,
+    "start_age_b":     65,
+    "fra_a":           67,
+    "fra_b":           67
   }
 }
 ```
 
 | Field | Type | Default | Means |
 |---|---|---:|---|
-| `monthly_spouse_a` | float | `2700.0` | Spouse A's monthly SS benefit (today's $) at the claim age |
-| `monthly_spouse_b` | float | `2200.0` | Spouse B's monthly SS benefit (today's $) at the claim age |
-| `start_age` | int | `70` | Claim age applied to **both** spouses (single knob) |
+| `monthly_spouse_a` | float | `2700.0` | Spouse A's **PIA at FRA**, today's dollars |
+| `monthly_spouse_b` | float | `2200.0` | Spouse B's **PIA at FRA**, today's dollars |
+| `start_age` | int | `70` | Legacy single-knob fallback; applies to both spouses iff `start_age_a` / `start_age_b` are unset |
+| `start_age_a` | int? | `null` | Per-spouse claim age for Spouse A; overrides `start_age` |
+| `start_age_b` | int? | `null` | Per-spouse claim age for Spouse B; overrides `start_age` |
+| `fra_a` | int | `67` | Full Retirement Age, Spouse A. `67` is correct for anyone born 1960 or later (covers anyone hitting retirement age in this model's typical horizon) |
+| `fra_b` | int | `67` | Full Retirement Age, Spouse B |
 
-The simulator pays each spouse's monthly amount × 12 once that spouse reaches `start_age`. There is **no FRA actuarial adjustment** in the model, so enter the amount you expect to receive **AT** the claim age (e.g., the SSA Quick-Calculator PIA for that specific claim age).
+**Important** — interpret `monthly_spouse_*` as the SSA-quoted **PIA at FRA**, NOT the at-claim amount. The simulator scales it actuarially based on `start_age_*` vs `fra_*`:
 
-When one spouse dies, the survivor switches to the **survivor benefit**: keeps the larger of the two monthly amounts, drops the smaller. Controlled by `Mortality.ss_survivor_keeps_higher` (default `True`, per SSA rules).
+- **Below FRA (early claim):** −5/9% per month for the first 36 months early, then −5/12% per month thereafter. Age 62 vs FRA 67 ⇒ −30%.
+- **At FRA:** ×1.00 (the quoted PIA).
+- **Above FRA (delayed retirement credits):** +8%/yr (= +2/3% per month) up to age 70. Age 70 vs FRA 67 ⇒ +24%. No further credits past 70.
+
+After the actuarial scaling, the per-year benefit is multiplied by `(1 + ss_cola_rate) ** year_offset` (see `config.ss_cola_rate`).
+
+The legacy single `start_age` still works for back-compat. Setting `start_age_a` and `start_age_b` separately unlocks the most common real-world strategy: high-PIA spouse delays to 70 (max delayed credits + bigger survivor benefit), low-PIA spouse claims at FRA or earlier.
+
+When one spouse dies, the survivor switches to the **survivor benefit**: keeps the larger of the two scaled benefits, drops the smaller. Controlled by `Mortality.ss_survivor_keeps_higher` (default `True`, per SSA rules).
 
 ---
 
@@ -304,6 +384,71 @@ Survivor handling: when Spouse A dies while Spouse B is alive, the surviving spo
 - `0.50` — 50% joint-and-survivor (typical employer default)
 - `0.75` — 75% J&S
 - `1.00` — 100% J&S (survivor receives the full annuity)
+
+---
+
+## `inputs.spouse_*_employer_match_*` — employer 401(k) match
+
+```json
+"inputs": {
+  "spouse_a_employer_match_rate":    0.50,
+  "spouse_a_employer_match_max_pct": 0.06,
+  "spouse_b_employer_match_rate":    1.00,
+  "spouse_b_employer_match_max_pct": 0.06
+}
+```
+
+| Field | Type | Default | Means |
+|---|---|---:|---|
+| `spouse_a_employer_match_rate` | float | `0.0` | Fraction of Spouse A's elective deferral the employer matches |
+| `spouse_a_employer_match_max_pct` | float | `0.0` | Cap on the match as a fraction of Spouse A's salary |
+| `spouse_b_employer_match_rate` | float | `0.0` | Same shape for Spouse B |
+| `spouse_b_employer_match_max_pct` | float | `0.0` | Same shape for Spouse B |
+
+Match formula:
+
+```
+match = salary * min(employee_deferral_pct, max_pct) * rate
+```
+
+**Common plan shapes mapped to these knobs:**
+
+| Real-world plan | `rate` | `max_pct` | Resulting match (if employee defers ≥ max_pct) |
+|---|---:|---:|---:|
+| 50% on first 6% (very common) | `0.50` | `0.06` | 3% of salary |
+| 100% on first 6% (common at large employers) | `1.00` | `0.06` | 6% of salary |
+| 100% on first 3% + 50% on next 2% (Safe Harbor) | *combine* | — | 4% of salary — closest single-formula approximation: `1.00 / 0.04` |
+| Non-elective 3% (Safe Harbor non-elective) | `1.00` | `0.03` | 3% — assumes employee defers ≥3% |
+| No match | `0.0` | `0.0` | 0 |
+
+**Mechanics worth knowing:**
+
+- **Always pre-tax.** Even if the employee elects 100% Roth-401(k), the match always lands in the pre-tax bucket per IRS rules.
+- **Doesn't count against the elective-deferral cap.** The match is governed by the §415(c) overall annual additions limit (~$70k 2026), which is rarely binding and the simulator does NOT model.
+- **Stops at retirement.** No salary → no match.
+- **Sized on the post-cap deferral.** If the employee blows through the $23,500 elective limit at, say, 30% of $300k salary, the simulator's effective deferral pct is `23,500 / 300,000 ≈ 7.8%`, and a "100% on first 6%" plan matches on 6% (not 30%).
+
+Visible in the per-year DataFrame as `employer_match_a` and `employer_match_b`.
+
+---
+
+## `inputs.contrib.hsa_family` — household HSA contribution target
+
+```json
+"inputs": {
+  "contrib": {
+    "hsa_family": 8550
+  }
+}
+```
+
+| Field | Type | Default | Means |
+|---|---|---:|---|
+| `hsa_family` | float | `8550.0` | Annual HSA family-coverage contribution target, today's dollars |
+
+The simulator caps this at the IRS family-coverage limit + the 55+ catch-up if either spouse qualifies, and zeroes it once both spouses hit Medicare eligibility (65). HSA contributions are pre-tax (reduce Box 1 wages alongside traditional 401(k)) and **also FICA-exempt in real life via cafeteria plans**, though the simulator's FICA pass currently uses gross W-2 wages — a known small approximation.
+
+The HSA balance is **only spent against the long-term-care shock** (`spending.ltc_shock`), tax-free. Other qualified medical expenses (routine, Medicare premiums after 65, the receipt-shoebox method) are NOT yet modeled — the HSA is effectively a trapped balance otherwise. That's a known modeling gap (see Tier-B item "HSA after 65" in the package's review notes).
 
 ---
 
@@ -406,13 +551,32 @@ The honest framing: **`equity_mu` is the parameter most likely to be wrong**, an
 A handful of common `--set` patterns to bookmark:
 
 ```bash
-# Bump SS claim age (was a config field; now inputs.ss.start_age)
+# Per-spouse SS claim ages (high-PIA spouse delays to 70 for max
+# delayed credits + bigger survivor benefit; low-PIA claims at FRA)
+--set inputs.ss.start_age_a=70 \
+--set inputs.ss.start_age_b=67 \
+--set inputs.ss.fra_a=67 \
+--set inputs.ss.fra_b=67
+
+# Legacy single-knob form still works (both spouses claim at 68)
 --set inputs.ss.start_age=68
 
 # Add a real pension to a household that didn't have one
 --set inputs.pension.balance_today=50000 \
 --set inputs.pension.monthly_at_nrd=1500 \
 --set inputs.pension.start_age=65
+
+# Add an employer 401(k) match (50% on first 6% — most common plan)
+--set inputs.spouse_a_employer_match_rate=0.50 \
+--set inputs.spouse_a_employer_match_max_pct=0.06 \
+--set inputs.spouse_b_employer_match_rate=0.50 \
+--set inputs.spouse_b_employer_match_max_pct=0.06
+
+# Stress test: freeze tax brackets for the entire horizon (no indexing)
+--set config.bracket_indexing_rate=0.0
+
+# Stress test: disable SS COLA (flat-nominal SS)
+--set config.ss_cola_rate=0.0
 
 # Shift to textbook asset-located portfolio
 --set 'config.asset_location={"pretax_equity_pct":0.40,"roth_equity_pct":1.00,"taxable_equity_pct":0.80,"hsa_equity_pct":0.80}'

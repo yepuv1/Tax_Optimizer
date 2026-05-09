@@ -101,9 +101,64 @@ class PensionInputs:
 
 @dataclass
 class SocialSecurity:
-    monthly_spouse_a: float = 2_700.0
-    monthly_spouse_b: float = 2_200.0
-    start_age: int = 70  # Claim age applied to both spouses (single knob).
+    """Household Social Security inputs.
+
+    `monthly_spouse_a` / `monthly_spouse_b` are the **PIA at FRA** in
+    today's dollars (the standard SSA-quoted estimate). The simulator
+    applies (a) an actuarial scaling factor based on actual claim age
+    relative to FRA, and (b) an annual COLA per `Config.ss_cola_rate`.
+
+    Per-spouse claim ages live in `start_age_a` / `start_age_b`. The
+    legacy single `start_age` knob is kept for backward compat: when
+    `start_age_a` / `start_age_b` are `None`, both spouses claim at
+    `start_age`. Setting either per-spouse value overrides the legacy
+    field for that spouse only.
+
+    `fra_a` / `fra_b` default to 67 (correct for anyone born 1960 or
+    later, which covers anyone hitting retirement age in this model's
+    typical horizon). For older birth cohorts, set explicitly.
+    """
+
+    monthly_spouse_a: float = 2_700.0  # PIA at FRA, today's dollars.
+    monthly_spouse_b: float = 2_200.0  # PIA at FRA, today's dollars.
+    start_age: int = 70  # Legacy fallback when start_age_a/b are None.
+    start_age_a: int | None = None
+    start_age_b: int | None = None
+    fra_a: int = 67  # Full Retirement Age, Spouse A.
+    fra_b: int = 67  # Full Retirement Age, Spouse B.
+
+    @property
+    def effective_start_age_a(self) -> int:
+        return self.start_age_a if self.start_age_a is not None else self.start_age
+
+    @property
+    def effective_start_age_b(self) -> int:
+        return self.start_age_b if self.start_age_b is not None else self.start_age
+
+
+def claim_age_factor(claim_age: int, fra: int) -> float:
+    """SSA actuarial scaling on FRA-PIA for `claim_age` ∈ [62, 70].
+
+    Below 62 the spouse can't claim retirement benefits → 0.
+    Past 70 there are no further delayed-retirement credits → caps at 70.
+    Reduction (early): -5/9% per month for the first 36 months below FRA,
+    then -5/12% per month thereafter (-30% at age 62 vs FRA 67).
+    Increase (delayed): +8%/yr (= +2/3% per month) past FRA up to 70
+    (+24% at age 70 vs FRA 67).
+    """
+    if claim_age < 62:
+        return 0.0
+    if claim_age > 70:
+        claim_age = 70
+    if claim_age == fra:
+        return 1.0
+    months = (claim_age - fra) * 12
+    if months > 0:
+        return 1.0 + (2.0 / 3.0) / 100.0 * months
+    months = -months
+    if months <= 36:
+        return 1.0 - (5.0 / 9.0) / 100.0 * months
+    return 1.0 - (5.0 / 9.0) / 100.0 * 36 - (5.0 / 12.0) / 100.0 * (months - 36)
 
 
 @dataclass

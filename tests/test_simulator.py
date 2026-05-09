@@ -121,19 +121,37 @@ class TestSimulateDefaults:
 
     def test_ss_starts_at_configured_age(self, cfg: Config, inputs: Inputs) -> None:
         df = simulate(cfg, inputs)
-        # SS = 0 strictly before ss.start_age, > 0 from ss.start_age onward.
-        before = df[df["spouse_a_age"] < inputs.ss.start_age]
-        after = df[df["spouse_a_age"] >= inputs.ss.start_age]
+        # SS = 0 strictly before the claim age, > 0 from claim onward.
+        a_claim = inputs.ss.effective_start_age_a
+        before = df[df["spouse_a_age"] < a_claim]
+        after = df[df["spouse_a_age"] >= a_claim]
         assert (before["ssn"] == 0.0).all()
-        # While both alive, total SS = (a + b) * 12.
+        # SS now scales by (a) actuarial claim-age factor on FRA-PIA, and
+        # (b) annual COLA. The PIA scaling uses claim_age_factor; COLA
+        # follows cfg.ss_cola_rate (None ⇒ cfg.inflation). With default
+        # inputs (ss.start_age=70, ss.fra_a=ss.fra_b=67), the factor is
+        # 1.24 (3 years × 8% delayed-retirement credit).
         if not after.empty:
             both_alive = after[after["alive_a"] & after["alive_b"]]
             if not both_alive.empty:
+                from tax_optimizer.inputs import claim_age_factor
+                a_fac = claim_age_factor(a_claim, inputs.ss.fra_a)
+                b_fac = claim_age_factor(
+                    inputs.ss.effective_start_age_b, inputs.ss.fra_b
+                )
+                ss_cola = (
+                    cfg.ss_cola_rate if cfg.ss_cola_rate is not None else cfg.inflation
+                )
+                offsets = (
+                    both_alive["spouse_a_age"].values - inputs.spouse_a_age_start
+                )
                 expected = (
-                    inputs.ss.monthly_spouse_a + inputs.ss.monthly_spouse_b
-                ) * 12
-                # Element-wise approx via numpy (Series == pytest.approx
-                # collapses to a single scalar in pytest >= 9, so use isclose).
+                    (
+                        inputs.ss.monthly_spouse_a * 12 * a_fac
+                        + inputs.ss.monthly_spouse_b * 12 * b_fac
+                    )
+                    * (1 + ss_cola) ** offsets
+                )
                 assert np.allclose(both_alive["ssn"].values, expected)
 
     def test_rmd_starts_at_configured_age(self, cfg: Config, inputs: Inputs) -> None:

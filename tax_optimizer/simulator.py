@@ -18,8 +18,9 @@ import pandas as pd
 
 from .config import Config
 from .conversion import planned_roth_conversion
-from .inputs import Inputs
+from .inputs import Inputs, claim_age_factor
 from .limits import elective_deferral_cap, hsa_family_cap
+from .payroll import OASDI_WAGE_BASE_2026, fica_employee
 from .pension import (
     PENSION_INTEREST,
     pension_annual_credit,
@@ -57,6 +58,15 @@ def simulate(
 
     n_years = cfg.horizon_age - inputs.spouse_a_age_start + 1
 
+    # Track alive-state across years so we can detect the death
+    # transition and move the deceased spouse's pretax IRA / 401(k) into
+    # the surviving spouse's balance (a spousal rollover under IRC §401
+    # / §408). This is what makes the survivor's RMDs continue on the
+    # combined balance instead of the deceased's pretax sitting frozen
+    # forever — a real-world correctness bug otherwise.
+    prev_alive_a = True
+    prev_alive_b = True
+
     market = cfg.resolved_market()
     market.begin_path(n_years, rng)
 
@@ -85,7 +95,37 @@ def simulate(
         alive_b = cfg.mortality.alive_b(year_offset)
         filing_status = cfg.mortality.filing_status(year_offset)
 
-        regime = cfg.regime_for_year(year_offset)
+        # Spousal IRA rollover on death transition. When a spouse dies
+        # the survivor inherits the IRA / 401(k); IRS rules let them
+        # roll it into their own retirement account, after which RMDs
+        # are computed on the survivor's age against the combined
+        # balance. Without this, a deceased spouse's pretax just sits
+        # frozen (still growing tax-deferred but never RMD'd) which
+        # wildly under-counts lifetime tax. We trigger the rollover
+        # once on the first year `alive_*` flips False, but only when
+        # the OTHER spouse is alive (otherwise the balance falls to
+        # non-spousal heirs which is out of scope).
+        rollover_event = ""
+        if (
+            prev_alive_a
+            and not alive_a
+            and alive_b
+            and state.spouse_a_pretax > 0
+        ):
+            state.spouse_b_pretax += state.spouse_a_pretax
+            state.spouse_a_pretax = 0.0
+            rollover_event = "a_to_b"
+        if (
+            prev_alive_b
+            and not alive_b
+            and alive_a
+            and state.spouse_b_pretax > 0
+        ):
+            state.spouse_a_pretax += state.spouse_b_pretax
+            state.spouse_b_pretax = 0.0
+            rollover_event = "b_to_a"
+
+        regime = cfg.effective_regime(year_offset)
 
         a_working = alive_a and a_age < inputs.spouse_a_retire_age
         b_working = alive_b and b_age < inputs.spouse_b_retire_age
@@ -144,12 +184,23 @@ def simulate(
         state.hsa += hsa_contrib
 
         # ---- Income items ----
-        wages = (spouse_a_salary + spouse_a_bonus if a_working else 0.0) + (
-            spouse_b_salary if b_working else 0.0
-        )
+        a_w2_wages = (spouse_a_salary + spouse_a_bonus) if a_working else 0.0
+        b_w2_wages = spouse_b_salary if b_working else 0.0
+        wages = a_w2_wages + b_w2_wages
         # HSA contributions are pre-tax (Box 1 wage reducer alongside
         # traditional 401(k) deferrals).
         wages_box1 = wages - a_pretax_contrib - b_pretax_contrib - hsa_contrib
+
+        # FICA on per-spouse W-2 wages. Applies to GROSS wages (Box 3) —
+        # traditional 401(k) does NOT reduce FICA wages. Each spouse has
+        # their own OASDI wage base; the wage base is indexed forward
+        # annually so real FICA stays roughly constant. FICA does not
+        # touch federal income tax — it just removes cash from the
+        # household's working-year inflow.
+        wage_base_y = OASDI_WAGE_BASE_2026 * (1 + cfg.inflation) ** year_offset
+        fica_a = fica_employee(a_w2_wages, wage_base=wage_base_y)["total"]
+        fica_b = fica_employee(b_w2_wages, wage_base=wage_base_y)["total"]
+        fica_total = fica_a + fica_b
 
         if a_age == inputs.pension.start_age and state.pension_annuity == 0.0 and alive_a:
             scale = state.pension_balance / max(test_balance, 1.0)
@@ -162,19 +213,41 @@ def simulate(
         else:
             pension_income = 0.0
 
+        # Social Security: per-spouse claim age, actuarial scaling on
+        # FRA-PIA, and an annual COLA. The household-level `monthly_*`
+        # inputs are quoted at FRA in today's dollars; we scale by
+        # (a) claim-age factor (early-claim haircut or delayed-retirement
+        # credits) and (b) (1+ss_cola_rate)**year_offset for COLA.
+        ss_cola = cfg.ss_cola_rate if cfg.ss_cola_rate is not None else cfg.inflation
+        ss_inflator = (1 + ss_cola) ** year_offset
+
+        a_claim_age = inputs.ss.effective_start_age_a
+        b_claim_age = inputs.ss.effective_start_age_b
+        a_factor = claim_age_factor(a_claim_age, inputs.ss.fra_a)
+        b_factor = claim_age_factor(b_claim_age, inputs.ss.fra_b)
+        a_annual_at_claim = inputs.ss.monthly_spouse_a * 12 * a_factor
+        b_annual_at_claim = inputs.ss.monthly_spouse_b * 12 * b_factor
+
+        a_ss_eligible = alive_a and a_age >= a_claim_age
+        b_ss_eligible = alive_b and b_age >= b_claim_age
+
         ssn_income = 0.0
-        a_ss_eligible = alive_a and a_age >= inputs.ss.start_age
-        b_ss_eligible = alive_b and b_age >= inputs.ss.start_age
         if alive_a and alive_b:
             if a_ss_eligible:
-                ssn_income += inputs.ss.monthly_spouse_a * 12
+                ssn_income += a_annual_at_claim * ss_inflator
             if b_ss_eligible:
-                ssn_income += inputs.ss.monthly_spouse_b * 12
+                ssn_income += b_annual_at_claim * ss_inflator
         else:
-            # Survivor benefit: keep the larger of the two monthly amounts.
+            # Survivor benefit: keep the larger of the two scaled
+            # benefits. Real SSA rules are more nuanced (the survivor
+            # can collect their own benefit OR the deceased's, whichever
+            # is larger, with the deceased's amount frozen at their
+            # claim age). This approximation keeps the larger of the
+            # two claim-age-adjusted PIAs, which matches the SSA result
+            # when both have claimed before death.
             if a_ss_eligible or b_ss_eligible:
-                bigger = max(inputs.ss.monthly_spouse_a, inputs.ss.monthly_spouse_b)
-                ssn_income = bigger * 12
+                bigger = max(a_annual_at_claim, b_annual_at_claim)
+                ssn_income = bigger * ss_inflator
 
         # The "extra" non-portfolio income items (savings interest, a
         # one-off cap gain from a side hustle, an employer dividend on
@@ -209,9 +282,21 @@ def simulate(
             social_security=ssn_income,
         )
 
-        # ---- Roth conversion (gap years, regime-aware) ----
+        # ---- RMDs first (required income; eats bracket headroom) ----
+        # IRS rule: at age ≥ rmd_start_age, satisfy RMD BEFORE any
+        # optional conversion. Computed up here so the conversion sizer
+        # below sees the true post-RMD taxable-income line. After a
+        # spousal-rollover-on-death event, the deceased's pretax is in
+        # the survivor's bucket, so RMDs land on the right person.
+        a_rmd = rmd_amount(state.spouse_a_pretax, a_age, cfg.rmd_start_age) if alive_a else 0.0
+        b_rmd = rmd_amount(state.spouse_b_pretax, b_age, cfg.rmd_start_age) if alive_b else 0.0
+        rmd_total = a_rmd + b_rmd
+
+        # ---- Roth conversion (RMD-aware, regime-aware) ----
         conv_a, conv_b = planned_roth_conversion(
-            cfg, inputs, state, base_kwargs, regime=regime, filing_status=filing_status
+            cfg, inputs, state, base_kwargs,
+            regime=regime, filing_status=filing_status,
+            rmd_total=rmd_total,
         )
         # If a spouse is dead, zero out their conversion.
         if not alive_a:
@@ -224,11 +309,6 @@ def simulate(
             state.spouse_a_pretax = max(0.0, state.spouse_a_pretax - conv_a)
             state.spouse_b_pretax = max(0.0, state.spouse_b_pretax - conv_b)
             state.roth += conv
-
-        # ---- RMDs (only required for living spouses) ----
-        a_rmd = rmd_amount(state.spouse_a_pretax, a_age, cfg.rmd_start_age) if alive_a else 0.0
-        b_rmd = rmd_amount(state.spouse_b_pretax, b_age, cfg.rmd_start_age) if alive_b else 0.0
-        rmd_total = a_rmd + b_rmd
 
         # ---- Spending need (smile + lump events + LTC) ----
         # Lump events always add to net_need; the strategy picks where
@@ -323,10 +403,14 @@ def simulate(
         # market returns, so they are *not* added to cash_inflow even
         # though they hit the tax line).
         if a_working or b_working:
+            # Working years: subtract employee-side FICA. FICA is NOT
+            # included in `federal` (it's a separate withholding line),
+            # so we deduct it explicitly from cash inflow here.
             cash_inflow = (
                 wages_box1
                 + extra_interest + extra_qdiv + extra_ltcg
                 + gross_cash_in
+                - fica_total
             )
         else:
             cash_inflow = pension_income + ssn_income + gross_cash_in
@@ -412,6 +496,9 @@ def simulate(
         if alive_b:
             spouse_b_salary *= 1 + cfg.wage_growth
 
+        prev_alive_a = alive_a
+        prev_alive_b = alive_b
+
         rows.append(
             {
                 "year": year,
@@ -421,6 +508,7 @@ def simulate(
                 "alive_b": alive_b,
                 "filing_status": filing_status,
                 "regime": regime.name,
+                "spousal_rollover": rollover_event,
                 "wages": wages,
                 "pension": pension_income,
                 "ssn": ssn_income,
@@ -449,6 +537,9 @@ def simulate(
                 "elective_deferral_b": b_total_contrib,
                 "employer_match_a": a_employer_match,
                 "employer_match_b": b_employer_match,
+                "fica": fica_total,
+                "fica_a": fica_a,
+                "fica_b": fica_b,
                 "equity_return": eq_r,
                 "bond_return": bd_r,
                 "pretax_balance": state.spouse_a_pretax + state.spouse_b_pretax,

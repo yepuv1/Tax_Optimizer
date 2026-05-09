@@ -55,6 +55,26 @@ class Config:
     wage_growth: float = 0.030
     taxable_drag: float = 0.005
 
+    # Annual SS benefit COLA. None ⇒ follow `cfg.inflation`. SSA grants a
+    # CPI-W-based COLA each year; this approximates with a constant rate.
+    # Setting this to 0.0 reproduces the v1 (broken) behavior of flat-
+    # nominal SS benefits across the entire horizon.
+    ss_cola_rate: float | None = None
+
+    # Annual rate at which ordinary tax brackets, LTCG brackets, the
+    # standard deduction, and IRMAA tier thresholds + surcharge dollars
+    # index. None ⇒ follow `cfg.inflation`. IRS uses chained CPI for
+    # bracket indexing since TCJA, slightly slower than headline CPI;
+    # close enough for projections. NIIT threshold and SS-provisional
+    # thresholds are statutory and don't index in real life — they're
+    # left flat-nominal inside `TaxRegime.inflated()`.
+    #
+    # Setting this to 0.0 freezes the regime at its quoted-year nominals
+    # across the full horizon (the v1 behavior — produces stealth
+    # bracket creep as nominal income grows). 0.0 is also useful as a
+    # stress test for "what if Congress freezes brackets".
+    bracket_indexing_rate: float | None = None
+
     # ------------------------------------------------------------------
     # Withdrawal & conversion strategy
     # ------------------------------------------------------------------
@@ -121,6 +141,11 @@ class Config:
     # Helpers
     # ------------------------------------------------------------------
     def regime_for_year(self, year_offset: int) -> TaxRegime:
+        """Pick the regime SWAP that's active in `year_offset`.
+
+        Doesn't apply bracket indexing — call `effective_regime` for
+        the inflation-indexed copy actually used by the simulator.
+        """
         if (
             self.regime_change_year_offset is not None
             and self.regime_change_target is not None
@@ -128,6 +153,20 @@ class Config:
         ):
             return self.regime_change_target
         return self.tax_regime
+
+    def effective_regime(self, year_offset: int) -> TaxRegime:
+        """Return the active regime for `year_offset` with brackets, std
+        deduction, and IRMAA tier thresholds + surcharges scaled forward
+        by `(1 + bracket_indexing_rate) ** year_offset` (rate falls back
+        to `cfg.inflation`).
+        """
+        raw = self.regime_for_year(year_offset)
+        rate = (
+            self.bracket_indexing_rate
+            if self.bracket_indexing_rate is not None
+            else self.inflation
+        )
+        return raw.inflated((1.0 + rate) ** year_offset)
 
     def resolved_market(self) -> MarketModel:
         if self.market is not None:
