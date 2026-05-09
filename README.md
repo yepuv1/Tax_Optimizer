@@ -186,7 +186,7 @@ typos don't silently no-op.
 
 ```bash
 # Run with the bundled example scenario.
-python -m tax_optimizer --scenario scenarios/example.json
+python -m tax_optimizer --scenario scenarios/example01.json
 
 # Generate a starting template you can edit.
 python -m tax_optimizer --print-defaults > my_plan.json
@@ -258,8 +258,9 @@ strategy can be reused across households. Old scenario files that put
 them under `config.<field>` (or `--set config.spouse_*=…`) get a clear
 migration error pointing at the new location.
 
-See `scenarios/example.json` for a full-featured example, and run
-`--print-defaults` against any scenario to see the resolved values.
+See `scenarios/example01.json` (and `example02.json`) for full-featured
+examples, and run `--print-defaults` against any scenario to see the
+resolved values.
 
 ##### Allowed values for enum-style fields
 

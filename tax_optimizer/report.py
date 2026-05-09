@@ -102,7 +102,15 @@ def build_action_report(
         f"({inputs.spouse_b_retire_age} / {inputs.ss.start_age}) |"
     )
     md.append(f"| Combined gross W-2 income | ${household_wages:,.0f} |")
-    md.append(f"| Annual expenses (today's $) | ${inputs.annual_expenses:,.0f} |")
+    # Use the resolved spending profile's base, not `inputs.annual_expenses`.
+    # The simulator drives spending off `cfg.resolved_spending()`, so a
+    # scenario that sets `cfg.spending.base_spending` but leaves
+    # `inputs.annual_expenses` at the default would otherwise mislabel
+    # this row.
+    resolved_spending = cfg.resolved_spending()
+    md.append(
+        f"| Annual expenses (today's $) | ${resolved_spending.base_spending:,.0f} |"
+    )
     md.append(f"| Total liquid + retirement assets | ${starting_total:,.0f} |")
     md.append(
         f"| &nbsp;&nbsp;&nbsp; Spouse A pretax (401k + IRA) | "
@@ -133,20 +141,27 @@ def build_action_report(
     md.append("")
     md.append("| Lever | Recommended | Currently |")
     md.append("|---|---:|---:|")
+    # The optimizer's three decision variables are the two Roth-401(k)
+    # splits and the conversion target bracket. The total deferral
+    # percentages and withdrawal strategy aren't searched over today, so
+    # we only show them when they actually differ from the baseline
+    # (e.g. a hand-tuned scenario or a future expanded decision space).
+    if w_inputs.spouse_a_total_contrib_pct != inputs.spouse_a_total_contrib_pct:
+        md.append(
+            f"| Spouse A 401(k) deferral | {w_inputs.spouse_a_total_contrib_pct:.0%} of salary "
+            f"| {inputs.spouse_a_total_contrib_pct:.0%} |"
+        )
     md.append(
-        f"| Spouse A 401(k) deferral | {w_inputs.spouse_a_total_contrib_pct:.0%} of salary "
-        f"| {inputs.spouse_a_total_contrib_pct:.0%} |"
-    )
-    md.append(
-        f"| &nbsp;&nbsp; ↳ Roth share of that deferral | {w_inputs.spouse_a_roth_401k_pct:.0%} "
+        f"| Spouse A Roth share of deferral | {w_inputs.spouse_a_roth_401k_pct:.0%} "
         f"| {inputs.spouse_a_roth_401k_pct:.0%} |"
     )
+    if w_inputs.spouse_b_total_contrib_pct != inputs.spouse_b_total_contrib_pct:
+        md.append(
+            f"| Spouse B 401(k) deferral | {w_inputs.spouse_b_total_contrib_pct:.0%} of salary "
+            f"| {inputs.spouse_b_total_contrib_pct:.0%} |"
+        )
     md.append(
-        f"| Spouse B 401(k) deferral | {w_inputs.spouse_b_total_contrib_pct:.0%} of salary "
-        f"| {inputs.spouse_b_total_contrib_pct:.0%} |"
-    )
-    md.append(
-        f"| &nbsp;&nbsp; ↳ Roth share of that deferral | {w_inputs.spouse_b_roth_401k_pct:.0%} "
+        f"| Spouse B Roth share of deferral | {w_inputs.spouse_b_roth_401k_pct:.0%} "
         f"| {inputs.spouse_b_roth_401k_pct:.0%} |"
     )
     md.append(
@@ -154,10 +169,11 @@ def build_action_report(
         f"| {w_cfg.roth_conversion_target_bracket:.0%} "
         f"| {cfg.roth_conversion_target_bracket:.0%} |"
     )
-    md.append(
-        f"| Withdrawal strategy in retirement | `{w_cfg.withdrawal_strategy}` "
-        f"| `{cfg.withdrawal_strategy}` |"
-    )
+    if w_cfg.withdrawal_strategy != cfg.withdrawal_strategy:
+        md.append(
+            f"| Withdrawal strategy in retirement | `{w_cfg.withdrawal_strategy}` "
+            f"| `{cfg.withdrawal_strategy}` |"
+        )
     md.append("")
 
     # ---- 3. Expected outcomes ---------------------------------------------

@@ -70,13 +70,22 @@ class CurrentIncome:
 
 @dataclass
 class CurrentContrib:
-    spouse_a_pct: float = 0.08
-    spouse_b_pct: float = 0.06
-    spouse_a_roth_pct: float = 0.0
-    spouse_b_roth_pct: float = 0.0
+    """Household contribution targets that aren't already on `Inputs` itself.
+
+    The "main" 401(k) deferral percentages live on `Inputs` directly
+    (`spouse_a_total_contrib_pct`, `spouse_a_roth_401k_pct`, ditto B)
+    because they're optimizer decision variables. This dataclass is
+    the home for the household contribution choices that aren't
+    optimized over.
+
+    Today that's just `hsa_family` (annual HSA family-coverage target,
+    capped at the IRS limit at runtime). The simulator pre-tax-deducts
+    this from wages and adds it to the HSA balance during working
+    years; once both spouses hit Medicare eligibility (65) it's
+    suppressed automatically.
+    """
+
     hsa_family: float = 8_550.0
-    std_deduction: float = 32_200.0
-    baseline_tax: float = 0.0
 
 
 @dataclass

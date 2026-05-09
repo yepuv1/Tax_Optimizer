@@ -8,6 +8,8 @@ combined income line.
 
 from __future__ import annotations
 
+from typing import Any
+
 from .config import Config
 from .state import State
 from .tax.federal import amount_to_fill_bracket, federal_tax
@@ -205,3 +207,98 @@ def withdraw_for_need(
         "roth": roth_w,
         "taxable": taxable_w,
     }
+
+
+def cover_deficit(
+    deficit: float,
+    state: State,
+    base_kwargs: dict[str, Any],
+    basis_frac: float,
+    *,
+    pretax_a_already: float = 0.0,
+    pretax_b_already: float = 0.0,
+    taxable_already: float = 0.0,
+    roth_already: float = 0.0,
+    regime: TaxRegime,
+    filing_status: str,
+) -> tuple[dict[str, float], float]:
+    """Pull `deficit` net dollars from accounts in tax-efficient order.
+
+    Cascades through taxable -> roth -> pretax (per-spouse pro-rata).
+    Each step grosses up for the appropriate tax (LTCG on the taxable
+    gain portion, ordinary on pretax). Roth is treated as fully tax-free
+    (we deliberately don't model the 5-year clock here -- that's a
+    documented blind spot).
+
+    `*_already` is the gross already withdrawn from each bucket this
+    year (so room calculations stay correct). `base_kwargs` already
+    reflects those prior withdrawals' AGI contributions.
+
+    Returns ``(extra_withdrawals, unfunded)`` where ``extra_withdrawals``
+    has the same shape as ``withdraw_for_need``'s output and
+    ``unfunded`` is dollars still un-met after exhausting every bucket.
+    """
+    out = {
+        "pretax_a": 0.0,
+        "pretax_b": 0.0,
+        "pretax": 0.0,
+        "roth": 0.0,
+        "taxable": 0.0,
+    }
+    if deficit <= 0:
+        return out, 0.0
+
+    kw = dict(base_kwargs)
+
+    # 1. Taxable: realize gains at LTCG rate. Solver returns the gross
+    # withdrawal needed to net the (capped) target.
+    taxable_room = max(0.0, state.taxable - taxable_already)
+    if deficit > 0 and taxable_room > 0:
+        target = min(deficit, taxable_room)
+        tw = min(
+            _solve_taxable_for_net(
+                target, kw, basis_frac, regime=regime, filing_status=filing_status
+            ),
+            taxable_room,
+        )
+        if tw > 0:
+            base_tax = federal_tax(regime=regime, filing_status=filing_status, **kw)["tax"]
+            kw["ltcg"] = kw.get("ltcg", 0.0) + tw * (1 - basis_frac)
+            new_tax = federal_tax(regime=regime, filing_status=filing_status, **kw)["tax"]
+            net_produced = tw - max(0.0, new_tax - base_tax)
+            out["taxable"] += tw
+            deficit = max(0.0, deficit - net_produced)
+
+    # 2. Roth: tax-free (blind spot: 5-year rule on conversions ignored).
+    roth_room = max(0.0, state.roth - roth_already)
+    if deficit > 0 and roth_room > 0:
+        rw = min(deficit, roth_room)
+        if rw > 0:
+            out["roth"] += rw
+            deficit = max(0.0, deficit - rw)
+
+    # 3. Pretax: gross up for marginal ordinary rate; split pro-rata.
+    pretax_a_room = max(0.0, state.spouse_a_pretax - pretax_a_already)
+    pretax_b_room = max(0.0, state.spouse_b_pretax - pretax_b_already)
+    pretax_room = pretax_a_room + pretax_b_room
+    if deficit > 0 and pretax_room > 0:
+        gross = min(
+            _solve_pretax_for_net(
+                deficit, kw, regime=regime, filing_status=filing_status
+            ),
+            pretax_room,
+        )
+        if gross > 0:
+            a_share = pretax_a_room / pretax_room if pretax_room > 0 else 0.0
+            ax = min(gross * a_share, pretax_a_room)
+            bx = min(gross - ax, pretax_b_room)
+            out["pretax_a"] += ax
+            out["pretax_b"] += bx
+            out["pretax"] = out["pretax_a"] + out["pretax_b"]
+            base_tax = federal_tax(regime=regime, filing_status=filing_status, **kw)["tax"]
+            kw["pretax_withdrawal"] = kw.get("pretax_withdrawal", 0.0) + gross
+            new_tax = federal_tax(regime=regime, filing_status=filing_status, **kw)["tax"]
+            net_produced = gross - max(0.0, new_tax - base_tax)
+            deficit = max(0.0, deficit - net_produced)
+
+    return out, max(0.0, deficit)

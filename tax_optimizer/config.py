@@ -79,6 +79,25 @@ class Config:
     annual_expenses_today: float = 85_000.0  # overridden by `spending` if set
 
     # ------------------------------------------------------------------
+    # Taxable-account yield model
+    # ------------------------------------------------------------------
+    # Dividends and interest produced by the taxable brokerage every
+    # year (in addition to realized gains on withdrawals). These flow
+    # into AGI / NIIT / IRMAA / SS-provisional income whether or not a
+    # spouse is still working, so post-retirement portfolios still feed
+    # the tax line. Yields are applied to the year-start `state.taxable`
+    # balance, allocated to equity (qualified-dividend) vs bond
+    # (ordinary-interest) using `asset_location.taxable`.
+    #
+    # Defaults reflect a roughly-2024 broad-market portfolio: ~1.6%
+    # qualified dividend yield on equities, ~3.5% interest on bonds.
+    # Setting either to 0.0 reverts to the v1 behavior of "the taxable
+    # account is invisible to AGI between withdrawals" (and any
+    # `taxable_drag` you've left in place will fully model friction).
+    taxable_equity_div_yield: float = 0.016
+    taxable_bond_interest_yield: float = 0.035
+
+    # ------------------------------------------------------------------
     # New v2 modular types
     # ------------------------------------------------------------------
     tax_regime: TaxRegime = TCJA_EXTENDED

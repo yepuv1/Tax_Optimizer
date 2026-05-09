@@ -87,9 +87,22 @@ class MonteCarloResult:
 
 
 def _ruin_year_offset(df: pd.DataFrame) -> int:
-    """First year_offset where liquid < this year's spending need; -1 if none."""
+    """First year_offset where the plan failed to fund the year.
+
+    A path is "ruined" the first year either:
+      (a) `unfunded` > 0 -- the deficit-cascade exhausted every bucket
+          and a genuine cash gap remained, OR
+      (b) liquid < spending_need -- the heuristic that pre-existed the
+          unfunded tracking; kept as a defense-in-depth check for paths
+          that ran clean cascades but ended on fumes.
+    """
+    if "unfunded" in df.columns:
+        bad_unfunded = (df["unfunded"] > 0).to_numpy()
+    else:  # pragma: no cover - back-compat for frames without the column
+        bad_unfunded = np.zeros(len(df), dtype=bool)
     liquid = df["pretax_balance"] + df["roth_balance"] + df["taxable_balance"]
-    bad = (liquid < df["spending_need"]).to_numpy()
+    bad_liquid = (liquid < df["spending_need"]).to_numpy()
+    bad = bad_unfunded | bad_liquid
     if not bad.any():
         return -1
     return int(np.argmax(bad))

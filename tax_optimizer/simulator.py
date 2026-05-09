@@ -19,6 +19,7 @@ import pandas as pd
 from .config import Config
 from .conversion import planned_roth_conversion
 from .inputs import Inputs
+from .limits import elective_deferral_cap, hsa_family_cap
 from .pension import (
     PENSION_INTEREST,
     pension_annual_credit,
@@ -28,7 +29,7 @@ from .rmd import rmd_amount
 from .state import State, initial_state
 from .tax.federal import federal_tax
 from .tax.irmaa import MEDICARE_ELIGIBLE_AGE, irmaa_annual_surcharge
-from .withdrawals import withdraw_for_need
+from .withdrawals import cover_deficit, withdraw_for_need
 
 
 def simulate(
@@ -90,12 +91,18 @@ def simulate(
         b_working = alive_b and b_age < inputs.spouse_b_retire_age
 
         # ---- Contributions (only while alive AND working) ----
-        a_total_contrib = (
+        # IRS-cap each spouse's elective deferral (with age-50+ catch-up).
+        # Without this guard, a user setting `spouse_a_total_contrib_pct
+        # = 0.30` on a $300k salary would silently route $90k into a
+        # vehicle whose real-world cap is ~$31k.
+        a_target = (
             spouse_a_salary * inputs.spouse_a_total_contrib_pct if a_working else 0.0
         )
-        b_total_contrib = (
+        b_target = (
             spouse_b_salary * inputs.spouse_b_total_contrib_pct if b_working else 0.0
         )
+        a_total_contrib = min(a_target, elective_deferral_cap(a_age)) if a_working else 0.0
+        b_total_contrib = min(b_target, elective_deferral_cap(b_age)) if b_working else 0.0
         a_pretax_contrib = a_total_contrib * (1 - inputs.spouse_a_roth_401k_pct)
         a_roth_contrib = a_total_contrib * inputs.spouse_a_roth_401k_pct
         b_pretax_contrib = b_total_contrib * (1 - inputs.spouse_b_roth_401k_pct)
@@ -105,11 +112,20 @@ def simulate(
         state.spouse_b_pretax += b_pretax_contrib
         state.roth += a_roth_contrib + b_roth_contrib
 
+        # HSA family contribution: capped at IRS family limit + 55+
+        # catch-up, only valid while at least one spouse works AND is
+        # Medicare-ineligible. Pre-tax: reduces wages_box1 below.
+        hsa_cap = hsa_family_cap(a_age, b_age, either_working=(a_working or b_working))
+        hsa_contrib = min(max(0.0, inputs.contrib.hsa_family), hsa_cap)
+        state.hsa += hsa_contrib
+
         # ---- Income items ----
         wages = (spouse_a_salary + spouse_a_bonus if a_working else 0.0) + (
             spouse_b_salary if b_working else 0.0
         )
-        wages_box1 = wages - a_pretax_contrib - b_pretax_contrib
+        # HSA contributions are pre-tax (Box 1 wage reducer alongside
+        # traditional 401(k) deferrals).
+        wages_box1 = wages - a_pretax_contrib - b_pretax_contrib - hsa_contrib
 
         if a_age == inputs.pension.start_age and state.pension_annuity == 0.0 and alive_a:
             scale = state.pension_balance / max(test_balance, 1.0)
@@ -136,9 +152,29 @@ def simulate(
                 bigger = max(inputs.ss.monthly_spouse_a, inputs.ss.monthly_spouse_b)
                 ssn_income = bigger * 12
 
-        interest_inc = inputs.income.interest if a_working else 0.0
-        ltcg_inc = inputs.income.capital_gains if a_working else 0.0
-        qdiv_inc = inputs.income.dividends if a_working else 0.0
+        # The "extra" non-portfolio income items (savings interest, a
+        # one-off cap gain from a side hustle, an employer dividend on
+        # ESPP shares, etc.) live on `inputs.income.*` and only apply
+        # while at least one spouse is still working. Once both retire,
+        # those streams stop -- but the taxable brokerage keeps
+        # producing dividends and interest forever. That portfolio
+        # yield is computed below from the year-start balance.
+        extra_interest = inputs.income.interest if a_working else 0.0
+        extra_ltcg = inputs.income.capital_gains if a_working else 0.0
+        extra_qdiv = inputs.income.dividends if a_working else 0.0
+
+        # Portfolio yield from the taxable brokerage. Applies in every
+        # year (working OR retired), proportional to year-start balance
+        # and split via asset_location. This is what makes provisional
+        # income / NIIT / IRMAA actually track post-retirement reality.
+        taxable_eq_balance = max(0.0, state.taxable) * asset_loc.taxable.equity_pct
+        taxable_bd_balance = max(0.0, state.taxable) * asset_loc.taxable.bond_pct
+        portfolio_qdiv = taxable_eq_balance * cfg.taxable_equity_div_yield
+        portfolio_interest = taxable_bd_balance * cfg.taxable_bond_interest_yield
+
+        interest_inc = extra_interest + portfolio_interest
+        qdiv_inc = extra_qdiv + portfolio_qdiv
+        ltcg_inc = extra_ltcg
 
         base_kwargs = dict(
             wages=wages_box1,
@@ -183,6 +219,22 @@ def simulate(
             inflated = event.amount_today * (1 + spending.inflation) ** year_offset
             net_need += inflated
             lump_total += inflated
+
+        # ---- HSA tax-free pay-down of qualified medical expense ----
+        # The LTC shock is the only explicit medical-expense line in
+        # the model; HSA dollars are spent against it first (the whole
+        # point of the triple-tax-advantaged shelter). Net_need drops
+        # by the HSA draw, taxes on it stay zero (no AGI hit).
+        ltc_today = 0.0
+        if spending.ltc_shock and years_until_horizon < spending.ltc_shock.years:
+            ltc_today = (
+                spending.ltc_shock.annual_cost_today
+                * (1 + spending.inflation) ** year_offset
+            )
+        hsa_withdrawal = min(state.hsa, ltc_today) if ltc_today > 0 else 0.0
+        if hsa_withdrawal > 0:
+            state.hsa = max(0.0, state.hsa - hsa_withdrawal)
+            net_need = max(0.0, net_need - hsa_withdrawal)
 
         # ---- Live cost-basis fraction ----
         current_basis_frac = (
@@ -239,28 +291,82 @@ def simulate(
         )
 
         gross_cash_in = withdraws["pretax"] + withdraws["roth"] + withdraws["taxable"]
-        if not (a_working or b_working):
-            total_after_tax_cash = (
-                pension_income + ssn_income + gross_cash_in - federal - irmaa_cost
+
+        # Cash actually flowing into the household this year (extra
+        # interest / div / cap-gains on `inputs.income.*` are real cash
+        # in working years; portfolio dividends/interest above are
+        # *notional* -- already reinvested in the taxable balance via
+        # market returns, so they are *not* added to cash_inflow even
+        # though they hit the tax line).
+        if a_working or b_working:
+            cash_inflow = (
+                wages_box1
+                + extra_interest + extra_qdiv + extra_ltcg
+                + gross_cash_in
             )
-            surplus = total_after_tax_cash - net_need
-            if surplus > 0:
-                state.taxable += surplus
-                state.cumulative_basis += surplus
-            elif surplus < 0 and state.taxable > 0:
-                draw = min(-surplus, state.taxable)
-                state.taxable -= draw
-                state.cumulative_basis = max(
-                    state.cumulative_basis - draw * current_basis_frac, 0.0
-                )
         else:
-            after_tax_wages = (
-                wages_box1 + interest_inc + qdiv_inc + ltcg_inc - federal - irmaa_cost
+            cash_inflow = pension_income + ssn_income + gross_cash_in
+
+        delta = cash_inflow - federal - irmaa_cost - net_need
+        unfunded = 0.0
+
+        if delta > 0:
+            # Surplus: lands in taxable as new basis.
+            state.taxable += delta
+            state.cumulative_basis += delta
+        elif delta < 0:
+            # Deficit (lump-event shortfall, conversion-tax shortfall,
+            # gap-year tax overrun, ...). Cascade through tax-efficient
+            # buckets and gross up properly. Tracks any genuinely
+            # unfunded gap so monte-carlo can see it.
+            extra, unfunded = cover_deficit(
+                deficit=-delta,
+                state=state,
+                base_kwargs=base_kwargs,
+                basis_frac=current_basis_frac,
+                pretax_a_already=withdraws["pretax_a"],
+                pretax_b_already=withdraws["pretax_b"],
+                taxable_already=withdraws["taxable"],
+                roth_already=withdraws["roth"],
+                regime=regime,
+                filing_status=filing_status,
             )
-            net_savings = after_tax_wages - net_need
-            if net_savings > 0:
-                state.taxable += net_savings
-                state.cumulative_basis += net_savings
+            if extra["taxable"] > 0:
+                state.taxable = max(0.0, state.taxable - extra["taxable"])
+                state.cumulative_basis = max(
+                    state.cumulative_basis - extra["taxable"] * current_basis_frac, 0.0
+                )
+                final_kwargs["ltcg"] = (
+                    final_kwargs.get("ltcg", 0.0)
+                    + extra["taxable"] * (1 - current_basis_frac)
+                )
+                withdraws["taxable"] += extra["taxable"]
+            if extra["roth"] > 0:
+                state.roth = max(0.0, state.roth - extra["roth"])
+                withdraws["roth"] += extra["roth"]
+            if extra["pretax"] > 0:
+                state.spouse_a_pretax = max(0.0, state.spouse_a_pretax - extra["pretax_a"])
+                state.spouse_b_pretax = max(0.0, state.spouse_b_pretax - extra["pretax_b"])
+                final_kwargs["pretax_withdrawal"] = (
+                    final_kwargs.get("pretax_withdrawal", 0.0) + extra["pretax"]
+                )
+                withdraws["pretax_a"] += extra["pretax_a"]
+                withdraws["pretax_b"] += extra["pretax_b"]
+                withdraws["pretax"] = withdraws["pretax_a"] + withdraws["pretax_b"]
+
+            # Recompute federal / IRMAA against the post-cascade kwargs
+            # so the recorded numbers reflect the additional draws.
+            if extra["pretax"] > 0 or extra["taxable"] > 0:
+                tax_result = federal_tax(
+                    regime=regime, filing_status=filing_status, **final_kwargs
+                )
+                federal = tax_result["tax"]
+                irmaa = irmaa_annual_surcharge(
+                    tax_result["agi"], n_medicare,
+                    regime=regime, filing_status=filing_status,
+                )
+                irmaa_cost = irmaa["total"]
+                irmaa_tier = irmaa["tier"]
 
         # ---- Growth via MarketModel + AssetLocation ----
         eq_r, bd_r = market.returns(year_offset)
@@ -312,6 +418,11 @@ def simulate(
                 "irmaa": irmaa_cost,
                 "irmaa_tier": irmaa_tier,
                 "spending_need": net_need,
+                "unfunded": unfunded,
+                "hsa_contrib": hsa_contrib,
+                "hsa_withdrawal": hsa_withdrawal,
+                "elective_deferral_a": a_total_contrib,
+                "elective_deferral_b": b_total_contrib,
                 "equity_return": eq_r,
                 "bond_return": bd_r,
                 "pretax_balance": state.spouse_a_pretax + state.spouse_b_pretax,

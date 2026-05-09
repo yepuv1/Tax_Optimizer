@@ -199,7 +199,6 @@ class TestSimulateExampleScenario:
     @pytest.mark.parametrize(
         "scenario_path",
         [
-            Path("scenarios/example.json"),
             Path("scenarios/example01.json"),
             Path("scenarios/example02.json"),
         ],

@@ -17,10 +17,19 @@ from .monte_carlo import MonteCarloResult
 
 
 def plot_balance_paths(results: dict, *, ax=None, top_n: int = 4):
+    """Plot liquid balance per strategy. `results` is `dict[str, StrategyResult]`.
+
+    Tolerates the old `(cfg, df, summary)` tuple shape too so notebooks
+    that still cache the legacy form keep rendering.
+    """
     if ax is None:
         fig, ax = plt.subplots(figsize=(10, 5))
     series = []
-    for name, (_cfg, df, _sum) in results.items():
+    for name, val in results.items():
+        if hasattr(val, "df"):
+            df = val.df
+        else:  # legacy 3-tuple shape (cfg, df, summary)
+            _cfg, df, _sum = val
         liquid = df["pretax_balance"] + df["roth_balance"] + df["taxable_balance"]
         series.append((name, df["spouse_a_age"].to_numpy(), liquid.to_numpy()))
     series = series[:top_n]
