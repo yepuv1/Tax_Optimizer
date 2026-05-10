@@ -115,11 +115,38 @@ class DeterministicModel:
 
 @dataclass
 class LognormalModel:
-    """Independent yearly draws.
+    """Independent yearly draws from a bivariate normal.
 
     Defaults loosely match 1928-2023 trailing US data:
       equity_mu = 9.6%, equity_sigma = 19.5%   (~S&P 500 total return)
       bond_mu   = 4.6%, bond_sigma   = 7.7%   (10y Treasury total return)
+
+    The conservative ``equity_mu`` / ``bond_mu`` defaults shipped here
+    (7% / 4%) are *forward-looking* and bake in roughly today's
+    valuation regime. Override via ``CMA_PRESETS`` if you'd rather
+    pin to a specific manager's published assumptions.
+
+    Two enhancements over a pure univariate IID normal:
+
+      * **`equity_bond_corr`** — equity-bond correlation. Long-run
+        US is +0.05 to +0.15 with sharp regime variation (negative
+        2000-2020, positive 2022-2024). Treating the two as
+        independent, like vanilla Monte Carlo retirement tools do,
+        understates tail co-movement during normal regimes. Default
+        +0.10 is a sensible IID compromise; use ``BootstrapModel``
+        or ``HistoricalSequenceModel`` if you need regime-aware
+        behavior.
+
+      * **`cape_today`** — Shiller-CAPE-aware return scaling.
+        Empirically, starting CAPE explains ~40% of subsequent 10y
+        equity-return variance (Shiller; Pfau 2012; ERN's CAPE-based
+        SWR work). Setting `cape_today` scales `equity_mu` by
+        `cape_long_run / cape_today`, which mechanically embeds the
+        "starting-yield approximation": when CAPE is 2x the long-run
+        average, expected forward equity return is roughly halved.
+        Vol is left untouched (volatility doesn't scale with
+        valuation in the same way; the tail behavior is similar).
+        Set to ``None`` (default) to disable.
     """
 
     equity_mu: float = 0.07
@@ -127,16 +154,46 @@ class LognormalModel:
     bond_mu: float = 0.04
     bond_sigma: float = 0.06
 
+    equity_bond_corr: float = 0.10
+
+    cape_today: float | None = None
+    cape_long_run: float = 16.5  # 1881-2023 mean Shiller CAPE
+
     def __post_init__(self) -> None:
         self._equity_path: np.ndarray | None = None
         self._bond_path: np.ndarray | None = None
+        if not (-1.0 <= self.equity_bond_corr <= 1.0):
+            raise ValueError(
+                f"equity_bond_corr must be in [-1, 1], got {self.equity_bond_corr!r}"
+            )
+
+    def effective_equity_mu(self) -> float:
+        """`equity_mu` after CAPE adjustment, or the raw value if
+        `cape_today` is unset. Made public so callers (tests,
+        diagnostics, the report writer) can introspect the actual
+        expected return the simulator will use."""
+        if self.cape_today is None or self.cape_today <= 0:
+            return self.equity_mu
+        return self.equity_mu * (self.cape_long_run / self.cape_today)
 
     def begin_path(self, n_years: int, rng: np.random.Generator) -> None:
-        # Sample arithmetic returns directly from a normal (the lognormal
-        # naming is conventional but in practice a normal on returns is
-        # what most planners use for one-year horizons).
-        self._equity_path = rng.normal(self.equity_mu, self.equity_sigma, size=n_years)
-        self._bond_path = rng.normal(self.bond_mu, self.bond_sigma, size=n_years)
+        # Sample arithmetic returns directly from a bivariate normal.
+        # The lognormal naming is conventional but in practice a
+        # normal on returns is what most planners use for one-year
+        # horizons, and the multivariate form lets us encode the
+        # equity-bond covariance without changing the calling shape.
+        mu_eq = self.effective_equity_mu()
+        mean = np.array([mu_eq, self.bond_mu])
+        cov_eb = self.equity_bond_corr * self.equity_sigma * self.bond_sigma
+        cov = np.array(
+            [
+                [self.equity_sigma ** 2, cov_eb],
+                [cov_eb, self.bond_sigma ** 2],
+            ]
+        )
+        draws = rng.multivariate_normal(mean, cov, size=n_years)
+        self._equity_path = draws[:, 0]
+        self._bond_path = draws[:, 1]
 
     def returns(self, year_offset: int) -> tuple[float, float]:
         assert self._equity_path is not None and self._bond_path is not None
@@ -211,3 +268,155 @@ class BootstrapModel:
     def returns(self, year_offset: int) -> tuple[float, float]:
         assert self._equity_path is not None and self._bond_path is not None
         return float(self._equity_path[year_offset]), float(self._bond_path[year_offset])
+
+
+# ---------------------------------------------------------------------------
+# 4. Historical sequence replay (Bengen / FIRECalc style)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class HistoricalSequenceModel:
+    """Replay a single contiguous historical N-year sequence per path.
+
+    Distinct from `BootstrapModel`: bootstrap stitches together
+    multiple short blocks (default 5y) sampled with replacement,
+    which gives effectively unlimited synthetic paths but breaks up
+    real multi-year regimes. This model picks **one contiguous slice**
+    of the historical record per path — exactly the "Bengen 1994"
+    safe-withdrawal-rate methodology and the FIRECalc / cFIREsim
+    default. It preserves the *exact* sequence-of-returns risk of
+    real history (1929-58, 1966-95, 2000-29, etc.).
+
+    For a 30-year horizon and 96 years of data (1928-2023), this
+    yields 67 distinct possible paths. With 1000 Monte Carlo trials,
+    each historical sequence gets sampled ~15 times on average —
+    enough for stable percentiles, but the resulting distribution
+    should be read as "what would have happened if history rhymes"
+    rather than "the full distribution of futures."
+
+    Use case: a sanity check against the bootstrap and lognormal
+    models. If terminal-NW percentiles diverge meaningfully across
+    the three, you've learned something about which assumption is
+    driving your answer.
+    """
+
+    equity_history: tuple[float, ...] = _HIST_EQUITY
+    bond_history: tuple[float, ...] = _HIST_BOND
+
+    def __post_init__(self) -> None:
+        self._equity_path: np.ndarray | None = None
+        self._bond_path: np.ndarray | None = None
+        if len(self.equity_history) != len(self.bond_history):
+            raise ValueError(
+                "equity_history and bond_history must have the same length"
+            )
+
+    def begin_path(self, n_years: int, rng: np.random.Generator) -> None:
+        n_hist = len(self.equity_history)
+        if n_years > n_hist:
+            raise ValueError(
+                f"Horizon {n_years}y exceeds available history {n_hist}y. "
+                f"Use BootstrapModel for longer horizons or extend the history."
+            )
+        start = int(rng.integers(0, n_hist - n_years + 1))
+        eq_hist = np.asarray(self.equity_history)
+        bd_hist = np.asarray(self.bond_history)
+        self._equity_path = eq_hist[start : start + n_years]
+        self._bond_path = bd_hist[start : start + n_years]
+
+    def returns(self, year_offset: int) -> tuple[float, float]:
+        assert self._equity_path is not None and self._bond_path is not None
+        return float(self._equity_path[year_offset]), float(self._bond_path[year_offset])
+
+
+# ---------------------------------------------------------------------------
+# Capital Markets Assumptions (CMA) presets
+# ---------------------------------------------------------------------------
+#
+# Long-run forward-looking expected returns and volatilities published
+# by major asset managers and consortiums. Numbers below reflect roughly
+# 2024-2025 vintage assumptions and should be refreshed annually as new
+# CMAs come out. They're **forward-looking** (not historical) and bake
+# in current valuation levels, so they're often considerably below the
+# 1928-2023 historical means.
+#
+# All figures are annualized arithmetic nominal returns. The
+# `LognormalModel` samples normal returns directly, not log-returns,
+# so these numbers can be plugged in as-is.
+#
+# Sources:
+#   * vanguard_2025          — Vanguard Economic & Market Outlook 2025
+#                              (Vanguard Capital Markets Model)
+#   * jpm_ltcma_2025         — J.P. Morgan Long-Term Capital Market
+#                              Assumptions 2025
+#   * horizon_2025           — Horizon Actuarial Survey of CMAs 2025
+#                              (consensus across 40+ asset managers)
+#   * historical_1928_2023   — Damodaran annual returns (matches the
+#                              `BootstrapModel` default sample)
+#   * historical_1985_2023   — Post-Volcker era; falling rates regime,
+#                              equity-bond correlation went meaningfully
+#                              negative across most of this window
+
+CMA_PRESETS: dict[str, dict[str, float]] = {
+    "vanguard_2025": {
+        "equity_mu": 0.055,
+        "equity_sigma": 0.175,
+        "bond_mu": 0.048,
+        "bond_sigma": 0.060,
+        "equity_bond_corr": 0.15,
+    },
+    "jpm_ltcma_2025": {
+        "equity_mu": 0.072,
+        "equity_sigma": 0.165,
+        "bond_mu": 0.046,
+        "bond_sigma": 0.055,
+        "equity_bond_corr": 0.12,
+    },
+    "horizon_2025": {
+        "equity_mu": 0.072,
+        "equity_sigma": 0.170,
+        "bond_mu": 0.044,
+        "bond_sigma": 0.055,
+        "equity_bond_corr": 0.10,
+    },
+    "historical_1928_2023": {
+        "equity_mu": 0.096,
+        "equity_sigma": 0.195,
+        "bond_mu": 0.046,
+        "bond_sigma": 0.077,
+        "equity_bond_corr": 0.05,
+    },
+    "historical_1985_2023": {
+        "equity_mu": 0.108,
+        "equity_sigma": 0.165,
+        "bond_mu": 0.063,
+        "bond_sigma": 0.075,
+        "equity_bond_corr": -0.05,
+    },
+}
+
+
+def lognormal_from_cma(name: str, **overrides) -> LognormalModel:
+    """Build a `LognormalModel` from a named CMA preset, with optional
+    per-parameter overrides.
+
+    Examples::
+
+        # Vanilla preset
+        m = lognormal_from_cma("vanguard_2025")
+
+        # Same preset, but layer CAPE-conditioning on top
+        m = lognormal_from_cma("vanguard_2025", cape_today=33.0)
+
+        # JPMorgan numbers but bump bond vol for a stress test
+        m = lognormal_from_cma("jpm_ltcma_2025", bond_sigma=0.08)
+    """
+    if name not in CMA_PRESETS:
+        raise KeyError(
+            f"Unknown CMA preset {name!r}. "
+            f"Available: {sorted(CMA_PRESETS)}"
+        )
+    params = dict(CMA_PRESETS[name])
+    params.update(overrides)
+    return LognormalModel(**params)

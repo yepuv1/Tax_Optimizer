@@ -55,12 +55,15 @@ from typing import Any
 from .config import Config
 from .inputs import Inputs
 from .market import (
+    CMA_PRESETS,
     AssetLocation,
     AssetMix,
     BootstrapModel,
     DeterministicModel,
+    HistoricalSequenceModel,
     LognormalModel,
     MarketModel,
+    lognormal_from_cma,
 )
 from .mortality import Mortality
 from .spending import LongTermCareShock, LumpEvent, SpendingPhase, SpendingProfile
@@ -329,15 +332,22 @@ def _market_to_dict(m: MarketModel) -> dict[str, Any]:
     if isinstance(m, DeterministicModel):
         return {"kind": "deterministic", "equity": m.equity, "bond": m.bond}
     if isinstance(m, LognormalModel):
-        return {
+        out: dict[str, Any] = {
             "kind": "lognormal",
             "equity_mu": m.equity_mu,
             "equity_sigma": m.equity_sigma,
             "bond_mu": m.bond_mu,
             "bond_sigma": m.bond_sigma,
+            "equity_bond_corr": m.equity_bond_corr,
         }
+        if m.cape_today is not None:
+            out["cape_today"] = m.cape_today
+            out["cape_long_run"] = m.cape_long_run
+        return out
     if isinstance(m, BootstrapModel):
         return {"kind": "bootstrap", "block_size": m.block_size}
+    if isinstance(m, HistoricalSequenceModel):
+        return {"kind": "historical_sequence"}
     return {"kind": "custom", "repr": repr(m)}
 
 
@@ -470,6 +480,17 @@ def _coerce_mortality(v: Any, *, current: Mortality) -> Mortality:
     return replace(current, **v)
 
 
+_LOGNORMAL_FIELDS = {
+    "equity_mu",
+    "equity_sigma",
+    "bond_mu",
+    "bond_sigma",
+    "equity_bond_corr",
+    "cape_today",
+    "cape_long_run",
+}
+
+
 def _coerce_market(v: Any) -> MarketModel | None:
     if v is None:
         return None
@@ -479,15 +500,34 @@ def _coerce_market(v: Any) -> MarketModel | None:
         raise ScenarioError(f"'market' must be an object; got {type(v).__name__}.")
     kind = str(v.get("kind", "")).lower()
     params = {k: val for k, val in v.items() if k != "kind"}
+
+    # CMA preset shortcut: "cma": "vanguard_2025" picks a canned profile,
+    # any other lognormal-shaped keys override it. Implies kind="lognormal"
+    # if kind is unset.
+    cma = params.pop("cma", None)
+    if cma is not None:
+        if not isinstance(cma, str):
+            raise ScenarioError(
+                f"market.cma must be a string preset name; got {type(cma).__name__}."
+            )
+        if cma not in CMA_PRESETS:
+            raise ScenarioError(
+                f"Unknown CMA preset {cma!r}. "
+                f"Available: {sorted(CMA_PRESETS)}"
+            )
+        if kind in ("", "lognormal"):
+            _check_keys("market(lognormal+cma)", params, _LOGNORMAL_FIELDS)
+            return lognormal_from_cma(cma, **params)
+        raise ScenarioError(
+            f"market.cma is only valid with kind='lognormal' "
+            f"(or unset); got kind={kind!r}."
+        )
+
     if kind in ("", "deterministic"):
         _check_keys("market(deterministic)", params, {"equity", "bond"})
         return DeterministicModel(**params)
     if kind == "lognormal":
-        _check_keys(
-            "market(lognormal)",
-            params,
-            {"equity_mu", "equity_sigma", "bond_mu", "bond_sigma"},
-        )
+        _check_keys("market(lognormal)", params, _LOGNORMAL_FIELDS)
         return LognormalModel(**params)
     if kind == "bootstrap":
         _check_keys(
@@ -500,9 +540,20 @@ def _coerce_market(v: Any) -> MarketModel | None:
         if "bond_history" in params:
             params["bond_history"] = tuple(params["bond_history"])
         return BootstrapModel(**params)
+    if kind in ("historical_sequence", "historical"):
+        _check_keys(
+            "market(historical_sequence)",
+            params,
+            {"equity_history", "bond_history"},
+        )
+        if "equity_history" in params:
+            params["equity_history"] = tuple(params["equity_history"])
+        if "bond_history" in params:
+            params["bond_history"] = tuple(params["bond_history"])
+        return HistoricalSequenceModel(**params)
     raise ScenarioError(
         f"Unknown market kind {kind!r}. "
-        f"Valid: 'deterministic', 'lognormal', 'bootstrap'."
+        f"Valid: 'deterministic', 'lognormal', 'bootstrap', 'historical_sequence'."
     )
 
 

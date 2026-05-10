@@ -26,12 +26,15 @@ from .inputs import (
     StartingBalances,
 )
 from .market import (
+    CMA_PRESETS,
     AssetLocation,
     AssetMix,
     BootstrapModel,
     DeterministicModel,
+    HistoricalSequenceModel,
     LognormalModel,
     MarketModel,
+    lognormal_from_cma,
 )
 from .metrics import (
     lifetime_irmaa_npv,
@@ -76,6 +79,9 @@ __all__ = [
     "DeterministicModel",
     "LognormalModel",
     "BootstrapModel",
+    "HistoricalSequenceModel",
+    "CMA_PRESETS",
+    "lognormal_from_cma",
     "AssetMix",
     "AssetLocation",
     "Mortality",
