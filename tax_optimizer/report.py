@@ -19,6 +19,7 @@ import pandas as pd
 
 from .config import Config
 from .inputs import Inputs
+from .market import LognormalModel
 from .monte_carlo import MonteCarloResult
 from .results import StrategyResult
 
@@ -44,6 +45,205 @@ def _conversion_window(inputs: Inputs, cfg: Config) -> tuple[int, int]:
     start_age = max(inputs.spouse_a_retire_age, inputs.spouse_b_retire_age)
     end_age = cfg.rmd_start_age - 1
     return start_age, end_age
+
+
+def _lever_changes(
+    base_cfg: Config,
+    base_inputs: Inputs,
+    w_cfg: Config,
+    w_inputs: Inputs,
+) -> list[dict]:
+    """Return one dict per decision-vector axis whose value differs
+    between the user-supplied inputs and the optimizer-chosen plan.
+
+    Used by the TL;DR section so the reader can immediately see *what
+    the optimizer wants you to change*. Axes that match the baseline
+    are omitted entirely (no noise).
+    """
+    out: list[dict] = []
+    pct_pairs = [
+        ("Spouse A Roth-401(k) share", "spouse_a_roth_401k_pct", base_inputs, w_inputs),
+        ("Spouse B Roth-401(k) share", "spouse_b_roth_401k_pct", base_inputs, w_inputs),
+        ("Spouse A mega-backdoor share", "spouse_a_after_tax_401k_pct", base_inputs, w_inputs),
+        ("Spouse B mega-backdoor share", "spouse_b_after_tax_401k_pct", base_inputs, w_inputs),
+        ("Roth conversion target bracket", "roth_conversion_target_bracket", base_cfg, w_cfg),
+    ]
+    for label, attr, base_obj, w_obj in pct_pairs:
+        b = getattr(base_obj, attr, None)
+        a = getattr(w_obj, attr, None)
+        if b is None or a is None:
+            continue
+        if abs(float(a) - float(b)) < 1e-6:
+            continue
+        out.append({"label": label, "before": float(b), "after": float(a), "kind": "pct"})
+    age_pairs = [
+        ("Spouse A SS claim age", "start_age_a"),
+        ("Spouse B SS claim age", "start_age_b"),
+    ]
+    for label, attr in age_pairs:
+        b = getattr(base_inputs.ss, attr, None)
+        a = getattr(w_inputs.ss, attr, None)
+        if b is None or a is None or b == a:
+            continue
+        out.append({"label": label, "before": int(b), "after": int(a), "kind": "age"})
+    return out
+
+
+def _market_summary(cfg: Config) -> str:
+    """Short human description of `cfg.market`. For the parametric
+    lognormal model we also surface the equity/bond mu, sigma and
+    correlation so an advisor can sanity-check the assumptions."""
+    name = type(cfg.market).__name__
+    if isinstance(cfg.market, LognormalModel):
+        m = cfg.market
+        return (
+            f"{name} "
+            f"(equity μ={m.equity_mu:.1%}/σ={m.equity_sigma:.1%}, "
+            f"bond μ={m.bond_mu:.1%}/σ={m.bond_sigma:.1%}, "
+            f"ρ={m.equity_bond_corr:.2f})"
+        )
+    return name
+
+
+def _assumptions_block(cfg: Config, inputs: Inputs) -> list[str]:
+    """Return the markdown lines for the "Assumptions driving this
+    plan" subsection. Always renders the same shape so users learn
+    where to look for each knob."""
+    horizon = cfg.horizon_age - inputs.spouse_a_age_start + 1
+    out = ["### Assumptions driving this plan", ""]
+    out.append("| Assumption | Value |")
+    out.append("|---|---|")
+    out.append(
+        f"| Heir marginal tax rate (pretax / HSA bequest haircut) "
+        f"| {cfg.heir_marginal_rate:.0%} |"
+    )
+    out.append(f"| Inflation | {cfg.inflation:.1%}/yr |")
+    out.append(
+        f"| Nominal growth (deterministic baseline) | {cfg.nominal_growth_rate:.1%}/yr |"
+    )
+    out.append(f"| Market model | {_market_summary(cfg)} |")
+    if cfg.regime_change_year_offset is not None and cfg.regime_change_target is not None:
+        regime = (
+            f"`{cfg.tax_regime.name}` → `{cfg.regime_change_target.name}` "
+            f"in year {cfg.regime_change_year_offset}"
+        )
+    else:
+        regime = f"`{cfg.tax_regime.name}` (no scheduled change)"
+    out.append(f"| Federal tax regime | {regime} |")
+    out.append(f"| State tax regime | `{cfg.state_regime.name}` |")
+    out.append(
+        f"| Mortality | Spouse A: year {cfg.mortality.year_of_death_a}, "
+        f"Spouse B: year {cfg.mortality.year_of_death_b} (horizon = year {horizon}) |"
+    )
+    out.append(
+        f"| Step-up in basis at first death | "
+        f"{'on' if cfg.stepup_at_first_death else 'off'} |"
+    )
+    out.append(
+        f"| ACA premium tax credit | "
+        f"{'enabled' if cfg.aca_enabled else 'disabled'} |"
+    )
+    out.append(
+        f"| Pre-65 healthcare (today's $) | ${cfg.health_pre65_today:,.0f}/yr |"
+    )
+    out.append(
+        f"| Medicare base premium (today's $) | "
+        f"${cfg.medicare_base_b_d_premium:,.0f}/yr |"
+    )
+    out.append(f"| IRMAA MAGI lookback | {cfg.irmaa_lookback_years} year(s) |")
+    out.append("")
+    return out
+
+
+def _tldr_section(
+    winner: str,
+    results: dict[str, StrategyResult],
+    base_cfg: Config,
+    base_inputs: Inputs,
+    mc: MonteCarloResult | None,
+) -> list[str]:
+    """Render the headline verdict, lever-change summary, and key risk
+    metrics. The intent is that a reader who only reads the first 15
+    lines of the report still leaves with the right takeaways."""
+    w = results[winner]
+    w_sum = w.summary
+    base_sum = results["S0_baseline"].summary if "S0_baseline" in results else {}
+    out = ["## TL;DR", ""]
+
+    if base_sum:
+        delta = w_sum["terminal_after_tax"] - base_sum["terminal_after_tax"]
+        pct = (
+            (delta / base_sum["terminal_after_tax"] * 100)
+            if base_sum["terminal_after_tax"]
+            else 0.0
+        )
+        if delta > 0:
+            verdict = (
+                f"**Verdict:** `{winner}` beats `S0_baseline` by "
+                f"**${delta:,.0f}** ({pct:+.1f}%) in terminal after-tax NW."
+            )
+        elif delta < 0:
+            verdict = (
+                f"**Verdict:** `{winner}` lags `S0_baseline` by "
+                f"${abs(delta):,.0f} ({pct:+.1f}%) — your current setup "
+                f"already looks optimal."
+            )
+        else:
+            verdict = (
+                f"**Verdict:** `{winner}` matches `S0_baseline`; no "
+                f"actionable change found by the optimizer."
+            )
+        out.append(verdict)
+    else:
+        out.append(
+            f"**Winning strategy:** `{winner}` — terminal after-tax NW "
+            f"${w_sum['terminal_after_tax']:,.0f}."
+        )
+    out.append("")
+
+    changes = _lever_changes(base_cfg, base_inputs, w.cfg, w.inputs)
+    if changes:
+        out.append("**Levers the optimizer wants you to change:**")
+        for ch in changes:
+            if ch["kind"] == "pct":
+                out.append(
+                    f"- {ch['label']}: {ch['before']:.0%} → **{ch['after']:.0%}**"
+                )
+            else:
+                out.append(
+                    f"- {ch['label']}: {ch['before']} → **{ch['after']}**"
+                )
+    else:
+        out.append(
+            "_No lever changes recommended: your current inputs already "
+            "match the optimizer's choice on every decision axis._"
+        )
+    out.append("")
+
+    out.append("**Key risk readings:**")
+    if mc is not None:
+        s = mc.summary()
+        tag = "safe" if s["prob_success"] >= 0.9 else "**watch — below 90%**"
+        out.append(
+            f"- P(success) under {s['n_paths']} stochastic paths: "
+            f"**{s['prob_success']:.1%}** ({tag})"
+        )
+        out.append(f"- CVaR(10%) terminal NW: ${s['cvar_terminal_p10']:,.0f}")
+    out.append(f"- Peak federal marginal rate: **{w_sum['peak_marginal']:.0%}**")
+    tax_line = f"- Lifetime federal tax NPV: ${w_sum['lifetime_tax_npv']:,.0f}"
+    if base_sum:
+        d = w_sum["lifetime_tax_npv"] - base_sum["lifetime_tax_npv"]
+        if abs(d) >= 1:
+            tax_line += f" ({d:+,.0f} vs S0)"
+    out.append(tax_line)
+    irmaa_line = f"- Lifetime IRMAA NPV: ${w_sum['lifetime_irmaa_npv']:,.0f}"
+    if base_sum:
+        d = w_sum["lifetime_irmaa_npv"] - base_sum["lifetime_irmaa_npv"]
+        if abs(d) >= 1:
+            irmaa_line += f" ({d:+,.0f} vs S0)"
+    out.append(irmaa_line)
+    out.append("")
+    return out
 
 
 def build_action_report(
@@ -87,6 +287,8 @@ def build_action_report(
         md.append("")
         md.append(f"_Scenario file: `{scenario_path}`._")
     md.append("")
+
+    md.extend(_tldr_section(winner, results, cfg, inputs, mc))
 
     # ---- 1. Household snapshot --------------------------------------------
     md.append("## 1. Household snapshot")
@@ -151,6 +353,8 @@ def build_action_report(
         md.append(f"| Employer 401(k) match (A / B) | {a_match} / {b_match} |")
     md.append("")
 
+    md.extend(_assumptions_block(cfg, inputs))
+
     # ---- 2. Recommended plan ----------------------------------------------
     md.append("## 2. Recommended plan")
     md.append("")
@@ -196,48 +400,51 @@ def build_action_report(
     # ---- 3. Expected outcomes ---------------------------------------------
     md.append("## 3. Expected outcomes (deterministic, point-estimate)")
     md.append("")
-    md.append(
-        "_For terminal NW higher is better (↑); for tax / IRMAA lower is better (↓)._"
-    )
-    md.append("")
-    md.append("| Metric | Optimized | Baseline (S0) | Δ vs S0 | Direction |")
-    md.append("|---|---:|---:|---:|:---:|")
-    if base_sum:
-        for label, key, kind in [
-            ("Terminal after-tax NW", "terminal_after_tax", "money"),
-            ("Lifetime federal tax (NPV)", "lifetime_tax_npv", "money_neg"),
-            ("Lifetime IRMAA (NPV)", "lifetime_irmaa_npv", "money_neg"),
-        ]:
-            opt = w_sum[key]
-            bas = base_sum[key]
-            delta = opt - bas
-            sign = "+" if delta > 0 else ("−" if delta < 0 else "")
-            is_good = (delta > 0 and kind == "money") or (
-                delta < 0 and kind == "money_neg"
+    strategy_order = ["S0_baseline", "S1_all_roth", "S2_bracket_fill_22", "S3_optimizer"]
+    cols = [s for s in strategy_order if s in results]
+    extra = [s for s in results if s not in strategy_order]
+    cols.extend(extra)
+
+    if len(cols) > 1:
+        md.append(
+            "_Best value in each row is **bolded**. Higher is better for "
+            "terminal NW; lower is better for tax, IRMAA, peak marginal._"
+        )
+        md.append("")
+        header_cells = [c.replace("_", " ") for c in cols]
+        md.append("| Metric | " + " | ".join(header_cells) + " |")
+        md.append("|---|" + "---:|" * len(cols))
+
+        metric_specs = [
+            ("Terminal after-tax NW", "terminal_after_tax", "max", "${v:,.0f}"),
+            ("Lifetime federal tax (NPV)", "lifetime_tax_npv", "min", "${v:,.0f}"),
+            ("Lifetime IRMAA (NPV)", "lifetime_irmaa_npv", "min", "${v:,.0f}"),
+            ("Peak federal marginal rate", "peak_marginal", "min", "{v:.0%}"),
+            ("Years with IRMAA", "years_irmaa", "min", "{v:.0f}"),
+            ("Peak IRMAA tier", "peak_irmaa_tier", "min", "{v:.0f}"),
+        ]
+        for label, key, mode, fmt in metric_specs:
+            vals = [results[c].summary[key] for c in cols]
+            best_idx = (
+                max(range(len(vals)), key=lambda i: vals[i])
+                if mode == "max"
+                else min(range(len(vals)), key=lambda i: vals[i])
             )
-            arrow = "✅" if is_good else ("⚠️" if delta != 0 else "—")
-            md.append(
-                f"| {label} | ${opt:,.0f} | ${bas:,.0f} "
-                f"| {sign}${abs(delta):,.0f} | {arrow} |"
-            )
-        for label, key, fmt in [
-            ("Peak federal marginal rate", "peak_marginal", "{:.0%}"),
-            ("Years with IRMAA surcharge", "years_irmaa", "{:.0f}"),
-            ("Peak IRMAA tier", "peak_irmaa_tier", "{:.0f}"),
-        ]:
-            opt_v = w_sum[key]
-            bas_v = base_sum[key]
-            tag = "✅" if opt_v < bas_v else ("⚠️" if opt_v > bas_v else "—")
-            md.append(
-                f"| {label} | {fmt.format(opt_v)} | {fmt.format(bas_v)} | — | {tag} |"
-            )
+            tied = [i for i, v in enumerate(vals) if v == vals[best_idx]]
+            cells = []
+            for i, v in enumerate(vals):
+                text = fmt.format(v=v)
+                if i in tied and len(tied) < len(vals):
+                    text = f"**{text}**"
+                cells.append(text)
+            md.append(f"| {label} | " + " | ".join(cells) + " |")
     else:
         md.append(
-            f"| Terminal after-tax NW | ${w_sum['terminal_after_tax']:,.0f} | — | — | — |"
+            f"| Terminal after-tax NW | ${w_sum['terminal_after_tax']:,.0f} |"
         )
     md.append("")
     md.append(
-        f"_Peak federal marginal year: age **{peak['age']}**, "
+        f"_Peak federal marginal year (for `{winner}`): age **{peak['age']}**, "
         f"AGI ~${peak['agi']:,.0f}, marginal **{peak['marginal']:.0%}**._"
     )
     md.append("")
@@ -289,8 +496,17 @@ def build_action_report(
         param = row["param"]
         lo, hi = row["low_value"], row["high_value"]
         d_lo, d_hi = row["delta_low"], row["delta_high"]
-        better_dir = "higher" if d_hi > d_lo else "lower"
-        better_delta = max(d_hi, d_lo)
+        # Honest direction labelling: if neither side of the tested range
+        # improves on the baseline, say so. Otherwise pick the direction
+        # that yields a positive delta. (Previously this always said
+        # "higher" when delta_high == delta_low, producing misleading
+        # "+$0" recommendations for knobs already at their boundary.)
+        if d_hi <= 0 and d_lo <= 0:
+            direction_cell = "at boundary in tested range (—)"
+        elif d_hi >= d_lo:
+            direction_cell = f"higher (+${d_hi:,.0f})"
+        else:
+            direction_cell = f"lower (+${d_lo:,.0f})"
         if param.endswith("_pct") or "rate" in param or param == "inflation":
             rng = f"{lo:.0%} → {hi:.0%}"
         elif param.endswith("_age"):
@@ -298,8 +514,8 @@ def build_action_report(
         else:
             rng = f"${lo:,.0f} → ${hi:,.0f}"
         md.append(
-            f"| `{param}` | {rng} | {better_dir} "
-            f'(+${better_delta:,.0f}) | ${row["swing"]:,.0f} |'
+            f"| `{param}` | {rng} | {direction_cell} "
+            f'| ${row["swing"]:,.0f} |'
         )
     md.append("")
 
@@ -369,7 +585,17 @@ def build_action_report(
     md.append("|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 
     def _money(v: float | None) -> str:
-        return "—" if v is None or float(v) == 0.0 else f"${float(v):,.0f}"
+        # Use `round(...) == 0` instead of `== 0.0` so floats that are
+        # numerically near zero (e.g. 1e-9 from float arithmetic in the
+        # cascade) also render as `—`. Without this, the table shows
+        # confusing `$0` cells next to `—` cells for what are logically
+        # the same "nothing happened" outcome.
+        if v is None:
+            return "—"
+        f = float(v)
+        if round(f) == 0:
+            return "—"
+        return f"${f:,.0f}"
 
     retire_age = min(inputs.spouse_a_retire_age, inputs.spouse_b_retire_age)
     retire_rows = w_df[w_df["spouse_a_age"] >= retire_age]
