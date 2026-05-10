@@ -52,9 +52,20 @@ class TestSpouseADies:
         assert m.alive_b(50) is True
 
     def test_filing_status_flips_to_single(self) -> None:
+        # IRS year-of-death rule: the calendar year a spouse dies is
+        # still MFJ; the survivor only flips to single starting the
+        # following year.
         m = Mortality(year_of_death_a=20)
         assert m.filing_status(19) == "mfj"
-        assert m.filing_status(20) == "single"
+        assert m.filing_status(20) == "mfj"   # year of death — still MFJ
+        assert m.filing_status(21) == "single"
+
+    def test_is_year_of_death_helper(self) -> None:
+        m = Mortality(year_of_death_a=20, year_of_death_b=30)
+        assert m.is_year_of_death(20) is True
+        assert m.is_year_of_death(30) is True
+        assert m.is_year_of_death(19) is False
+        assert m.is_year_of_death(25) is False
 
     def test_survivor_label_b(self) -> None:
         m = Mortality(year_of_death_a=20)

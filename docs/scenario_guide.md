@@ -26,6 +26,12 @@ A field-by-field reference for `scenarios/*.json` files (the input format consum
 - [`config.taxable_equity_div_yield` / `taxable_bond_interest_yield` — explicit yield on taxable-account holdings](#configtaxable_equity_div_yield--taxable_bond_interest_yield--explicit-yield-on-taxable-account-holdings)
 - [`config.state_regime` — state income tax regime (CA / NY / IL / MA / stateless)](#configstate_regime--state-income-tax-regime-ca--ny--il--ma--stateless)
 - [`config.heir_marginal_rate` — bequest tax in terminal-NW objective](#configheir_marginal_rate--bequest-tax-in-terminal-nw-objective)
+- [`config.medicare_base_b_d_premium` — base Medicare Part B + Part D premium](#configmedicare_base_b_d_premium--base-medicare-part-b--part-d-premium-tier-c-b) *(Tier C)*
+- [`config.health_pre65_today` — pre-Medicare healthcare cost knob](#confighealth_pre65_today--pre-medicare-healthcare-cost-knob-tier-c-b) *(Tier C)*
+- [`config.irmaa_lookback_years` — IRMAA 2-year MAGI lookback](#configirmaa_lookback_years--irmaa-2-year-magi-lookback-tier-c-b) *(Tier C)*
+- [`config.aca_enabled` / `aca_benchmark_premium_per_adult` / `aca_max_contrib_pct` — ACA premium tax credit](#configaca_enabled--aca_benchmark_premium_per_adult--aca_max_contrib_pct--aca-premium-tax-credit-tier-c-b) *(Tier C)*
+- [`config.stepup_at_first_death` — community-property full step-up](#configstepup_at_first_death--community-property-full-step-up-tier-c-b) *(Tier C)*
+- [`config.optimize_ss_claim_age` — adds SS claim-age axes to the optimizer](#configoptimize_ss_claim_age--adds-ss-claim-age-axes-to-the-optimizer-tier-c-c) *(Tier C)*
 - [`inputs.ss` — Social Security claim age, FRA, and benefits](#inputsss--social-security-claim-age-fra-and-benefits)
 - [`inputs.pension` — pension cash balance and start age](#inputspension--pension-cash-balance-and-start-age)
 - [`inputs.spouse_*_employer_match_*` — employer 401(k) match](#inputsspouse__employer_match__--employer-401k-match)
@@ -375,6 +381,90 @@ Default `0.22`. The marginal rate the optimizer assumes heirs will pay on inheri
 Set higher (`0.28` – `0.35`) if your heirs are themselves high earners; set to `0.0` to recover the v1 behavior of treating $1 pretax = $1 Roth at horizon (which silently over-rewards "leave it pretax" plans). The exact intra-decade timing of the SECURE 10-year drawdown isn't modeled — the simulator applies a flat haircut on the terminal pretax + HSA balance.
 
 This knob only affects the **terminal-NW objective** (used by the optimizer, sensitivity, and Monte Carlo terminal stats). It does not change the simulated cash-flow path itself.
+
+---
+
+## `config.medicare_base_b_d_premium` — base Medicare Part B + Part D premium *(Tier C-B)*
+
+```json
+"config": { "medicare_base_b_d_premium": 2500 }
+```
+
+Combined Medicare Part B + Part D base premium per Medicare-enrolled spouse, in **today's dollars**. The simulator inflates it forward by `cfg.inflation` and bills it on every year either spouse is age ≥ 65 (separate from IRMAA). 2026 published Part B base ≈ $2,084/yr; a typical Part D plan adds ~$650/yr, landing in the $2.5–2.8k range. Default `2500` is a mid-of-range number; set higher if your Part D plan is rich, or `0` if you've already baked Medicare into `spending.base_spending`.
+
+The simulator now exposes a `medicare_base_premium` column on the per-year DataFrame so you can audit the line directly.
+
+---
+
+## `config.health_pre65_today` — pre-Medicare healthcare cost knob *(Tier C-B)*
+
+```json
+"config": { "health_pre65_today": 12000 }
+```
+
+Household healthcare cost (in today's dollars) charged each year **at least one spouse is alive AND below 65**. Per-spouse share is the household total × (`n_pre_medicare` / 2). Inflates by `cfg.inflation`. Default `0` (back-compat — assumes you've baked it into base spending). For a pre-65 retiree on the open marketplace, $10–18k/spouse/yr is a realistic 2026 range.
+
+If you set `aca_enabled=True`, this knob is ignored (the ACA benchmark premium replaces it for pre-65 spouses); see below.
+
+---
+
+## `config.irmaa_lookback_years` — IRMAA 2-year MAGI lookback *(Tier C-B)*
+
+```json
+"config": { "irmaa_lookback_years": 2 }
+```
+
+Default `2`. SSA bills IRMAA in year T using AGI from year T-2 (with a one-year fallback in filing-edge cases). Pre-Tier-C, the simulator used current-year AGI, which **overstated** the IRMAA cliff in any year with a transient income spike (Roth conversion, retirement-year severance). Under the lookback, a year-0 conversion shows up in IRMAA at year 2; for early simulation years where lag-2 AGI hasn't accumulated yet, IRMAA defaults to the lowest tier — matching SSA's first-year-of-Medicare rule.
+
+Set to `0` to revert to the pre-Tier-C (current-year) behavior. Set to `1` to use prior-year AGI (a sometimes-useful approximation when your filing pattern lags).
+
+---
+
+## `config.aca_enabled` / `aca_benchmark_premium_per_adult` / `aca_max_contrib_pct` — ACA premium tax credit *(Tier C-B)*
+
+```json
+"config": {
+  "aca_enabled": true,
+  "aca_benchmark_premium_per_adult": 14000,
+  "aca_max_contrib_pct": 0.085
+}
+```
+
+Models the **post-IRA-2022 enhanced subsidies**: each enrolled adult's premium contribution is capped at `aca_max_contrib_pct` (default 8.5%) of MAGI; the credit is `max(0, benchmark - cap)`. No income cliff (the pre-2021 400% FPL cliff is gone). For a 60-year-old in 2026 the second-lowest-cost-silver-plan benchmark averages ~$14k/yr (varies wildly by state).
+
+Modeling notes / scope:
+- MAGI ≈ AGI for almost every household (untaxed SS adds < 1% in scope of typical ACA filers); we use AGI as a proxy.
+- No FPL × household-size lookup (Tier D). The 8.5% cap applies cliff-free at all incomes ≥ 150% FPL post-2022.
+- The credit offsets cash outflow (not a federal-tax line item) since most households take it as advance APTC paid directly to the insurer.
+- If `aca_enabled=True` AND any spouse is below 65, the `health_pre65_today` knob is **bypassed** — the benchmark premium replaces it and is offset by the credit.
+
+`aca_benchmark_premium` and `aca_apt_credit` are exposed as DataFrame columns for auditing.
+
+---
+
+## `config.stepup_at_first_death` — community-property full step-up *(Tier C-B)*
+
+```json
+"config": { "stepup_at_first_death": true }
+```
+
+Default `false` (conservative). When `true`, the surviving spouse's `cumulative_basis` on the taxable account is reset to fair-market-value the year the first spouse dies. Models the **community-property full step-up** (CA, WA, ID, NM, AZ, LA, NV, TX, WI). Common-law half-step-up (the rest of the country) is in the Tier D backlog.
+
+Mechanically: at the start of the year-of-first-death, `cumulative_basis = state.taxable`. Future taxable-bucket withdrawals during that survivor's lifetime realize gains only on appreciation **after** the step-up date.
+
+---
+
+## `config.optimize_ss_claim_age` — adds SS claim-age axes to the optimizer *(Tier C-C)*
+
+```json
+"config": { "optimize_ss_claim_age": true }
+```
+
+Default `false`. When `true`, the strategy optimizer adds `ss_claim_age_a` and `ss_claim_age_b` to its decision vector — discrete grid `{62, 65, 67, 70}`. Major lever for asymmetric couples (one high earner, one low). Without this, the optimizer treats `inputs.ss.start_age_a` / `start_age_b` as fixed.
+
+When `inputs.spouse_*_mega_backdoor_enabled=True`, the optimizer **also** adds `mega_backdoor_pct_*` axes automatically — no separate flag needed. Both Tier-C axis additions are dynamically discovered by `_build_decision_vector_meta(cfg, inputs)`; see [`tax_optimizer/optimizer.py`](../tax_optimizer/optimizer.py) for the contract.
+
+Pair this with `--mc-seed N` (or `optimize_household(..., mc_seed=N)`) when running a stochastic-market objective; the seed pins the MC draw so repeated optimizer runs are apples-to-apples.
 
 ---
 

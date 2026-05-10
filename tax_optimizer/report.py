@@ -95,11 +95,11 @@ def build_action_report(
     md.append("|---|---:|")
     md.append(
         f"| Spouse A age (retire / SS) | {inputs.spouse_a_age_start} "
-        f"({inputs.spouse_a_retire_age} / {inputs.ss.start_age}) |"
+        f"({inputs.spouse_a_retire_age} / {inputs.ss.effective_start_age_a}) |"
     )
     md.append(
         f"| Spouse B age (retire / SS) | {inputs.spouse_b_age_start} "
-        f"({inputs.spouse_b_retire_age} / {inputs.ss.start_age}) |"
+        f"({inputs.spouse_b_retire_age} / {inputs.ss.effective_start_age_b}) |"
     )
     md.append(f"| Combined gross W-2 income | ${household_wages:,.0f} |")
     # Use the resolved spending profile's base, not `inputs.annual_expenses`.
@@ -422,16 +422,13 @@ def build_action_report(
     md.append("## 9. Caveats — what this plan does NOT model")
     md.append("")
     md.append(
-        "- **State income tax.** Federal-only today. Add a state-tax overlay if your "
-        "state taxes retirement income (CA, NY, MA, etc.)."
+        "- **State income tax** outside the bundled `STATELESS / CA / NY / IL / MA` "
+        "presets. Add a custom `StateTaxRegime` for your state if it's not in this list."
     )
     md.append(
-        "- **ACA premium-tax-credit cliffs** in the 60–64 pre-Medicare years "
-        "(can dwarf federal-bracket optimization for some households)."
-    )
-    md.append(
-        "- **Estate / step-up basis** beyond the simple 22% pretax haircut in "
-        "`terminal_after_tax_nw`. Inherited-IRA 10-year-rule treatment is not modeled."
+        "- **Estate / inherited-IRA dynamics** beyond the flat `heir_marginal_rate` "
+        "haircut on terminal pretax + HSA balances. SECURE Act 10-year drawdown "
+        "timing for non-spouse heirs is not modeled."
     )
     md.append("- **Health-care shocks** beyond a single optional LTC stress test.")
     md.append(

@@ -21,7 +21,7 @@ from .conversion import planned_roth_conversion
 from .inputs import Inputs, claim_age_factor
 from .ira import allocate_ira_contributions
 from .limits import SECTION_415C_LIMIT, elective_deferral_cap, hsa_family_cap
-from .payroll import OASDI_WAGE_BASE_2026, fica_employee
+from .payroll import OASDI_WAGE_BASE_2026, fica_household
 from .pension import (
     PENSION_INTEREST,
     pension_annual_credit,
@@ -75,6 +75,23 @@ def simulate(
     spending = cfg.resolved_spending()
     asset_loc = cfg.asset_location
 
+    def _drain_pretax_ira(spouse: str, total_pretax_pre_drain: float, drain: float) -> None:
+        """Drain the IRA-only sub-balance pro-rata to its share of the
+        total pretax bucket (TC-6 bookkeeping). Used after RMDs,
+        Roth conversions, ordinary withdrawals, and deficit-cascade
+        pretax draws. In real life the user picks WHICH IRA / 401(k)
+        each draw comes from; we average it over the whole pretax
+        bucket which is approximately right.
+        """
+        if drain <= 0 or total_pretax_pre_drain <= 0:
+            return
+        ira_attr = f"spouse_{spouse}_pretax_ira"
+        ira_balance = getattr(state, ira_attr)
+        if ira_balance <= 0:
+            return
+        ira_share = ira_balance / total_pretax_pre_drain
+        setattr(state, ira_attr, max(0.0, ira_balance - drain * ira_share))
+
     # Reference projected pension balance at NRD; used to scale annuity
     # if the actual cash-balance grew faster (or slower) than expected.
     test_balance = project_pension_balance(
@@ -108,6 +125,20 @@ def simulate(
         # the OTHER spouse is alive (otherwise the balance falls to
         # non-spousal heirs which is out of scope).
         rollover_event = ""
+        # ---- Step-up in basis (TC-14) ----
+        # Triggered the year a spouse first transitions from alive→dead
+        # (community-property full step-up assumed). Reset the surviving
+        # spouse's `cumulative_basis` to FMV (= state.taxable) so future
+        # withdrawals from the inherited taxable account realize $0
+        # gain on the inherited share. Common-law half-step-up is a
+        # blind-spot we'd cover in Tier D.
+        first_death_this_year = (
+            (prev_alive_a and not alive_a and alive_b)
+            or (prev_alive_b and not alive_b and alive_a)
+        )
+        if cfg.stepup_at_first_death and first_death_this_year and state.taxable > 0:
+            state.cumulative_basis = state.taxable
+
         if (
             prev_alive_a
             and not alive_a
@@ -115,7 +146,9 @@ def simulate(
             and state.spouse_a_pretax > 0
         ):
             state.spouse_b_pretax += state.spouse_a_pretax
+            state.spouse_b_pretax_ira += state.spouse_a_pretax_ira
             state.spouse_a_pretax = 0.0
+            state.spouse_a_pretax_ira = 0.0
             rollover_event = "a_to_b"
         if (
             prev_alive_b
@@ -124,7 +157,9 @@ def simulate(
             and state.spouse_b_pretax > 0
         ):
             state.spouse_a_pretax += state.spouse_b_pretax
+            state.spouse_a_pretax_ira += state.spouse_b_pretax_ira
             state.spouse_b_pretax = 0.0
+            state.spouse_b_pretax_ira = 0.0
             rollover_event = "b_to_a"
 
         regime = cfg.effective_regime(year_offset)
@@ -224,19 +259,23 @@ def simulate(
 
         # IRA contributions (Traditional / direct Roth / backdoor Roth).
         # Eligibility: alive AND either spouse working (spousal IRA
-        # rule). MAGI for the phase-out is approximated by the federal
-        # AGI on this year's gross income line; close enough since the
-        # phase-out window is wide ($10k for MFJ direct-Roth) and the
-        # IRA dollars themselves only shift AGI by ~$7k.
-        magi_estimate = (
+        # rule). MAGI for the phase-out: prior-year AGI is the best
+        # forward-looking estimate we have at this point in the loop
+        # (current-year AGI isn't computed yet; current-year wages alone
+        # would miss interest, dividends, SS, pension, and capital
+        # gains, which can push a high-portfolio retiree across the
+        # ~$246k MFJ direct-Roth phase-out and silently keep direct
+        # contributions in scope when they shouldn't be — TC-5).
+        wages_estimate = (
             (spouse_a_salary + spouse_a_bonus if a_working else 0.0)
             + (spouse_b_salary if b_working else 0.0)
         )
+        magi_estimate = max(state.prior_agi, wages_estimate)
         ira_eligible_either = (a_working or b_working)
         ira_a = allocate_ira_contributions(
             age=a_age,
             eligible=alive_a and ira_eligible_either,
-            pretax_existing=state.spouse_a_pretax,
+            pretax_existing=state.spouse_a_pretax_ira,
             traditional_target=inputs.spouse_a_traditional_ira_contrib,
             roth_direct_target=inputs.spouse_a_roth_ira_contrib,
             backdoor_enabled=inputs.spouse_a_backdoor_roth,
@@ -246,7 +285,7 @@ def simulate(
         ira_b = allocate_ira_contributions(
             age=b_age,
             eligible=alive_b and ira_eligible_either,
-            pretax_existing=state.spouse_b_pretax,
+            pretax_existing=state.spouse_b_pretax_ira,
             traditional_target=inputs.spouse_b_traditional_ira_contrib,
             roth_direct_target=inputs.spouse_b_roth_ira_contrib,
             backdoor_enabled=inputs.spouse_b_backdoor_roth,
@@ -258,8 +297,13 @@ def simulate(
         # from working-year cash_inflow below) is the sum of all three
         # paths — the Traditional deduction comes back as a smaller
         # federal tax bill, not as cash that didn't leave the household.
+        # Traditional IRA contributions land in BOTH the combined
+        # `spouse_*_pretax` bucket and the IRA-only sub-balance used by
+        # backdoor pro-rata math (TC-6).
         state.spouse_a_pretax += ira_a.traditional
         state.spouse_b_pretax += ira_b.traditional
+        state.spouse_a_pretax_ira += ira_a.traditional
+        state.spouse_b_pretax_ira += ira_b.traditional
         state.roth += ira_a.roth_direct + ira_b.roth_direct
         # Backdoor: contribute to non-deductible Traditional → convert
         # in same year. Net pretax balance change is zero (in then out);
@@ -293,10 +337,19 @@ def simulate(
         # annually so real FICA stays roughly constant. FICA does not
         # touch federal income tax — it just removes cash from the
         # household's working-year inflow.
+        #
+        # Additional Medicare 0.9% is reconciled at the **household**
+        # level (Form 8959): MFJ threshold is $250k on combined wages,
+        # not $200k per W-2. `fica_household` handles that; per-W-2
+        # OASDI and base Medicare still come out of `fica_employee`
+        # internally.
         wage_base_y = OASDI_WAGE_BASE_2026 * (1 + cfg.inflation) ** year_offset
-        fica_a = fica_employee(a_w2_wages, wage_base=wage_base_y)["total"]
-        fica_b = fica_employee(b_w2_wages, wage_base=wage_base_y)["total"]
-        fica_total = fica_a + fica_b
+        fica_combined = fica_household(
+            a_w2_wages, b_w2_wages,
+            filing_status=filing_status,
+            wage_base=wage_base_y,
+        )
+        fica_total = fica_combined["total"]
 
         if a_age == inputs.pension.start_age and state.pension_annuity == 0.0 and alive_a:
             scale = state.pension_balance / max(test_balance, 1.0)
@@ -327,6 +380,18 @@ def simulate(
         a_ss_eligible = alive_a and a_age >= a_claim_age
         b_ss_eligible = alive_b and b_age >= b_claim_age
 
+        # SSA survivor-benefit eligibility: a widow(er) can claim a
+        # survivor benefit on the deceased's record starting at age 60
+        # (50 if disabled, or any age caring for a dependent under 16
+        # — neither modeled). Reduced for early claim, but for the
+        # household-planner level we treat the deceased's claim-age-
+        # frozen benefit as the survivor amount (TC-2). Pre-Tier-C,
+        # `ssn_income` was forced to $0 if the survivor hadn't reached
+        # their *own* claim age, even after the spouse died — which
+        # silently dropped 5–10 years of survivor benefits in any
+        # mortality scenario where the higher-earner died first.
+        SS_SURVIVOR_MIN_AGE = 60
+
         ssn_income = 0.0
         if alive_a and alive_b:
             if a_ss_eligible:
@@ -334,16 +399,27 @@ def simulate(
             if b_ss_eligible:
                 ssn_income += b_annual_at_claim * ss_inflator
         else:
-            # Survivor benefit: keep the larger of the two scaled
-            # benefits. Real SSA rules are more nuanced (the survivor
-            # can collect their own benefit OR the deceased's, whichever
-            # is larger, with the deceased's amount frozen at their
-            # claim age). This approximation keeps the larger of the
-            # two claim-age-adjusted PIAs, which matches the SSA result
-            # when both have claimed before death.
-            if a_ss_eligible or b_ss_eligible:
-                bigger = max(a_annual_at_claim, b_annual_at_claim)
-                ssn_income = bigger * ss_inflator
+            # One spouse dead. Survivor takes max(own, survivor-of-
+            # deceased) — but each piece is gated by its own age rule:
+            #   * own benefit: survivor must have reached own claim_age
+            #   * survivor benefit (deceased's record): survivor must
+            #     be at least SS_SURVIVOR_MIN_AGE (60).
+            if alive_a:
+                own = a_annual_at_claim if a_ss_eligible else 0.0
+                survivor = (
+                    b_annual_at_claim
+                    if (a_age >= SS_SURVIVOR_MIN_AGE and not alive_b)
+                    else 0.0
+                )
+                ssn_income = max(own, survivor) * ss_inflator
+            elif alive_b:
+                own = b_annual_at_claim if b_ss_eligible else 0.0
+                survivor = (
+                    a_annual_at_claim
+                    if (b_age >= SS_SURVIVOR_MIN_AGE and not alive_a)
+                    else 0.0
+                )
+                ssn_income = max(own, survivor) * ss_inflator
 
         # The "extra" non-portfolio income items (savings interest, a
         # one-off cap gain from a side hustle, an employer dividend on
@@ -401,6 +477,8 @@ def simulate(
             cfg, inputs, state, base_kwargs,
             regime=regime, filing_status=filing_status,
             rmd_total=rmd_total,
+            rmd_a=a_rmd,
+            rmd_b=b_rmd,
         )
         # If a spouse is dead, zero out their conversion.
         if not alive_a:
@@ -410,8 +488,12 @@ def simulate(
         conv = conv_a + conv_b
         if conv > 0:
             base_kwargs["roth_conversion"] = conv
-            state.spouse_a_pretax = max(0.0, state.spouse_a_pretax - conv_a)
-            state.spouse_b_pretax = max(0.0, state.spouse_b_pretax - conv_b)
+            pre_a = state.spouse_a_pretax
+            pre_b = state.spouse_b_pretax
+            state.spouse_a_pretax = max(0.0, pre_a - conv_a)
+            state.spouse_b_pretax = max(0.0, pre_b - conv_b)
+            _drain_pretax_ira("a", pre_a, conv_a)
+            _drain_pretax_ira("b", pre_b, conv_b)
             state.roth += conv
 
         # ---- Spending need (smile + lump events + LTC) ----
@@ -503,20 +585,97 @@ def simulate(
         )
         state_income_tax = state_result["state_tax"]
 
-        # ---- IRMAA (Medicare premium surcharge) ----
+        # ---- Healthcare costs ----
+        # Three pieces, all separate from federal/state income tax:
+        #   * Pre-Medicare: `health_pre65` (anyone alive AND <65)
+        #   * Medicare base: B+D premium per Medicare-enrolled spouse
+        #   * IRMAA surcharge: looked up on AGI from year T-2 (TC-11)
+        n_pre_medicare = (
+            int(alive_a and a_age < MEDICARE_ELIGIBLE_AGE)
+            + int(alive_b and b_age < MEDICARE_ELIGIBLE_AGE)
+        )
+        health_pre65_today = cfg.health_pre65_today
+        health_pre65 = (
+            health_pre65_today
+            * (n_pre_medicare / 2)
+            * (1 + cfg.inflation) ** year_offset
+        )
+
         n_medicare = (
             int(alive_a and a_age >= MEDICARE_ELIGIBLE_AGE)
             + int(alive_b and b_age >= MEDICARE_ELIGIBLE_AGE)
         )
+        medicare_base_premium = (
+            n_medicare
+            * cfg.medicare_base_b_d_premium
+            * (1 + cfg.inflation) ** year_offset
+        )
+
+        # IRMAA AGI lookback: year T uses year T-2 AGI (the SSA rule).
+        # `state.agi_lag_*` are the 1- and 2-year lagged AGIs maintained
+        # at the bottom of each loop iteration. For early years the
+        # lag is 0, which means no IRMAA hit until prior years have
+        # accumulated (the same way SSA defaults a new Medicare
+        # enrollee's IRMAA to the lowest tier in their first year).
+        if cfg.irmaa_lookback_years <= 0:
+            irmaa_agi = float(tax_result["agi"])
+        elif cfg.irmaa_lookback_years == 1:
+            irmaa_agi = state.prior_agi
+        else:
+            # 2-year lookback (the SSA-published rule). `agi_lag_2`
+            # holds AGI[T-2] at the start of year T per the State
+            # convention. Anything > 2 falls back to T-2 (the lag chain
+            # is only kept depth-2 to avoid slow-rolling out memory).
+            irmaa_agi = state.agi_lag_2
         irmaa = irmaa_annual_surcharge(
-            tax_result["agi"], n_medicare, regime=regime, filing_status=filing_status
+            irmaa_agi, n_medicare, regime=regime, filing_status=filing_status
         )
         irmaa_cost = irmaa["total"]
         irmaa_tier = irmaa["tier"]
 
+        # ---- ACA premium tax credit (TC-13) ----
+        # Post-IRA-2022 enhanced subsidies: if the household includes
+        # any pre-65 adult and `cfg.aca_enabled=True`, the household's
+        # premium contribution is capped at `cfg.aca_max_contrib_pct`
+        # of MAGI. The credit equals max(0, benchmark - cap).
+        # Modeling notes:
+        #   * MAGI ≈ AGI for almost every household (untaxed SS adds
+        #     are <1% in scope of typical ACA filers); we use AGI here.
+        #   * No FPL × household-size lookup (Tier D); the 8.5% cap
+        #     applies cliff-free at all incomes >= 150% FPL post-2022.
+        #   * The credit is treated as cash (offsets cash outflow) —
+        #     not a federal-tax line item, since most households take
+        #     it as advance APTC paid directly to the insurer.
+        aca_benchmark_total = 0.0
+        aca_apt_credit = 0.0
+        if cfg.aca_enabled and n_pre_medicare > 0:
+            benchmark_per_adult_y = (
+                cfg.aca_benchmark_premium_per_adult
+                * (1 + cfg.inflation) ** year_offset
+            )
+            aca_benchmark_total = benchmark_per_adult_y * n_pre_medicare
+            magi_proxy = float(tax_result["agi"])
+            applicable_contrib = max(0.0, magi_proxy) * cfg.aca_max_contrib_pct
+            aca_apt_credit = max(0.0, aca_benchmark_total - applicable_contrib)
+        # Cash-flow offset: APTC reduces the household's premium
+        # outlay. We bundle the benchmark premium into pre-65 health
+        # cost and credit APTC against it (net of the credit becomes
+        # the actual cash outflow). Capped at benchmark to avoid the
+        # credit itself producing income.
+        aca_apt_credit_offset = -aca_apt_credit + aca_benchmark_total
+        # Subtract pre-65 health cost line entirely if ACA is enabled
+        # (the benchmark covers it). When ACA is off, fall back to the
+        # `health_pre65_today` knob.
+        if cfg.aca_enabled and n_pre_medicare > 0:
+            health_pre65 = 0.0   # absorbed into the benchmark/credit math
+
         # ---- Apply withdrawals to balances (single coherent pass) ----
-        state.spouse_a_pretax = max(0.0, state.spouse_a_pretax - withdraws["pretax_a"])
-        state.spouse_b_pretax = max(0.0, state.spouse_b_pretax - withdraws["pretax_b"])
+        pre_w_a = state.spouse_a_pretax
+        pre_w_b = state.spouse_b_pretax
+        state.spouse_a_pretax = max(0.0, pre_w_a - withdraws["pretax_a"])
+        state.spouse_b_pretax = max(0.0, pre_w_b - withdraws["pretax_b"])
+        _drain_pretax_ira("a", pre_w_a, withdraws["pretax_a"])
+        _drain_pretax_ira("b", pre_w_b, withdraws["pretax_b"])
         state.roth -= withdraws["roth"]
         state.taxable -= withdraws["taxable"]
         state.cumulative_basis = max(
@@ -547,6 +706,8 @@ def simulate(
         delta = (
             cash_inflow
             - federal - state_income_tax - irmaa_cost
+            - medicare_base_premium - health_pre65
+            - aca_apt_credit_offset
             - net_need
             - ira_total_outflow
             - mega_backdoor_total
@@ -566,10 +727,18 @@ def simulate(
             # spouse hits 65 (the IRS no-penalty age). Used for general
             # spending it grosses up at ordinary rate just like pretax.
             hsa_unlocked = max(a_age, b_age) >= 65
+            # NOTE (TC-3): pass `final_kwargs`, NOT `base_kwargs`. The
+            # cascade's `_solve_pretax_for_net` / `_solve_taxable_for_net`
+            # use a base-tax delta to compute the marginal tax on the
+            # next dollar drawn. That math is only correct if the base
+            # tax already reflects this year's primary withdrawals and
+            # conversions — i.e. the `final_kwargs` line. Passing
+            # `base_kwargs` understated the marginal bracket on every
+            # cascade leg in any year with an RMD or planned conversion.
             extra, unfunded = cover_deficit(
                 deficit=-delta,
                 state=state,
-                base_kwargs=base_kwargs,
+                base_kwargs=final_kwargs,
                 basis_frac=current_basis_frac,
                 pretax_a_already=withdraws["pretax_a"],
                 pretax_b_already=withdraws["pretax_b"],
@@ -600,8 +769,12 @@ def simulate(
                 )
                 hsa_withdrawal += extra["hsa"]
             if extra["pretax"] > 0:
-                state.spouse_a_pretax = max(0.0, state.spouse_a_pretax - extra["pretax_a"])
-                state.spouse_b_pretax = max(0.0, state.spouse_b_pretax - extra["pretax_b"])
+                pre_x_a = state.spouse_a_pretax
+                pre_x_b = state.spouse_b_pretax
+                state.spouse_a_pretax = max(0.0, pre_x_a - extra["pretax_a"])
+                state.spouse_b_pretax = max(0.0, pre_x_b - extra["pretax_b"])
+                _drain_pretax_ira("a", pre_x_a, extra["pretax_a"])
+                _drain_pretax_ira("b", pre_x_b, extra["pretax_b"])
                 final_kwargs["pretax_withdrawal"] = (
                     final_kwargs.get("pretax_withdrawal", 0.0) + extra["pretax"]
                 )
@@ -666,6 +839,13 @@ def simulate(
         prev_alive_a = alive_a
         prev_alive_b = alive_b
 
+        # Roll the AGI lag chain forward (TC-5 + TC-11). At the start
+        # of year T+1: `prior_agi` will equal AGI[T] and `agi_lag_2`
+        # will equal AGI[T-1]. See `State` docstring for the
+        # convention.
+        state.agi_lag_2 = state.prior_agi
+        state.prior_agi = float(tax_result["agi"])
+
         rows.append(
             {
                 "year": year,
@@ -699,6 +879,11 @@ def simulate(
                 "state_regime": state_regime.name,
                 "irmaa": irmaa_cost,
                 "irmaa_tier": irmaa_tier,
+                "irmaa_lookback_agi": irmaa_agi,
+                "medicare_base_premium": medicare_base_premium,
+                "health_pre65": health_pre65,
+                "aca_benchmark_premium": aca_benchmark_total,
+                "aca_apt_credit": aca_apt_credit,
                 "spending_need": net_need,
                 "unfunded": unfunded,
                 "hsa_contrib": hsa_contrib,
@@ -717,8 +902,9 @@ def simulate(
                 "employer_match_a": a_employer_match,
                 "employer_match_b": b_employer_match,
                 "fica": fica_total,
-                "fica_a": fica_a,
-                "fica_b": fica_b,
+                "fica_oasdi": fica_combined["oasdi"],
+                "fica_medicare": fica_combined["medicare"],
+                "fica_additional_medicare": fica_combined["additional_medicare"],
                 "equity_return": eq_r,
                 "bond_return": bd_r,
                 "pretax_balance": state.spouse_a_pretax + state.spouse_b_pretax,
@@ -726,6 +912,7 @@ def simulate(
                 "pretax_b_balance": state.spouse_b_pretax,
                 "roth_balance": state.roth,
                 "taxable_balance": state.taxable,
+                "cumulative_basis": state.cumulative_basis,
                 "hsa_balance": state.hsa,
                 "pension_balance": state.pension_balance,
             }

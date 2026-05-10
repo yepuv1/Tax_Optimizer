@@ -94,6 +94,75 @@ class Config:
     rmd_start_age: int = 75
 
     # ------------------------------------------------------------------
+    # Healthcare cost knobs (Tier C-B)
+    # ------------------------------------------------------------------
+    # Combined Medicare Part B + Part D base premium per enrolled
+    # spouse, in today's dollars. Inflated forward using
+    # `cfg.inflation`. The 2026 published Part B base is ~$2,084/yr;
+    # adding a typical Part D premium (~$650/yr, varies widely by
+    # plan) lands in the $2,500–$2,800 range. Default $2,500 is a
+    # mid-of-range, conservative-low setting; users with rich Part D
+    # plans should set this higher. This is **separate from IRMAA**
+    # (income-related surcharge), which still flows through
+    # `irmaa_annual_surcharge`.
+    medicare_base_b_d_premium: float = 2_500.0
+
+    # Pre-Medicare household healthcare cost in today's dollars,
+    # charged each year either spouse is alive AND at least one
+    # spouse is below `MEDICARE_ELIGIBLE_AGE` (65). Per-spouse share
+    # is the household total times (n_pre_medicare / 2). Set to 0.0
+    # if you've baked healthcare into `spending.base_spending`
+    # already.
+    health_pre65_today: float = 0.0
+
+    # IRMAA MAGI lookback. SSA computes IRMAA in year T from MAGI in
+    # year T-2 (with a one-year fallback for filing-year edge cases).
+    # The simulator keeps a running lag chain in `state.agi_lag_*`;
+    # set to 0 to revert to the pre-Tier-C behavior (use current-year
+    # AGI), which over-states IRMAA exposure in any year with a
+    # large transient income spike (Roth conversion, retirement-year
+    # severance, etc.).
+    irmaa_lookback_years: int = 2
+
+    # ------------------------------------------------------------------
+    # ACA premium tax credit (Tier C-B)
+    # ------------------------------------------------------------------
+    # Enable ACA enhanced subsidies (post-IRA-2022 8.5%-of-MAGI cap on
+    # benchmark premium). Models the post-Inflation Reduction Act of
+    # 2022 rules: no income cliff (the pre-2021 "400% FPL cliff" is
+    # gone), premium contribution capped at 8.5% of MAGI for any
+    # household above ~150% FPL. Below 150% FPL, contribution drops
+    # toward zero (we use a single `aca_max_contrib_pct` knob; for a
+    # full Form 8962 you'd want the seven-step income×age curve).
+    aca_enabled: bool = False
+    # Benchmark premium per enrolled adult (second-lowest-cost silver
+    # plan, age-adjusted). Today's dollars. Inflates by `cfg.inflation`
+    # (a stand-in for healthcare CPI; if you have a separate healthcare
+    # inflation series, fold it into a custom regime). Default $14k is
+    # a rough national average for a 60-year-old in 2026.
+    aca_benchmark_premium_per_adult: float = 14_000.0
+    # Maximum applicable percentage of MAGI a household pays toward
+    # premiums. Post-IRA-2022 = 8.5% for all incomes >= 150% FPL.
+    aca_max_contrib_pct: float = 0.085
+
+    # ------------------------------------------------------------------
+    # Step-up in basis on first spouse's death (Tier C-B)
+    # ------------------------------------------------------------------
+    # If True, the surviving spouse's cost basis on the taxable account
+    # is reset to fair-market-value when the first spouse dies. Models
+    # the community-property full step-up (CA, WA, ID, etc.). Default
+    # False = no step-up (pre-Tier-C behavior; conservative).
+    stepup_at_first_death: bool = False
+
+    # ------------------------------------------------------------------
+    # Optimizer scope (Tier C-C)
+    # ------------------------------------------------------------------
+    # If True, the optimizer adds per-spouse SS claim age (62/65/67/70
+    # grid) to the decision vector. Defaults False to keep the
+    # baseline 3-axis search (Roth %, conv bracket) backward-compatible.
+    optimize_ss_claim_age: bool = False
+
+    # ------------------------------------------------------------------
     # Misc
     # ------------------------------------------------------------------
     cap_gains_basis_fraction: float = 0.5

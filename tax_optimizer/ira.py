@@ -76,9 +76,11 @@ def allocate_ira_contributions(
 ) -> IRAAllocation:
     """Compute the actual IRA contribution split for one spouse.
 
-    `pretax_existing` is the spouse's pretax 401(k) + IRA balance
+    `pretax_existing` is the spouse's **IRA-only** pretax balance
     BEFORE this year's contributions — used for the backdoor
-    pro-rata rule.
+    pro-rata rule (IRC §408(d)(2)). 401(k) balances are NOT
+    aggregated for pro-rata, so the simulator passes
+    `state.spouse_*_pretax_ira` here, NOT the combined pretax bucket.
 
     `magi_estimate` is the household's MAGI estimate (federal AGI
     is a close-enough approximation) used for the direct-Roth

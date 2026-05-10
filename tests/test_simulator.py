@@ -183,9 +183,12 @@ class TestSimulateWidowsPenalty:
         cfg = Config(mortality=Mortality(year_of_death_a=20))
         inputs = Inputs()
         df = simulate(cfg, inputs)
-        # year_offset 0..19 are MFJ; from offset 20 onward, single-filer.
+        # IRS year-of-death rule: years 0..19 are MFJ both alive, year
+        # 20 is the year of A's death (still MFJ per IRS), year 21+ is
+        # single (qualifying-surviving-spouse not modeled).
         assert (df.iloc[:20]["filing_status"] == "mfj").all()
-        assert (df.iloc[20:]["filing_status"] == "single").all()
+        assert df.iloc[20]["filing_status"] == "mfj"
+        assert (df.iloc[21:]["filing_status"] == "single").all()
 
     def test_alive_a_flag_flips(self) -> None:
         cfg = Config(mortality=Mortality(year_of_death_a=20))

@@ -32,36 +32,186 @@ Categories used:
 
 ## [Unreleased]
 
-### Added
-- `docs/market_models.md` — standalone reference document covering
-  the full landscape of retirement Monte Carlo market models, the
-  five industry segments and their conventional choices, the
-  empirical-value-per-line analysis behind which models we ship,
-  and which models we deliberately skipped (AR(1), regime-switching,
-  GARCH, Wilkie). Linked from `docs/scenario_guide.md`.
-- `CHANGELOG.md` (this file) — feature/fix tracking.
+(no entries — last release `v5` is current.)
+
+---
+
+## [v5] — Tier C (correctness + healthcare + optimizer scope) (2026-05-10)
+
+A 17-item batch organized into three sub-tiers:
+- **C-A** (9 correctness bugs)
+- **C-B** (5 high-ROI modeling additions, including ACA premium tax credit)
+- **C-C** (3 optimizer-scope extensions)
+
+Total ≈ 1,100 LoC of source + ≈ 700 LoC of tests. Test count: **288 → 318
+passing** (the 30 new tests live in [`tests/test_tier_c.py`](tests/test_tier_c.py)).
+
+### Fixed *(Tier C-A — correctness bugs)*
+- **TC-1 — Year-of-death MFJ filing status**
+  ([`tax_optimizer/mortality.py`](tax_optimizer/mortality.py)). The
+  IRS treats the calendar year a spouse dies as MFJ on the joint
+  return. Pre-Tier-C, `Mortality.filing_status()` flipped to single
+  immediately at `year_of_death`. New helper
+  `Mortality.is_year_of_death()` lets `filing_status()` keep MFJ for
+  exactly the year of death.
+- **TC-2 — Survivor SS at age 60 from deceased's record**
+  ([`tax_optimizer/simulator.py`](tax_optimizer/simulator.py) ~370–
+  395). SSA lets a widow(er) collect survivor benefits on the
+  deceased's record starting at age 60, regardless of their own
+  claim age. Pre-Tier-C, `ssn_income` was forced to $0 if the
+  survivor hadn't reached their own claim age — silently dropping
+  5–10 years of benefits in any scenario where the higher-earner
+  died first. Now uses `max(own_benefit_if_eligible,
+  survivor_of_deceased_if_60+)`.
+- **TC-3 — Deficit cascade tax base**
+  ([`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)
+  ~720–740). `cover_deficit` is now passed `final_kwargs` (with
+  primary withdrawals + conversions stacked) instead of
+  `base_kwargs`. The internal `_solve_pretax_for_net` /
+  `_solve_taxable_for_net` solvers compute marginal tax via a
+  base-tax delta; passing pre-stack kwargs **understated** the
+  marginal bracket on every cascade leg in any year with a primary
+  RMD or conversion.
+- **TC-4 — Additional Medicare 0.9% MFJ joint threshold**
+  ([`tax_optimizer/payroll.py`](tax_optimizer/payroll.py),
+  [`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)). New
+  `fica_household(wages_a, wages_b, *, filing_status)` reconciles
+  the Form-8959 Additional Medicare 0.9% surcharge at the
+  household level using the correct filing-status threshold
+  ($250k MFJ vs. $200k single). Pre-Tier-C, two $180k W-2s
+  produced $0 of Additional Medicare (each below the per-W-2
+  $200k withholding threshold) when the actual joint liability
+  was 0.9% × ($360k - $250k) = $990. `fica_employee()` is
+  preserved for employer-withholding modeling.
+- **TC-5 — Roth IRA MAGI estimate uses prior-year AGI**
+  ([`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)
+  ~245–255, [`tax_optimizer/state.py`](tax_optimizer/state.py)).
+  New `state.prior_agi` field carries last year's AGI forward.
+  The IRA MAGI phase-out estimate now uses
+  `max(state.prior_agi, current_year_wages)` instead of wages
+  alone, fixing the case where a high-portfolio retiree's
+  $300k+ MAGI silently allowed direct Roth contributions.
+- **TC-6 — Backdoor Roth pro-rata is IRA-aggregate, not IRA + 401(k)**
+  ([`tax_optimizer/state.py`](tax_optimizer/state.py),
+  [`tax_optimizer/ira.py`](tax_optimizer/ira.py),
+  [`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)). New
+  `state.spouse_*_pretax_ira` IRA-only sub-balances correctly model
+  IRC §408(d)(2): pro-rata aggregates only IRA balances, NOT 401(k).
+  Pre-Tier-C, a spouse with $0 pretax IRA but $500k 401(k) had a
+  99% taxable backdoor; now correctly $0 taxable. Drains
+  (RMDs, conversions, withdrawals) reduce the IRA-only sub-balance
+  pro-rata to its share of the total pretax bucket.
+- **TC-7 — Fixed Roth conversion reserves RMD bucket**
+  ([`tax_optimizer/conversion.py`](tax_optimizer/conversion.py)).
+  `planned_roth_conversion()` now caps each spouse's conversion
+  at `pretax_balance - rmd_amount` so a fixed
+  `roth_conversion_amount` can no longer leave the pretax bucket
+  too low for `withdraw_for_need` to satisfy the RMD. New `rmd_a`
+  / `rmd_b` kwargs.
+- **TC-8 — Action report shows per-spouse SS start_age**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py) ~95–105).
+  Household snapshot now uses `inputs.ss.effective_start_age_a` /
+  `effective_start_age_b` instead of the legacy
+  `inputs.ss.start_age` (which was the same value for both
+  spouses).
+- **TC-9 — Caveats block doesn't claim "federal-only"**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py) ~415–435).
+  Updated to reflect Tier B (state tax shipped) and Tier C-B
+  (Medicare + ACA + step-up shipped).
+
+### Added *(Tier C-B — high-ROI modeling)*
+- **TC-10 — Base Medicare Part B + Part D premiums**
+  ([`tax_optimizer/config.py`](tax_optimizer/config.py),
+  [`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)). New
+  `cfg.medicare_base_b_d_premium` (default $2,500/yr today's
+  dollars per enrolled spouse). Inflated by `cfg.inflation`. New
+  DataFrame column `medicare_base_premium`.
+- **TC-11 — IRMAA 2-year MAGI lookback**
+  ([`tax_optimizer/state.py`](tax_optimizer/state.py),
+  [`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)). New
+  `cfg.irmaa_lookback_years` (default `2`, the SSA-published
+  rule). The simulator maintains `state.prior_agi` /
+  `state.agi_lag_2` and reads the appropriate lag for IRMAA
+  computation. Set to `0` to recover the pre-Tier-C (current-year
+  AGI) behavior. New DataFrame column `irmaa_lookback_agi`.
+- **TC-12 — Pre-Medicare healthcare cost knob**
+  ([`tax_optimizer/config.py`](tax_optimizer/config.py),
+  [`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)). New
+  `cfg.health_pre65_today` (default 0). Charged each year either
+  spouse is alive AND below 65; per-spouse share is
+  `health_pre65_today × (n_pre_medicare / 2)`. Bypassed when ACA
+  is enabled (the benchmark premium replaces it). New DataFrame
+  column `health_pre65`.
+- **TC-13 — ACA premium tax credit**
+  ([`tax_optimizer/config.py`](tax_optimizer/config.py),
+  [`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)). New
+  `cfg.aca_enabled` (default `false`),
+  `cfg.aca_benchmark_premium_per_adult` (default $14,000/yr),
+  `cfg.aca_max_contrib_pct` (default 0.085 — post-IRA-2022 8.5%
+  cap). Models the **post-IRA-2022 enhanced subsidies**: cap
+  premium contribution at 8.5% of MAGI; credit
+  `max(0, benchmark - cap)` against cash outflow. Cliff-free for
+  all incomes ≥ 150% FPL. Approximations: MAGI ≈ AGI; no FPL ×
+  household-size lookup (Tier D). New DataFrame columns
+  `aca_benchmark_premium`, `aca_apt_credit`.
+- **TC-14 — Step-up in basis on first spouse's death**
+  ([`tax_optimizer/config.py`](tax_optimizer/config.py),
+  [`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)). New
+  `cfg.stepup_at_first_death` (default `false`). When true,
+  resets `state.cumulative_basis = state.taxable` at the start of
+  the year of first death (community-property full step-up;
+  CA/WA/ID/NM/AZ/LA/NV/TX/WI). Common-law half-step-up is in
+  Tier D. New DataFrame column `cumulative_basis`.
+
+### Added *(Tier C-C — optimizer scope)*
+- **TC-15 — Mega-backdoor 401(k) % in optimizer decision vector**
+  ([`tax_optimizer/optimizer.py`](tax_optimizer/optimizer.py)). New
+  `_build_decision_vector_meta(cfg, inputs)` discovers active
+  decision axes dynamically. When
+  `inputs.spouse_*_mega_backdoor_enabled=True`, the decision vector
+  grows with `mega_backdoor_pct_a` / `mega_backdoor_pct_b`
+  (continuous, 0..1 each).
+- **TC-16 — Per-spouse SS claim-age axis**
+  ([`tax_optimizer/optimizer.py`](tax_optimizer/optimizer.py),
+  [`tax_optimizer/config.py`](tax_optimizer/config.py)). New
+  `cfg.optimize_ss_claim_age` flag (default `false`). When true,
+  adds `ss_claim_age_a` / `ss_claim_age_b` axes (discrete grid
+  `{62, 65, 67, 70}`). Major lever for asymmetric couples.
+- **TC-17 — `mc_seed` thread-through in MC objectives**
+  ([`tax_optimizer/optimizer.py`](tax_optimizer/optimizer.py)). New
+  `mc_seed` parameter on `make_objective`, `optimize_household`
+  (formerly hard-coded to `42` inside `_cvar_objective` /
+  `_p_success_objective`). Pin a single value for reproducibility;
+  sweep to detect overfitting to one MC draw.
 
 ### Changed
-- `tax_optimizer_standalone.ipynb` and `tax_optimizer_standalone_vijay.ipynb`:
-  - Imports cell now pulls in `HistoricalSequenceModel`, `CMA_PRESETS`,
-    `lognormal_from_cma`.
-  - §8 Monte Carlo: broadened from a 2-way comparison (lognormal vs.
-    bootstrap) to a 4-way comparison adding the Vanguard 2025 CMA preset
-    and `HistoricalSequenceModel`.
-  - New §14 "Market-model deep dive" — CMA preset cheat sheet, CAPE
-    conditioning impact table, 5-way deterministic bake-off.
-  - New §15 "Tier B feature cheat sheet" — single-cell reference for
-    every Tier B `Config` / `Inputs` knob.
-  - Recap markdown cell now versioned **v2 → v4** with rows for every
-    Tier A bug fix, every Tier B modeling gap, and every v4 market
-    enhancement.
-- `docs/scenario_guide.md`: added `historical_sequence` and `cma`
-  shortcut examples; renamed "The other two market kinds" →
-  "The other three market kinds"; cross-link to `market_models.md`.
+- `Config` gained 8 new fields (see Tier C-B/C entries above).
+  Scenario JSON loader auto-recognizes them via the existing
+  `fields(Config)` reflection — no `scenario.py` changes needed.
+- `optimize_s3` is preserved as a backward-compat alias to the
+  newly-renamed `optimize_household`.
+- `simulator.py` row dict gained columns: `medicare_base_premium`,
+  `health_pre65`, `aca_benchmark_premium`, `aca_apt_credit`,
+  `irmaa_lookback_agi`, `cumulative_basis`,
+  `fica_oasdi`, `fica_medicare`, `fica_additional_medicare`.
+  Removed: `fica_a`, `fica_b` (replaced by household-level
+  reconciliation; per-W-2 data still available via
+  `fica_employee()`).
 
-### Fixed
-- Wrong column name in notebook §14c bake-off (used `irmaa_cost`,
-  actual column is `irmaa`).
+### Tests
+- `tests/test_tier_c.py` (NEW) — 30 tests covering every Tier C-A
+  bug fix, every Tier C-B feature, and every Tier C-C optimizer
+  axis.
+- `tests/test_mortality.py` updated for TC-1 (year-of-death MFJ).
+- `tests/test_simulator.py` updated for TC-1 (year-of-death MFJ).
+
+### Docs
+- `docs/scenario_guide.md`: 7 new sections covering all Tier C
+  config knobs (Medicare base premium, pre-65 healthcare, IRMAA
+  lookback, ACA suite, step-up, optimize_ss_claim_age).
+- `scenarios/example01.json` and `scenarios/example02.json`:
+  added Tier C config block (set to backward-compat defaults so
+  existing scenarios behave identically).
 
 ---
 

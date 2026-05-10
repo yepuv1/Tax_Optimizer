@@ -57,8 +57,30 @@ class Mortality:
     def both_alive(self, year_offset: int) -> bool:
         return self.alive_a(year_offset) and self.alive_b(year_offset)
 
+    def is_year_of_death(self, year_offset: int) -> bool:
+        """True if either spouse died exactly during this simulation year.
+
+        Used by `filing_status` to keep MFJ for the year-of-death (IRS
+        rule) even though the deceased's income, SS, and pension are
+        already zeroed out by `alive_a` / `alive_b` from this year forward.
+        """
+        return (
+            self.year_of_death_a == year_offset
+            or self.year_of_death_b == year_offset
+        )
+
     def filing_status(self, year_offset: int) -> FilingStatus:
-        return "mfj" if self.both_alive(year_offset) else "single"
+        # IRS: in the calendar year a spouse dies, the surviving spouse
+        # may file a joint return with the decedent. We approximate that
+        # rule by keeping MFJ for the exact year_of_death even after
+        # `alive_*` flips. (Subsequent years drop to single — we don't
+        # model the 2-year "qualifying surviving spouse" window since it
+        # only applies if there's a dependent child in the household.)
+        if self.both_alive(year_offset):
+            return "mfj"
+        if self.is_year_of_death(year_offset):
+            return "mfj"
+        return "single"
 
     def survivor_label(self, year_offset: int) -> str | None:
         """Return 'a', 'b', or None (both alive or both dead)."""

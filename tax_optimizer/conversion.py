@@ -39,6 +39,8 @@ def planned_roth_conversion(
     regime: TaxRegime,
     filing_status: str,
     rmd_total: float = 0.0,
+    rmd_a: float = 0.0,
+    rmd_b: float = 0.0,
 ) -> tuple[float, float]:
     """Return (conv_a, conv_b): per-spouse pretax→Roth conversion.
 
@@ -47,6 +49,13 @@ def planned_roth_conversion(
     conversion is sized so that *post-RMD* taxable income just reaches
     the target bracket cap — i.e. RMD eats bracket headroom before any
     optional conversion does.
+
+    `rmd_a` / `rmd_b` are the per-spouse RMDs. Each spouse's
+    conversion is capped at `pretax_balance - rmd`, so a fixed-dollar
+    conversion can never consume balance the RMD requires (TC-7 fix).
+    Pre-Tier-C, a fixed `roth_conversion_amount` could pull the
+    pretax bucket low enough that `withdraw_for_need` silently
+    truncated the RMD — internal inconsistency vs IRS sequencing.
 
     Pro-rata split: if both spouses have eligible pretax balances, the
     total is split in proportion to each spouse's balance.
@@ -76,8 +85,9 @@ def planned_roth_conversion(
         a_eligible = state.spouse_a_pretax > 0
         b_eligible = state.spouse_b_pretax > 0
 
-    a_avail = state.spouse_a_pretax if a_eligible else 0.0
-    b_avail = state.spouse_b_pretax if b_eligible else 0.0
+    # Reserve each spouse's RMD against their own conversion ceiling.
+    a_avail = max(0.0, state.spouse_a_pretax - rmd_a) if a_eligible else 0.0
+    b_avail = max(0.0, state.spouse_b_pretax - rmd_b) if b_eligible else 0.0
     cap = a_avail + b_avail
     if cap <= 0:
         return 0.0, 0.0

@@ -31,11 +31,12 @@ The deterministic engine models federal brackets, LTCG, NIIT, IRMAA, Social-Secu
 │   │   ├── state.py                  # StateTaxRegime + STATELESS / CA / NY / IL / MA presets
 │   │   └── irmaa.py                  # MFJ + Single IRMAA tiers
 │   ├── withdrawals.py                # withdraw_for_need + per-strategy solvers + tax-efficient deficit cascade (taxable→Roth→HSA-after-65→pretax)
-│   ├── conversion.py                 # planned_roth_conversion
-│   ├── simulator.py                  # single-path year loop
+│   ├── conversion.py                 # planned_roth_conversion (RMD-aware, per-spouse capped)
+│   ├── payroll.py                    # FICA: per-W-2 + Form-8959 household reconciliation
+│   ├── simulator.py                  # single-path year loop (Medicare base + IRMAA lookback + ACA + step-up)
 │   ├── monte_carlo.py                # simulate_paths + MonteCarloResult
 │   ├── metrics.py                    # terminal-NW (heir_marginal_rate aware), lifetime-tax-NPV, summarize
-│   ├── optimizer.py                  # optimize_s3 (terminal / cvar / p_success)
+│   ├── optimizer.py                  # optimize_household (mega-backdoor + SS-claim-age axes, mc_seed thread)
 │   ├── sensitivity.py                # tornado + plain-English actions / takeaways
 │   └── plots.py                      # matplotlib helpers
 ├── docs/
@@ -461,10 +462,16 @@ Federal bracket numbers, IRS Uniform Lifetime divisors, pension-formula coeffici
 - State income tax for states beyond CA / NY / IL / MA (the bundled
   presets cover ~40% of the US population by income; add via
   `StateTaxRegime(...)`).
-- ACA premium-tax-credit cliffs in pre-Medicare years.
-- Estate-tax planning beyond the `heir_marginal_rate` step-up assumption in `terminal_after_tax_nw`.
-- Inherited IRA / 10-year-rule treatment.
-- Multi-asset-class market models (TIPS / international / REIT as separate buckets).
+- ACA premium tax credit beyond the post-IRA-2022 8.5%-of-MAGI cap
+  (the simplified path ships in v5; full Form 8962 with FPL ×
+  household-size lookup is in the Tier D backlog).
+- Common-law half step-up in basis (the v5 step-up models the
+  community-property full step-up; common-law is in Tier D).
+- Estate-tax planning beyond the `heir_marginal_rate` haircut in
+  `terminal_after_tax_nw`.
+- Inherited IRA / 10-year-rule intra-period drawdown timing.
+- Multi-asset-class market models (TIPS / international / REIT as
+  separate buckets).
 
 ## Acronyms
 
