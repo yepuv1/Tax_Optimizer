@@ -22,19 +22,26 @@ The deterministic engine models federal brackets, LTCG, NIIT, IRMAA, Social-Secu
 │   ├── pension.py                    # cash-balance projector
 │   ├── mortality.py                  # widow's-penalty / single-filer transition
 │   ├── spending.py                   # SpendingProfile + smile + lump events + LTC
-│   ├── market.py                     # Deterministic / Lognormal / Bootstrap + AssetLocation
+│   ├── market.py                     # Deterministic / Lognormal (w/ correlation + CAPE) / Bootstrap / HistoricalSequence + CMA presets + AssetLocation
+│   ├── ira.py                        # Traditional / direct Roth / backdoor Roth allocation (pro-rata aware)
+│   ├── limits.py                     # IRS contribution limits (401k, HSA, IRA) + helpers
 │   ├── tax/
 │   │   ├── regimes.py                # TaxRegime + TCJA_EXTENDED / PRE_TCJA_2017 / SUNSET_2026
 │   │   ├── federal.py                # regime + filing-status aware federal_tax
+│   │   ├── state.py                  # StateTaxRegime + STATELESS / CA / NY / IL / MA presets
 │   │   └── irmaa.py                  # MFJ + Single IRMAA tiers
-│   ├── withdrawals.py                # withdraw_for_need + per-strategy solvers
-│   ├── conversion.py                 # planned_roth_conversion (gap-year)
+│   ├── withdrawals.py                # withdraw_for_need + per-strategy solvers + tax-efficient deficit cascade (taxable→Roth→HSA-after-65→pretax)
+│   ├── conversion.py                 # planned_roth_conversion
 │   ├── simulator.py                  # single-path year loop
 │   ├── monte_carlo.py                # simulate_paths + MonteCarloResult
-│   ├── metrics.py                    # terminal-NW, lifetime-tax-NPV, summarize
+│   ├── metrics.py                    # terminal-NW (heir_marginal_rate aware), lifetime-tax-NPV, summarize
 │   ├── optimizer.py                  # optimize_s3 (terminal / cvar / p_success)
 │   ├── sensitivity.py                # tornado + plain-English actions / takeaways
 │   └── plots.py                      # matplotlib helpers
+├── docs/
+│   ├── scenario_guide.md             # reference for every scenario JSON field
+│   └── market_models.md              # market-model landscape & design rationale
+├── CHANGELOG.md                      # feature / fix log (update on every change)
 ├── tax_optimizer_standalone.ipynb    # demo notebook (imports from the package)
 ├── pyproject.toml
 ├── LICENSE
@@ -441,12 +448,23 @@ Federal bracket numbers, IRS Uniform Lifetime divisors, pension-formula coeffici
 - **Spending phases** — Blanchett-style retirement smile + LTC shock + arbitrary lump events.
 - **Tax legislation change** — switchable regimes, mid-simulation regime swap.
 
+## Documentation
+
+| Document | Purpose |
+|---|---|
+| [`CHANGELOG.md`](CHANGELOG.md) | Every feature, behavior change, and bug fix shipped (and the rules for adding new entries). The first stop when "what's new?" or "when did we add X?" comes up. |
+| [`docs/scenario_guide.md`](docs/scenario_guide.md) | Reference for every field in a scenario JSON — `config.*`, `inputs.*`, all knobs and their defensible ranges. |
+| [`docs/market_models.md`](docs/market_models.md) | Landscape of retirement Monte Carlo market models, the industry segments that use each one, and the design rationale behind which models we ship (vs. deliberately skip). |
+
 ## What's not modeled (yet)
 
-- State income tax (federal-only today; PRs welcome).
+- State income tax for states beyond CA / NY / IL / MA (the bundled
+  presets cover ~40% of the US population by income; add via
+  `StateTaxRegime(...)`).
 - ACA premium-tax-credit cliffs in pre-Medicare years.
-- Estate-tax planning beyond the 22% step-up assumption in `terminal_after_tax_nw`.
+- Estate-tax planning beyond the `heir_marginal_rate` step-up assumption in `terminal_after_tax_nw`.
 - Inherited IRA / 10-year-rule treatment.
+- Multi-asset-class market models (TIPS / international / REIT as separate buckets).
 
 ## Acronyms
 

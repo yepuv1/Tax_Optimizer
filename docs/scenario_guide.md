@@ -15,7 +15,7 @@ A field-by-field reference for `scenarios/*.json` files (the input format consum
   - [Calibration vs. real data](#calibration-vs-real-data)
   - [Three pre-baked profiles you can drop in](#three-pre-baked-profiles-you-can-drop-in)
   - [Where each parameter "should" sit, with sources](#where-each-parameter-should-sit-with-sources)
-  - [The other two market kinds](#the-other-two-market-kinds)
+  - [The other three market kinds](#the-other-three-market-kinds)
 - [`config.asset_location` — per-account equity / bond split](#configasset_location--per-account-equity--bond-split)
   - [The `uniform_equity_pct` shortcut](#the-uniform_equity_pct-shortcut)
   - [The per-bucket form](#the-per-bucket-form)
@@ -182,7 +182,7 @@ A defensible "**median-of-major-CMAs**" calibration as of late 2025–2026:
 
 **Defensible range: 5–8%.** A `0.06` matches the post-1990 regime; `0.07` honors the 2022 rate-shock and 1980s-style high-vol regime.
 
-### The other two market kinds
+### The other three market kinds
 
 ```json
 /* Deterministic — single-path, no randomness. Used by deterministic runs. */
@@ -190,9 +190,25 @@ A defensible "**median-of-major-CMAs**" calibration as of late 2025–2026:
 
 /* Bootstrap — block-resample real 5-year history blocks. Preserves fat tails. */
 "market": { "kind": "bootstrap", "block_size": 5 }
+
+/* Historical sequence replay — one contiguous N-year slice per path
+   (Bengen / FIRECalc methodology). Distinct from bootstrap: preserves
+   real multi-year regimes instead of stitching short blocks together. */
+"market": { "kind": "historical_sequence" }
+
+/* CMA preset shortcut — implies kind="lognormal", pulls a published
+   forward-looking assumption set. See market_models.md for the menu. */
+"market": { "cma": "vanguard_2025" }
+"market": { "cma": "vanguard_2025", "cape_today": 33.0 }   /* layer CAPE on top */
 ```
 
 Use `bootstrap` as a tail-risk reality check: it preserves real history's runs of bull/bear years and the 1929 / 1973 / 2008 fat tails that lognormal under-states.
+
+Use `historical_sequence` when you want the canonical FIRE-community methodology — exact 30-year windows from 1928–2023 — as a sanity check against the parametric and bootstrap models.
+
+> **For the full landscape of available models, the industry segments
+> that use each one, and the design rationale behind which models
+> we ship, see [`market_models.md`](market_models.md).**
 
 ---
 
