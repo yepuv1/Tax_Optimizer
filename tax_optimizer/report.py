@@ -23,7 +23,6 @@ from .config import Config
 from .inputs import Inputs
 from .market import (
     BootstrapModel,
-    DeterministicModel,
     HistoricalSequenceModel,
     LognormalModel,
     MarketModel,
@@ -123,7 +122,7 @@ def _cross_model_table(
     out.append("| Market model | P(success) | Median terminal NW | CVaR(10%) | Note |")
     out.append("|---|---:|---:|---:|---|")
 
-    main_name = type(mc.cfg.market).__name__
+    main_name = type(mc.cfg.resolved_market()).__name__
     main_note = _MODEL_NOTES.get(main_name, "—")
     s_main = mc.summary()
     out.append(
@@ -238,17 +237,23 @@ def _lever_changes(
 
 
 def _market_summary(cfg: Config) -> str:
-    """Short human description of `cfg.market`. For the parametric
-    lognormal model we also surface the equity/bond mu, sigma and
-    correlation so an advisor can sanity-check the assumptions."""
-    name = type(cfg.market).__name__
-    if isinstance(cfg.market, LognormalModel):
-        m = cfg.market
+    """Short human description of the market model the simulator will
+    actually use. For the parametric lognormal model we also surface
+    the equity/bond mu, sigma and correlation so an advisor can
+    sanity-check the assumptions.
+
+    Routes through `cfg.resolved_market()` so the default `Config()`
+    (where `cfg.market is None`) renders the deterministic fallback
+    rather than the literal string ``"NoneType"``.
+    """
+    market = cfg.resolved_market()
+    name = type(market).__name__
+    if isinstance(market, LognormalModel):
         return (
             f"{name} "
-            f"(equity μ={m.equity_mu:.1%}/σ={m.equity_sigma:.1%}, "
-            f"bond μ={m.bond_mu:.1%}/σ={m.bond_sigma:.1%}, "
-            f"ρ={m.equity_bond_corr:.2f})"
+            f"(equity μ={market.equity_mu:.1%}/σ={market.equity_sigma:.1%}, "
+            f"bond μ={market.bond_mu:.1%}/σ={market.bond_sigma:.1%}, "
+            f"ρ={market.equity_bond_corr:.2f})"
         )
     return name
 
@@ -330,7 +335,6 @@ def _optimizer_rationale(
 
     retire_age = max(inputs.spouse_a_retire_age, inputs.spouse_b_retire_age)
     retire_rows = w_df[w_df["spouse_a_age"] >= retire_age]
-    pre_rmd_rows = retire_rows[retire_rows["spouse_a_age"] < cfg.rmd_start_age]
     avg_retire_marginal = (
         float(retire_rows["marginal"].mean()) if len(retire_rows) else 0.0
     )
@@ -833,7 +837,6 @@ def build_action_report(
     winner = _winning_strategy(results)
     w = results[winner]
     w_cfg, w_inputs, w_df, w_sum = w.cfg, w.inputs, w.df, w.summary
-    base_sum = results["S0_baseline"].summary if "S0_baseline" in results else {}
     horizon = cfg.horizon_age - inputs.spouse_a_age_start + 1
     starting_total = inputs.starting.total_excl_real_estate
     household_wages = (
@@ -1031,7 +1034,7 @@ def build_action_report(
         md.append("")
         md.append(
             f'_Based on {s["n_paths"]} stochastic paths under the '
-            f"`{type(mc.cfg.market).__name__}` market model._"
+            f"`{type(mc.cfg.resolved_market()).__name__}` market model._"
         )
         md.append("")
         md.append("| Metric | Value | Reading |")

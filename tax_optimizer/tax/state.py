@@ -39,7 +39,7 @@ each year using the same ``bracket_indexing_rate`` as federal.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import Sequence
 
 from .regimes import Bracket, _scale_brackets

@@ -327,17 +327,17 @@ class TestConversionReservesRMD:
     def test_rmd_satisfied_when_fixed_conv_would_exceed_balance(self) -> None:
         # In bracket-fill mode the test would self-regulate; force
         # fixed mode and align the gap window so a conversion is
-        # eligible AT or after rmd_start_age. We use a custom
-        # rmd_start_age=70 so the "gap window" extends to 70 and
-        # collides with RMD.
+        # eligible AT or after rmd_start_age. `Config.__post_init__`
+        # rejects `rmd_start_age < 72`, so pick the youngest valid
+        # value (72, the bottom of the IRS Uniform Lifetime Table).
         cfg = Config(
             roth_conversion_amount=200_000,
-            rmd_start_age=70,                # RMDs start at 70
+            rmd_start_age=72,                # RMDs start at 72
         )
-        # Spouse A is 70 in year 0, retired, big pretax balance.
+        # Spouse A is 72 in year 0, retired, big pretax balance.
         inp = Inputs(
-            spouse_a_age_start=70,
-            spouse_b_age_start=70,
+            spouse_a_age_start=72,
+            spouse_b_age_start=72,
             spouse_a_retire_age=65,
             spouse_b_retire_age=65,
             starting=StartingBalances(
@@ -347,7 +347,7 @@ class TestConversionReservesRMD:
         )
         df = simulate(cfg, inp)
         first = df.iloc[0]
-        # Statutory RMD on $300k at age 70 ≈ $300k / 27.4 ≈ $10,949.
+        # Statutory RMD on $300k at age 72 ≈ $300k / 27.4 ≈ $10,949.
         # Fixed conv of $200k would have wiped the bucket; the cap at
         # `pretax - rmd` keeps RMD intact.
         assert first["rmd"] > 9_000

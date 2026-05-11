@@ -18,9 +18,23 @@ UNIFORM_LIFETIME: dict[int, float] = {
 
 
 def rmd_amount(balance: float, age: int, rmd_start_age: int = 75) -> float:
-    """Required minimum distribution for a single account given current age."""
+    """Required minimum distribution for a single account given current age.
+
+    Returns 0.0 when `age` falls below either `rmd_start_age` or the
+    minimum age in `UNIFORM_LIFETIME` (72). The second guard is
+    defensive: `Config.__post_init__` already rejects
+    `rmd_start_age < 72`, but a stray caller could still pass a low
+    age here, and we never want the prior fallback divisor of 1.0
+    (which returned the entire balance as an RMD).
+    """
     if age < rmd_start_age or balance <= 0:
         return 0.0
-    keys = [k for k in UNIFORM_LIFETIME if k <= age]
-    divisor = UNIFORM_LIFETIME.get(age, UNIFORM_LIFETIME[max(keys)] if keys else 1.0)
+    min_table_age = min(UNIFORM_LIFETIME)
+    if age < min_table_age:
+        return 0.0
+    if age in UNIFORM_LIFETIME:
+        divisor = UNIFORM_LIFETIME[age]
+    else:
+        # Beyond the published table (>=110): pin to the top entry.
+        divisor = UNIFORM_LIFETIME[max(UNIFORM_LIFETIME)]
     return balance / divisor

@@ -548,12 +548,18 @@ def _run_objective_optimizer(
         f"horizon {cfg.horizon_age}"
     )
     print(f"=== Optimizer (objective={args.mc_objective}, paths={args.monte_carlo}) ===")
+    # `seed=` reseeds the differential-evolution sampler; `mc_seed=`
+    # reseeds the Monte Carlo path draws that the objective scores
+    # against. Both have to share `args.seed` for the CLI's
+    # `--seed` flag to make MC objectives reproducible AND varied
+    # across distinct seeds.
     opt_cfg, opt_inputs, _x = optimize_s3(
         cfg,
         inputs,
         objective=args.mc_objective,
         n_paths=args.monte_carlo,
         seed=args.seed,
+        mc_seed=args.seed,
     )
     print(
         f"  spouse_a_roth_401k_pct = {opt_inputs.spouse_a_roth_401k_pct:.2f}\n"

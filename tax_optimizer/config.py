@@ -291,6 +291,19 @@ class Config:
         )
         return raw.inflated((1.0 + rate) ** year_offset)
 
+    def __post_init__(self) -> None:
+        # The IRS Uniform Lifetime Table starts at age 72 (SECURE 2.0
+        # currently sets the RMD start age to 73, going to 75 in 2033;
+        # 75 is our default). Anything below 72 has no published
+        # divisor — silently mishandling that previously caused the
+        # entire pretax balance to be returned as the RMD. Reject it
+        # at construction so misconfiguration fails loudly.
+        if self.rmd_start_age < 72:
+            raise ValueError(
+                f"rmd_start_age must be >= 72 (the youngest age in the IRS "
+                f"Uniform Lifetime Table); got {self.rmd_start_age}."
+            )
+
     def resolved_market(self) -> MarketModel:
         if self.market is not None:
             return self.market

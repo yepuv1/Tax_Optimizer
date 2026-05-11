@@ -215,7 +215,7 @@ class TestSimulateRegimeChange:
 
 
 class TestSimulateExampleScenario:
-    """Smoke run against the shipped example.json (real-world wiring)."""
+    """Smoke run against the shipped example scenarios (real-world wiring)."""
 
     @pytest.mark.parametrize(
         "scenario_path",
@@ -225,8 +225,10 @@ class TestSimulateExampleScenario:
         ],
     )
     def test_example_scenario_simulates(self, scenario_path: Path) -> None:
-        if not scenario_path.exists():
-            pytest.skip(f"missing {scenario_path}")
+        # The example scenarios are part of the repo and must exist; a
+        # silent skip here previously hid the fact that the path was
+        # broken in the docs (see CHANGELOG entry for v6.1).
+        assert scenario_path.exists(), f"missing {scenario_path}"
         scenario = load_scenario_file(scenario_path)
         cfg, inputs = apply_scenario(Config(), Inputs(), scenario)
         df = simulate(cfg, inputs)

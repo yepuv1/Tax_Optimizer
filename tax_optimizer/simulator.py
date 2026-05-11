@@ -28,7 +28,7 @@ from .pension import (
     project_pension_balance,
 )
 from .rmd import rmd_amount
-from .state import State, initial_state
+from .state import initial_state
 from .tax.federal import federal_tax
 from .tax.irmaa import MEDICARE_ELIGIBLE_AGE, irmaa_annual_surcharge
 from .tax.state import state_tax
@@ -428,9 +428,14 @@ def simulate(
         # those streams stop -- but the taxable brokerage keeps
         # producing dividends and interest forever. That portfolio
         # yield is computed below from the year-start balance.
-        extra_interest = inputs.income.interest if a_working else 0.0
-        extra_ltcg = inputs.income.capital_gains if a_working else 0.0
-        extra_qdiv = inputs.income.dividends if a_working else 0.0
+        # NOTE: gate on (a_working OR b_working). Previously this was
+        # `a_working` only, which silently zeroed the extras during the
+        # staggered-retirement window where A retires first but B is
+        # still earning.
+        anyone_working = a_working or b_working
+        extra_interest = inputs.income.interest if anyone_working else 0.0
+        extra_ltcg = inputs.income.capital_gains if anyone_working else 0.0
+        extra_qdiv = inputs.income.dividends if anyone_working else 0.0
 
         # Portfolio yield from the taxable brokerage. Applies in every
         # year (working OR retired), proportional to year-start balance
@@ -782,8 +787,8 @@ def simulate(
                 withdraws["pretax_b"] += extra["pretax_b"]
                 withdraws["pretax"] = withdraws["pretax_a"] + withdraws["pretax_b"]
 
-            # Recompute federal / state / IRMAA against the post-cascade
-            # kwargs so the recorded numbers reflect the additional draws.
+            # Recompute federal / state against the post-cascade kwargs
+            # so the recorded numbers reflect the additional draws.
             if extra["pretax"] > 0 or extra["taxable"] > 0 or extra.get("hsa", 0.0) > 0:
                 tax_result = federal_tax(
                     regime=regime, filing_status=filing_status, **final_kwargs
@@ -809,12 +814,23 @@ def simulate(
                     alive_b=alive_b,
                 )
                 state_income_tax = state_result["state_tax"]
-                irmaa = irmaa_annual_surcharge(
-                    tax_result["agi"], n_medicare,
-                    regime=regime, filing_status=filing_status,
-                )
-                irmaa_cost = irmaa["total"]
-                irmaa_tier = irmaa["tier"]
+                # IRMAA in year T is based on MAGI from year T-2 under
+                # the SSA two-year lookback (or year T-1 if the user
+                # set irmaa_lookback_years=1, or year T for
+                # irmaa_lookback_years=0). The cascade adds *current
+                # year* AGI, so under any positive lookback this
+                # year's IRMAA does NOT change — only T+lookback does.
+                # The cascade's effect on future-year IRMAA is
+                # captured by `state.prior_agi` / `state.agi_lag_2`,
+                # which get refreshed from the post-cascade
+                # `tax_result["agi"]` at the bottom of the loop.
+                if cfg.irmaa_lookback_years <= 0:
+                    irmaa = irmaa_annual_surcharge(
+                        tax_result["agi"], n_medicare,
+                        regime=regime, filing_status=filing_status,
+                    )
+                    irmaa_cost = irmaa["total"]
+                    irmaa_tier = irmaa["tier"]
 
         # ---- Growth via MarketModel + AssetLocation ----
         eq_r, bd_r = market.returns(year_offset)
