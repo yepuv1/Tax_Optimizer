@@ -38,12 +38,14 @@ The deterministic engine models federal brackets, LTCG, NIIT, IRMAA, Social-Secu
 │   ├── metrics.py                    # terminal-NW (heir_marginal_rate aware), lifetime-tax-NPV, summarize
 │   ├── optimizer.py                  # optimize_household (mega-backdoor + SS-claim-age axes, mc_seed thread)
 │   ├── sensitivity.py                # tornado + plain-English actions / takeaways
+│   ├── report.py                     # build_action_report + compare_scenarios + cross_model_check
 │   └── plots.py                      # matplotlib helpers
 ├── docs/
 │   ├── scenario_guide.md             # reference for every scenario JSON field
 │   └── market_models.md              # market-model landscape & design rationale
 ├── CHANGELOG.md                      # feature / fix log (update on every change)
-├── tax_optimizer_standalone.ipynb    # demo notebook (imports from the package)
+├── tax_optimizer_standalone.ipynb    # canonical demo notebook (imports from the package)
+├── retirement_planning_demo.ipynb    # decision-focused walkthrough driven by example02.json
 ├── pyproject.toml
 ├── LICENSE
 └── README.md
@@ -107,6 +109,19 @@ python -m tax_optimizer --report-archive
 # Monte Carlo (sequence-of-returns risk) — adds a "Risk picture" section.
 python -m tax_optimizer --market lognormal --monte-carlo 1000
 
+# Cross-model robustness check — adds §4 sub-section comparing the same
+# plan under alternative market models (defaults: bootstrap + historical
+# sequence). Requires --monte-carlo > 0.
+python -m tax_optimizer --market lognormal --monte-carlo 1000 --cross-model
+
+# Custom model list (any mix of built-in kinds + CMA presets).
+python -m tax_optimizer --market lognormal --monte-carlo 1000 \
+    --cross-model bootstrap,vanguard_2025,jpm_ltcma_2025
+
+# Collapse §7 to retirement years only (legacy v1-v6 compact view).
+# Default behaviour is to show the full horizon including working years.
+python -m tax_optimizer --year-table-scope retirement
+
 # Widow's-penalty stress test (Spouse A dies year 25).
 python -m tax_optimizer --widow 25
 
@@ -158,31 +173,93 @@ If WeasyPrint or its system libs are missing, `--report foo.pdf` exits
 with a clear install hint. HTML output requires no extras and works
 out of the box.
 
+#### What the action report contains
+
+`build_action_report` emits a markdown document organized into nine
+fixed sections. Anything labelled *(v6)* below was added in the Tier R
+"action-report polish" batch — see `CHANGELOG.md` for entry-level
+detail.
+
+| # | Section | What it answers |
+|---|---|---|
+| TL;DR *(v6)* | Verdict + lever changes + key risk readings | "Should I act on this plan, and what's the headline change?" |
+| 1 | Household snapshot + assumptions block *(v6)* | "What did the model assume about me, my market view, and my heirs?" |
+| 1a | Widow's-penalty paragraph *(v6, conditional)* | "How big is the bracket jump the year my spouse dies?" |
+| 1b | Regime-change paragraph *(v6, conditional)* | "How big is the bracket jump at TCJA sunset (or other regime swap)?" |
+| 2 | Recommended levers | The 3 optimizer decision variables and the deltas vs. baseline. |
+| 2a | Optimizer rationale *(v6)* | "*Why* did the optimizer choose this — what pattern is it responding to?" |
+| 3 | Expected outcomes (4-strategy side-by-side *(v6)*) | "How do S0 / S1 / S2 / S3 compare on terminal NW, lifetime tax, IRMAA, peak marginal?" |
+| 3a | Heir-rate sensitivity sweep *(v6)* | "Does this verdict survive if my heir is in the 22% bracket instead of 32%?" |
+| 4 | Risk picture (Monte Carlo) — optional | P(success), CVaR(10%), median ruin year. Only rendered when `mc=` is passed. |
+| 4a | Cross-model robustness check *(v6, conditional)* | Same plan re-scored under Bootstrap + HistoricalSequence. Only rendered when `extra_mc=` is passed. |
+| 5 | Tornado sensitivity | The knobs that move terminal NW the most, ranked. |
+| 6 | This year's concrete actions *(v6)* | Year-1 dollar amounts: 401(k) deferral, mega-backdoor, backdoor IRA, HSA, conversion target, expected tax bill. |
+| 7 | Year-by-year withdrawal & conversion timeline | Per-year action plan. Defaults to the **full horizon** (every simulated year, with a `RETIRE @ N` marker row dividing accumulation from drawdown); pass `year_table_scope="retirement"` / `--year-table-scope retirement` for the legacy retirement-only compact view. State-tax / healthcare columns auto-toggle on. |
+| 8 | Hygiene checklist | RMDs taken, bracket-management calls, IRMAA cliff awareness, etc. |
+| 9 | Caveats | What the model does and doesn't cover. |
+
+Two helpers ship alongside the report renderer for multi-scenario and
+multi-model comparisons:
+
+- **`compare_scenarios(scenarios, *, mc=None)`** *(v6)* — renders an
+  N-column markdown diff of independent household configurations.
+  Pass `[(name, cfg, inputs), ...]`; best value per row is bolded.
+  Use for "stay vs. move state", "retire at 62 vs. 67", "different
+  market regimes", etc.
+- **`cross_model_check(cfg, inputs, *, n_paths=200, seed=42, models=None)`**
+  *(v6)* — re-runs Monte Carlo under alternative market models
+  (defaults: `BootstrapModel` + `HistoricalSequenceModel`) and returns
+  `{name: MonteCarloResult}`. Passing the result back as
+  `build_action_report(..., extra_mc=...)` adds the cross-model
+  robustness sub-section inside §4. Also exposed via the CLI as
+  `--cross-model [MODELS]` / `--cross-model-paths N` (see the Monte
+  Carlo example above).
+
 The Python API exposes the same renderer plus the new HTML/PDF helpers:
 
 ```python
 from tax_optimizer import (
-    Config, Inputs, simulate, summarize, build_action_report,
-    optimize_s3, tornado_sensitivity,
+    Config, Inputs, simulate, simulate_paths, summarize,
+    build_action_report, compare_scenarios, cross_model_check,
+    optimize_household, tornado_sensitivity, LognormalModel,
 )
 from tax_optimizer.render import write_html, write_pdf, render_terminal
 from pathlib import Path
 
-cfg, inputs = Config(), Inputs()
+cfg, inputs = Config(market=LognormalModel()), Inputs()
 results = {
     "S0_baseline": (cfg, simulate(cfg, inputs), summarize(simulate(cfg, inputs))),
 }
-opt_cfg, _ = optimize_s3(cfg, inputs, objective="terminal")
-df_opt = simulate(opt_cfg, inputs)
+opt_cfg, opt_inputs, _ = optimize_household(cfg, inputs, objective="terminal")
+df_opt = simulate(opt_cfg, opt_inputs)
 results["S3_optimized"] = (opt_cfg, df_opt, summarize(df_opt))
 
 sens, base_terminal = tornado_sensitivity(cfg, inputs)
-report_md = build_action_report(cfg, inputs, results, sens, base_terminal)
+mc = simulate_paths(opt_cfg, opt_inputs, n_paths=500, seed=42)
+
+# (v6) Robustness across alternative market models — adds a
+# "Cross-model robustness check" section inside §4 of the report.
+extra_mc = cross_model_check(opt_cfg, opt_inputs, n_paths=200, seed=42)
+
+report_md = build_action_report(
+    cfg, inputs, results, sens, base_terminal,
+    mc=mc, extra_mc=extra_mc,
+)
+
+# (v6) Side-by-side comparison of N household variants.
+comparison_md = compare_scenarios([
+    ("Stay in CA",       cfg, inputs),
+    ("Move to TX",       cfg_tx, inputs),
+    ("Retire 2y later",  cfg, inputs_late),
+])
 
 render_terminal(report_md)                       # pretty stdout
 write_html(report_md, Path("action_report.html"))
 # write_pdf(report_md, Path("action_report.pdf"))  # needs [pdf] extra
 ```
+
+`optimize_s3` remains as a backward-compatible alias for
+`optimize_household`. New code should use `optimize_household`.
 
 #### Custom scenarios
 
@@ -245,11 +322,19 @@ household data:
     "spouse_b_roth_401k_pct": 0.0,
     "starting": { "spouse_a_pretax_401k": 400000, "hsa": 25000 },
     "income":   { "spouse_a_gross": 140000, "spouse_a_bonus": 15000 },
-    "ss":       { "monthly_spouse_a": 3100, "monthly_spouse_b": 2500 },
-    "annual_expenses": 95000
+    "ss":       { "monthly_spouse_a": 3100, "monthly_spouse_b": 2500 }
   }
 }
 ```
+
+> Expected spending is set on the **`config`** side, either via the
+> `spending` block (`base_spending` + optional smile / LTC / lump
+> events) or — when `spending` is `null` — the `annual_expenses_today`
+> scalar. The legacy `inputs.annual_expenses` field is retained for
+> backward compatibility but is ignored by the simulator and emits a
+> `DeprecationWarning` when set. See
+> [`docs/scenario_guide.md`](docs/scenario_guide.md#spending-knobs--three-names-one-effective-value)
+> for migration details.
 
 The household-specific fields under `inputs` are:
 
@@ -343,7 +428,7 @@ the allowed values are `"taxable"`, `"pretax"`, `"roth"`, `"any"`
 
 ```python
 from tax_optimizer import (
-    Config, Inputs, simulate, simulate_paths, optimize_s3,
+    Config, Inputs, simulate, simulate_paths, optimize_household,
     LognormalModel, Mortality, SpendingProfile, SUNSET_2026,
 )
 from dataclasses import replace
@@ -354,24 +439,34 @@ cfg = Config(market=LognormalModel())
 # Single deterministic path:
 df = simulate(cfg, inputs)
 
-# 1000-path Monte Carlo:
-mc = simulate_paths(cfg, inputs, n_paths=1000)
+# 1000-path Monte Carlo (mc_seed makes the path set reproducible):
+mc = simulate_paths(cfg, inputs, n_paths=1000, seed=42)
 print(mc.summary())          # prob_success, p5/p50/p95 terminal, CVaR(10%), ...
 
 # Stress-test the widow's penalty:
 cfg_widow = replace(cfg, mortality=Mortality(year_of_death_a=25))
 
-# Optimize for probability of success instead of point-estimate NW:
-cfg_opt, x_opt = optimize_s3(cfg, inputs, objective='p_success', n_paths=500)
+# Optimize for probability of success instead of point-estimate NW
+# (returns the full triple — Config + Inputs + raw decision vector):
+cfg_opt, inputs_opt, x_opt = optimize_household(
+    cfg, inputs, objective="p_success", n_paths=500, mc_seed=42,
+)
 ```
 
-### Notebook
+### Notebooks
+
+Two demo notebooks live at the repo root:
 
 ```bash
+# Canonical walkthrough — every feature, in order, with explanatory prose.
 jupyter lab tax_optimizer_standalone.ipynb
+
+# Decision-focused workflow driven by scenarios/example02.json (added v6).
+jupyter lab retirement_planning_demo.ipynb
 ```
 
-The notebook imports from the package and walks through:
+**`tax_optimizer_standalone.ipynb`** is the canonical reference. It
+imports from the package and walks through:
 
 1. Scenario inputs.
 2. First-year tax sanity check.
@@ -385,6 +480,19 @@ The notebook imports from the package and walks through:
 10. TCJA-sunset stress test.
 11. Smile-shaped spending + lump events.
 12. Asset location (bonds in pretax, equities in Roth).
+13. Market-model deep dive (Lognormal + correlation, CAPE conditioning, Historical replay, CMA presets).
+14. Tier C feature cheat sheet (ACA, step-up, healthcare costs, per-spouse SS).
+15. "What changed" recap.
+
+**`retirement_planning_demo.ipynb`** is shorter and more decision-shaped.
+It loads `scenarios/example02.json` once and threads a single household
+through 13 numbered sections — household snapshot, first-year sanity
+check, 4-strategy comparison (with an "optimizer is maximizing terminal
+after-tax NW" callout), year-by-year detail, tornado, Monte Carlo,
+widow's / sunset stress tests, Tier C feature dial, full action report
+(including the v6 cross-model robustness check), and a v5 → v6
+changelog summary. Start here if you want a worked example to copy
+rather than a feature tour.
 
 ## Decision variables
 
@@ -392,19 +500,29 @@ The model distinguishes four kinds of inputs, from narrowest to broadest:
 
 ### 1. Optimizer search variables (S3)
 
-The only variables `optimize_s3` searches over. Everything else is fixed.
+The variables `optimize_household` searches over. Everything else is
+fixed. As of v5 the decision vector is constructed dynamically: the
+three core axes are always present, and additional axes turn on when
+their feature flags are set on `Config` / `Inputs`.
 
-| Variable | Lives on | Domain | Meaning |
-|---|---|---|---|
-| `spouse_a_roth_401k_pct` | `Inputs` | `[0, 1]` | Fraction of Spouse A's 401(k) deferrals routed to Roth. |
-| `spouse_b_roth_401k_pct` | `Inputs` | `[0, 1]` | Same, for Spouse B. |
-| `roth_conversion_target_bracket` | `Config` | `{0%, 12%, 22%, 24%, 32%}` | Bracket the converter fills *up to* during gap years. |
+| Variable | Lives on | Domain | Always on? | Meaning |
+|---|---|---|---|---|
+| `spouse_a_roth_401k_pct` | `Inputs` | `[0, 1]` | yes | Fraction of Spouse A's 401(k) deferrals routed to Roth. |
+| `spouse_b_roth_401k_pct` | `Inputs` | `[0, 1]` | yes | Same, for Spouse B. |
+| `roth_conversion_target_bracket` | `Config` | `{0%, 12%, 22%, 24%, 32%}` | yes | Bracket the converter fills *up to* during gap years. |
+| `spouse_*_after_tax_401k_pct` *(v5)* | `Inputs` | `[0, 0.10]` | when `inputs.spouse_*_mega_backdoor_enabled = True` | After-tax 401(k) deferral routed straight to a mega-backdoor Roth in-plan conversion. One axis per spouse with the flag set. |
+| `ss.start_age_a`, `ss.start_age_b` *(v5)* | `Inputs` | `{62, 63, …, 70}` | when `cfg.optimize_ss_claim_age = True` | Per-spouse Social Security claim age. |
 
 Three optimizer objectives:
 
 - `'terminal'` — point-estimate terminal after-tax NW (deterministic only).
 - `'cvar'` — average terminal NW across the worst α% of Monte Carlo paths.
 - `'p_success'` — probability the plan never runs out of money.
+
+The Monte Carlo objectives accept a `mc_seed=` keyword on
+`optimize_household` so each candidate is evaluated against the *same*
+path set — without it, `differential_evolution` would see objective
+noise from path resampling and converge unevenly.
 
 ### 2. Where each knob lives — `Config` vs. `Inputs`
 
@@ -413,7 +531,7 @@ The split is intentional and keeps the same `Config` reusable across households:
 - **`Inputs`** — the *household*. Spouse ages, retire ages, salaries, contribution rates, Roth-401(k) splits, starting balances, Social Security amounts (incl. claim age `inputs.ss.start_age`), pension data (incl. start age `inputs.pension.start_age`), expected expenses, etc. See `tax_optimizer/inputs.py`.
 - **`Config`** — the *simulation / strategy*. Macro assumptions (`nominal_growth_rate`, `inflation`, `wage_growth`), the one remaining age-gated policy event (`rmd_start_age`), the withdrawal / conversion strategy, and the modular assumption blocks below. See `tax_optimizer/config.py`.
 
-The optimizer's three decision variables follow the same split: the Roth-401(k) splits land on `Inputs` (a household-level deferral choice) and the conversion bracket target lands on `Config` (a strategy-level rule). `optimize_s3` therefore returns `(best_cfg, best_inputs, x_opt)`, and each of the four canonical strategies in the CLI carries its own `(cfg, inputs)` pair packaged as a `StrategyResult`.
+The optimizer's decision variables follow the same split: the Roth-401(k) splits, after-tax-401(k) splits, and SS claim ages land on `Inputs` (household-level choices); the conversion bracket target lands on `Config` (a strategy-level rule). `optimize_household` therefore returns `(best_cfg, best_inputs, x_opt)`, and each of the four canonical strategies in the CLI carries its own `(cfg, inputs)` pair packaged as a `StrategyResult`. The old name `optimize_s3` is kept as a backward-compatible alias.
 
 ### 3. Modular assumption blocks (v2)
 
@@ -439,23 +557,30 @@ Federal bracket numbers, IRS Uniform Lifetime divisors, pension-formula coeffici
 ## What's modeled
 
 - **Federal income tax** — ordinary brackets, qualified-dividend / LTCG brackets, NIIT, standard deduction.
-- **Social-Security taxation** — IRC §86 provisional-income calculation with the right thresholds for filing status.
-- **IRMAA** — current 2026 tier table for both MFJ and single filers; auto-switches when filing status changes.
+- **State income tax** — CA / NY / IL / MA presets (progressive or flat, with retirement-income carve-outs and SS exemptions); easily extensible via `StateTaxRegime(...)`.
+- **Social-Security taxation** — IRC §86 provisional-income calculation with the right thresholds for filing status, plus year-of-death MFJ handling and survivor benefits from age 60.
+- **FICA** — per-W-2 SS + Medicare withholding plus the Form-8959 household reconciliation for the Additional Medicare 0.9% surcharge at the MFJ threshold.
+- **IRMAA** — current 2026 tier table for both MFJ and single filers; auto-switches when filing status changes; two-year MAGI lookback.
+- **Medicare premiums** — base Part B + Part D, pre-Medicare ACA premium with the IRA-2022 8.5%-of-MAGI premium-tax-credit cap.
 - **RMDs** — IRS Uniform Lifetime divisors for ages 72-110, computed per spouse on their own pretax balances.
-- **Cost-basis tracking** — taxable brokerage basis fraction is dynamic, not constant.
-- **Sequence-of-returns risk** — Monte Carlo with lognormal or block-bootstrap historical resampling.
+- **Roth conversions** — RMD-aware, per-spouse capped, bracket-target driven; mega-backdoor support via dedicated decision-vector axis.
+- **IRA contribution paths** — Traditional / direct Roth / backdoor Roth (pro-rata aware on IRA-only sub-balance).
+- **Employer 401(k) match** — match-rate × match-cap per spouse, layered on top of employee deferrals.
+- **Cost-basis tracking** — taxable brokerage basis fraction is dynamic, not constant; full step-up to FMV on first spouse's death (community-property model).
+- **Sequence-of-returns risk** — Monte Carlo with `LognormalModel` (with equity-bond correlation + optional CAPE conditioning), `BootstrapModel` (1928–2023 block bootstrap), or `HistoricalSequenceModel` (one contiguous slice of real history per path).
+- **Calibration presets** — Vanguard, JPM, Horizon CMAs via `lognormal_from_cma(...)`.
 - **Asset location** — separate equity/bond allocation per account type.
-- **Mortality** — single-spouse death event with proper survivor SS / pension / filing-status transitions.
+- **Mortality** — single-spouse death event with proper survivor SS / pension / filing-status transitions (year-of-death MFJ, survivor benefits at 60, step-up in basis).
 - **Spending phases** — Blanchett-style retirement smile + LTC shock + arbitrary lump events.
-- **Tax legislation change** — switchable regimes, mid-simulation regime swap.
+- **Tax legislation change** — switchable regimes (TCJA / pre-TCJA / sunset), mid-simulation regime swap.
 
 ## Documentation
 
 | Document | Purpose |
 |---|---|
-| [`CHANGELOG.md`](CHANGELOG.md) | Every feature, behavior change, and bug fix shipped (and the rules for adding new entries). The first stop when "what's new?" or "when did we add X?" comes up. |
+| [`CHANGELOG.md`](CHANGELOG.md) | Every feature, behavior change, and bug fix shipped (and the rules for adding new entries). The first stop when "what's new?" or "when did we add X?" comes up. The `v6` block documents the action-report polish covered in [What the action report contains](#what-the-action-report-contains) above. |
 | [`docs/scenario_guide.md`](docs/scenario_guide.md) | Reference for every field in a scenario JSON — `config.*`, `inputs.*`, all knobs and their defensible ranges. |
-| [`docs/market_models.md`](docs/market_models.md) | Landscape of retirement Monte Carlo market models, the industry segments that use each one, and the design rationale behind which models we ship (vs. deliberately skip). |
+| [`docs/market_models.md`](docs/market_models.md) | Landscape of retirement Monte Carlo market models, the industry segments that use each one, and the design rationale behind which models we ship (vs. deliberately skip). Includes the v6 `cross_model_check` API for surfacing model-choice risk in the action report. |
 
 ## What's not modeled (yet)
 

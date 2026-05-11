@@ -70,8 +70,14 @@ from . import (
     summarize,
     tornado_sensitivity,
 )
+from .market import (
+    CMA_PRESETS,
+    HistoricalSequenceModel,
+    MarketModel,
+    lognormal_from_cma,
+)
 from .render import detect_format, render_terminal, write_report
-from .report import build_action_report
+from .report import build_action_report, cross_model_check
 from .results import StrategyResult
 from .scenario import (
     ScenarioError,
@@ -80,6 +86,70 @@ from .scenario import (
     load_scenario_file,
     scenario_to_dict,
 )
+
+
+# Built-in market-model kinds the `--cross-model` flag understands. The
+# labels are matched against `_MODEL_NOTES` in `report.py`, so they need
+# to stay in sync with that dict to keep the "Note" column populated.
+_BUILTIN_CROSS_MODELS: dict[str, tuple[str, type]] = {
+    "lognormal": ("LognormalModel", LognormalModel),
+    "bootstrap": ("BootstrapModel", BootstrapModel),
+    "historical_sequence": ("HistoricalSequenceModel", HistoricalSequenceModel),
+    # Convenience alias for the long-form name.
+    "historical": ("HistoricalSequenceModel", HistoricalSequenceModel),
+}
+
+
+class CrossModelError(ValueError):
+    """Raised when `--cross-model` arguments can't be resolved."""
+
+
+def _parse_cross_model_arg(arg: str | None) -> list[tuple[str, MarketModel]] | None:
+    """Translate the raw `--cross-model` CLI argument into a model list.
+
+    The input shapes accepted on the command line:
+
+    * Flag absent (``arg is None``)   → returns ``None`` (caller should
+      skip cross-model rendering entirely).
+    * Flag present, no value (``arg == ""``) → returns ``None`` so
+      ``cross_model_check`` uses its built-in defaults
+      (``BootstrapModel`` + ``HistoricalSequenceModel``).
+    * Comma-separated list of names  → returns a fully-resolved list of
+      ``(label, MarketModel)`` tuples. Recognized names:
+
+      - ``"lognormal"`` / ``"bootstrap"`` / ``"historical_sequence"``
+        (alias: ``"historical"``) — the built-in market kinds.
+      - Any key in ``tax_optimizer.market.CMA_PRESETS`` — instantiates
+        a Lognormal model from the named CMA preset.
+
+    Raises ``CrossModelError`` with a clear human-readable message when
+    a name doesn't resolve, so the CLI can surface it cleanly.
+    """
+    if arg is None:
+        return None
+    if not arg.strip():
+        return None  # Flag passed with no value → use cross_model_check defaults.
+
+    raw_names = [n.strip() for n in arg.split(",") if n.strip()]
+    if not raw_names:
+        return None
+
+    resolved: list[tuple[str, MarketModel]] = []
+    for raw in raw_names:
+        name = raw.lower()
+        if name in _BUILTIN_CROSS_MODELS:
+            label, cls = _BUILTIN_CROSS_MODELS[name]
+            resolved.append((label, cls()))
+            continue
+        if name in CMA_PRESETS:
+            resolved.append((name, lognormal_from_cma(name)))
+            continue
+        known = sorted({*_BUILTIN_CROSS_MODELS, *CMA_PRESETS})
+        raise CrossModelError(
+            f"--cross-model: unknown model {raw!r}. "
+            f"Known: {', '.join(known)}"
+        )
+    return resolved
 
 
 def _strategy_results(
@@ -202,6 +272,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "  tax-optimizer --scenario my_plan.json --monte-carlo 500 --market lognormal\n"
             "  tax-optimizer --print-defaults > my_plan.json\n"
             "  tax-optimizer --set config.horizon_age=95 --set inputs.starting.hsa=25000\n"
+            "  tax-optimizer --monte-carlo 1000 --cross-model                       # defaults\n"
+            "  tax-optimizer --monte-carlo 1000 --cross-model bootstrap,vanguard_2025  # custom\n"
             "  tax-optimizer --no-report                  # legacy short text output\n"
             "  tax-optimizer | glow -                     # raw markdown when piped\n"
         ),
@@ -278,6 +350,42 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--seed", type=int, default=0, help="Master RNG seed for Monte Carlo."
     )
+    p.add_argument(
+        "--cross-model",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="MODELS",
+        help=(
+            "Add a 'Cross-model robustness check' sub-section to §4 of the "
+            "action report. Re-runs the winning plan under alternative market "
+            "models. Pass with no value for the defaults (bootstrap + "
+            "historical_sequence) or with a comma-separated list of: "
+            "lognormal, bootstrap, historical_sequence (alias historical), "
+            f"{', '.join(sorted(CMA_PRESETS))}. Requires --monte-carlo > 0."
+        ),
+    )
+    p.add_argument(
+        "--cross-model-paths",
+        type=int,
+        default=200,
+        help=(
+            "Number of Monte Carlo paths per alternative model when "
+            "--cross-model is set (default: 200)."
+        ),
+    )
+    p.add_argument(
+        "--year-table-scope",
+        choices=["full", "retirement"],
+        default="full",
+        help=(
+            "Scope of the §7 year-by-year withdrawal & conversion table. "
+            "'full' (default) shows every simulated year including "
+            "working years with their AGI/federal tax columns; "
+            "'retirement' shows retirement years only (the legacy "
+            "v1-v6 compact view)."
+        ),
+    )
 
     p.add_argument(
         "--report",
@@ -350,6 +458,28 @@ def main() -> None:
             cfg, inputs, n_paths=args.monte_carlo, seed=args.seed, keep_paths=False
         )
 
+    extra_mc = None
+    if args.cross_model is not None:
+        if mc is None:
+            print(
+                "error: --cross-model requires --monte-carlo > 0 "
+                "(the alternative models anchor against the main MC result).",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        try:
+            cross_models = _parse_cross_model_arg(args.cross_model)
+        except CrossModelError as e:
+            print(f"error: {e}", file=sys.stderr)
+            sys.exit(2)
+        extra_mc = cross_model_check(
+            cfg,
+            inputs,
+            n_paths=args.cross_model_paths,
+            seed=args.seed if args.seed else 42,
+            models=cross_models,
+        )
+
     results = _strategy_results(cfg, inputs)
     sens, base_terminal = tornado_sensitivity(cfg, inputs)
 
@@ -365,6 +495,8 @@ def main() -> None:
         base_terminal=base_terminal,
         mc=mc,
         scenario_path=args.scenario,
+        extra_mc=extra_mc,
+        year_table_scope=args.year_table_scope,
     )
     _emit_report(report_md, args)
 

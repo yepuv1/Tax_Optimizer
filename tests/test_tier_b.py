@@ -91,7 +91,8 @@ def _short_horizon_inputs(**overrides) -> Inputs:
             fra_a=67,
             fra_b=67,
         ),
-        annual_expenses=80_000.0,
+        # annual_expenses intentionally omitted: simulator reads
+        # `cfg.spending.base_spending` from `_short_horizon_cfg`.
     )
     return replace(base, **overrides) if overrides else base
 

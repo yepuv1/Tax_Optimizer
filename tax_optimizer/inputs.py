@@ -22,7 +22,14 @@ Defaults reflect a typical dual-income married-filing-jointly couple turning
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
+
+# Sentinel value used to detect "field was never touched by the caller".
+# We use a non-default float (the historical default) and emit a warning
+# only when a user explicitly sets `annual_expenses` to something else.
+# See `Inputs.__post_init__` for the deprecation gating.
+_ANNUAL_EXPENSES_LEGACY_DEFAULT = 85_000.0
 
 
 @dataclass
@@ -260,4 +267,23 @@ class Inputs:
     contrib: CurrentContrib = field(default_factory=CurrentContrib)
     pension: PensionInputs = field(default_factory=PensionInputs)
     ss: SocialSecurity = field(default_factory=SocialSecurity)
-    annual_expenses: float = 85_000.0
+
+    # DEPRECATED (v7): kept as a dataclass field for backward compatibility,
+    # but the simulator does NOT read it. The simulator's spending base
+    # comes from `cfg.resolved_spending()`, which prefers
+    # `cfg.spending.base_spending` and falls back to
+    # `cfg.annual_expenses_today`. A non-default value here only emits a
+    # one-shot DeprecationWarning pointing users at the correct knob.
+    annual_expenses: float = _ANNUAL_EXPENSES_LEGACY_DEFAULT
+
+    def __post_init__(self) -> None:
+        if self.annual_expenses != _ANNUAL_EXPENSES_LEGACY_DEFAULT:
+            warnings.warn(
+                "Inputs.annual_expenses is deprecated and ignored by the "
+                "simulator. Set Config.annual_expenses_today (used when "
+                "Config.spending is None) or Config.spending.base_spending "
+                "(the SpendingProfile path) instead. This field will be "
+                "removed in a future release.",
+                DeprecationWarning,
+                stacklevel=2,
+            )

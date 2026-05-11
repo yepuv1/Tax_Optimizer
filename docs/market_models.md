@@ -16,8 +16,9 @@ layer.
 3. [Industry "standard" — depends entirely on segment](#industry-standard--depends-entirely-on-segment)
 4. [Empirical-value-per-line analysis](#empirical-value-per-line-analysis)
 5. [What we actually built (v4)](#what-we-actually-built-v4)
-6. [What we deliberately did NOT build, and why](#what-we-deliberately-did-not-build-and-why)
-7. [Calibration sources](#calibration-sources)
+6. [Using multiple models in one report (v6)](#using-multiple-models-in-one-report-v6)
+7. [What we deliberately did NOT build, and why](#what-we-deliberately-did-not-build-and-why)
+8. [Calibration sources](#calibration-sources)
 
 ---
 
@@ -33,6 +34,11 @@ Five concrete implementations of the `MarketModel` protocol live in
 | `BootstrapModel` | Yes | block-bootstrap of 1928–2023 history (default `block_size=5`) | empirical fat tails + short-run autocorrelation |
 | `HistoricalSequenceModel` | Yes | one contiguous slice of real history per path (Bengen / FIRECalc style) | sanity-check against actual 30-year windows |
 | `lognormal_from_cma(...)` | Yes (factory, not a class) | published forward-looking CMAs from Vanguard, JPMorgan, Horizon | "what does the industry expect for the next decade?" |
+
+In v6 a public helper `cross_model_check(cfg, inputs, *, n_paths,
+seed, models)` re-runs Monte Carlo under any combination of the above
+models and feeds the result into the action report. See
+[Using multiple models in one report (v6)](#using-multiple-models-in-one-report-v6).
 
 That covers the **three return-modeling schools** retail planning
 tools are built around:
@@ -245,6 +251,93 @@ HistoricalSequence (single window)   terminal_after_tax_nw = $ 63.84M
 
 The spread is precisely the "your-plan-depends-on-this" picture every
 serious planner should surface.
+
+---
+
+## Using multiple models in one report (v6)
+
+The cross-model spread above is no longer a manual exercise — the v6
+report layer ships a first-class public helper for running the same
+plan under multiple market models and dropping the result into the
+action report:
+
+```python
+from tax_optimizer import (
+    Config, Inputs, simulate_paths,
+    build_action_report, cross_model_check,
+    LognormalModel, BootstrapModel, HistoricalSequenceModel,
+)
+
+cfg, inputs = Config(market=LognormalModel()), Inputs()
+mc       = simulate_paths(cfg, inputs, n_paths=1000, seed=42)
+extra_mc = cross_model_check(cfg, inputs, n_paths=200, seed=42)
+# → {"Bootstrap": MonteCarloResult, "HistoricalSequence": MonteCarloResult}
+
+# Custom model menu (e.g. swap in a CMA preset for comparison):
+extra_mc_custom = cross_model_check(
+    cfg, inputs, n_paths=200, seed=42,
+    models=[
+        ("Vanguard CMA",        lognormal_from_cma("vanguard_2025")),
+        ("Bootstrap 1928-2023", BootstrapModel()),
+    ],
+)
+
+report_md = build_action_report(
+    cfg, inputs, results, sens, base_terminal,
+    mc=mc, extra_mc=extra_mc,
+)
+```
+
+What you get back is a new sub-section inside §4 of the action report
+titled **"Cross-model robustness check"**, with three columns per
+alternative model — P(success), median terminal NW, CVaR(10%) — plus
+an auto-emitted callout:
+
+| Pattern | Callout rendered |
+|---|---|
+| Any alt model below 90% P(success) when the main model is above | "Model-risk flag — robust under `<main>` but fragile under `<alt>`" |
+| All models above 90% P(success), spread ≤ 5 pp | "All models agree the plan is robust" |
+| All models above 90%, spread > 5 pp | Neutral note quantifying the spread |
+| Any alt model below 90% when the main model is also below | "Plan is fragile under every model tested" |
+
+This is the operational form of the "your-plan-depends-on-this" table
+above. Use it whenever a household is depending on a *particular* μ
+choice (e.g. CMA presets) — the bootstrap / historical-replay column
+will reveal how much of the verdict survives if the next 30 years
+don't look like the forward-looking estimate.
+
+### From the CLI
+
+The same flow is available via the command line:
+
+```bash
+# Default model menu (BootstrapModel + HistoricalSequenceModel).
+tax-optimizer --market lognormal --monte-carlo 1000 --cross-model
+
+# Custom comma-separated list. Recognized names:
+#   built-in kinds: lognormal, bootstrap, historical_sequence (alias: historical)
+#   CMA presets:   vanguard_2025, jpm_ltcma_2025, horizon_2025,
+#                  historical_1928_2023, historical_1985_2023
+tax-optimizer --market lognormal --monte-carlo 1000 \
+    --cross-model bootstrap,vanguard_2025,jpm_ltcma_2025
+
+# Tune the per-alternative-model path count (default: 200).
+tax-optimizer --market lognormal --monte-carlo 1000 \
+    --cross-model --cross-model-paths 500
+
+# Save the report including the cross-model section.
+tax-optimizer --market lognormal --monte-carlo 1000 \
+    --cross-model --report reports/cross_model.html
+```
+
+`--cross-model` requires `--monte-carlo > 0` (the alternative models
+anchor against the "current" Monte Carlo row in the sub-section's
+table). The CLI uses the same `seed` value as `--monte-carlo` so the
+random draws are reproducible across the main and alternative models.
+
+The same `extra_mc` mechanism flows through `--report PATH.html`
+and `--report PATH.pdf` via the CLI; the underlying renderer doesn't
+care which surface it ends up on.
 
 ---
 

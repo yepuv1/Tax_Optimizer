@@ -13,7 +13,7 @@ tagged-dict form.
         "regime_change_target": "tcja",
         "market":   { "kind": "lognormal",
                       "equity_mu": 0.07, "equity_sigma": 0.18 },
-        "spending": { "kind": "smile",
+        "spending": { "kind": "smile", "base_spending": 95000,
                       "ltc_years": 4, "ltc_annual_today": 100000 },
         "mortality": { "year_of_death_a": 25, "pension_survivor_pct": 0.5 },
         "asset_location": { "uniform_equity_pct": 0.6 }
@@ -31,10 +31,15 @@ tagged-dict form.
         "income":   { "spouse_a_gross": 140000 },
         "contrib":  { "hsa_family": 9000 },
         "pension":  { "monthly_at_nrd": 1200, "start_age": 65 },
-        "ss":       { "monthly_spouse_a": 3100, "start_age": 70 },
-        "annual_expenses": 95000
+        "ss":       { "monthly_spouse_a": 3100, "start_age": 70 }
       }
     }
+
+Setting expected expenses is done on the `config` side, via the
+`spending` block (recommended) or the scalar `annual_expenses_today`
+fallback. The `inputs.annual_expenses` field is retained for backward
+compatibility but is ignored by the simulator and emits a
+`DeprecationWarning` when set to a non-default value.
 
 Unknown keys raise `ScenarioError` so typos don't silently no-op. If a
 legacy scenario file puts one of the spouse_* fields under `config`,
@@ -48,6 +53,7 @@ and for serializing the current effective scenario back to JSON for
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import asdict, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -405,10 +411,47 @@ def _apply_config_dict(cfg: Config, patch: dict[str, Any]) -> Config:
             f"Valid fields include: {sorted(valid)}."
         )
 
+    _warn_spending_inconsistency(patch)
+
     kwargs: dict[str, Any] = {}
     for k, v in patch.items():
         kwargs[k] = _coerce_config_field(k, v, current=getattr(cfg, k))
     return replace(cfg, **kwargs)
+
+
+def _warn_spending_inconsistency(patch: dict[str, Any]) -> None:
+    """Warn when both `annual_expenses_today` and `spending.base_spending`
+    are set in the same scenario but disagree.
+
+    Only `spending.base_spending` reaches the simulator in that case
+    (`Config.resolved_spending()` picks `spending` first), so the
+    `annual_expenses_today` value is silently ignored. A scenario where
+    the two values match is left silent — it's redundant but not
+    misleading.
+    """
+    if "annual_expenses_today" not in patch:
+        return
+    spending = patch.get("spending")
+    if not isinstance(spending, dict):
+        return  # `spending: null` or no spending block → no conflict.
+    if "base_spending" not in spending:
+        return
+    try:
+        scalar = float(patch["annual_expenses_today"])
+        profile = float(spending["base_spending"])
+    except (TypeError, ValueError):
+        return  # leave coercion errors to the regular path
+    if scalar == profile:
+        return
+    warnings.warn(
+        f"Scenario sets both config.annual_expenses_today (${scalar:,.0f}) "
+        f"and config.spending.base_spending (${profile:,.0f}). The simulator "
+        f"uses config.spending.base_spending when a spending block is "
+        f"present; config.annual_expenses_today is ignored in this case. "
+        f"Remove one of the two to silence this warning.",
+        UserWarning,
+        stacklevel=4,
+    )
 
 
 def _coerce_config_field(name: str, v: Any, *, current: Any) -> Any:

@@ -50,7 +50,7 @@ from .optimizer import (
     optimize_s3,
     x_to_overrides,
 )
-from .report import build_action_report
+from .report import build_action_report, compare_scenarios, cross_model_check
 from .results import StrategyResult
 from .scenario import (
     ScenarioError,
@@ -114,4 +114,6 @@ __all__ = [
     "apply_set_overrides",
     "scenario_to_dict",
     "build_action_report",
+    "compare_scenarios",
+    "cross_model_check",
 ]

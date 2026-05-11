@@ -9,6 +9,7 @@ A field-by-field reference for `scenarios/*.json` files (the input format consum
 ## Table of contents
 
 - [Top-level structure](#top-level-structure)
+- [Spending knobs — three names, one effective value](#spending-knobs--three-names-one-effective-value)
 - [`config.market` — return-model parameters](#configmarket--return-model-parameters)
   - [What `kind: "lognormal"` does](#what-kind-lognormal-does)
   - [The four numbers, decoded](#the-four-numbers-decoded)
@@ -55,8 +56,61 @@ A field-by-field reference for `scenarios/*.json` files (the input format consum
 
 Both sections are optional and fields are optional within each. Unknown keys raise a `ScenarioError` so typos don't silently no-op. The two top-level keys reflect the runtime `Config` and `Inputs` dataclasses one-to-one:
 
-- **`Config`** — the *simulation / strategy*. Macro assumptions (`nominal_growth_rate`, `inflation`, `wage_growth`, `ss_cola_rate`, `bracket_indexing_rate`, `taxable_equity_div_yield`, `taxable_bond_interest_yield`), `rmd_start_age`, withdrawal / conversion strategy, and the modular blocks `market` / `asset_location` / `spending` / `mortality`.
-- **`Inputs`** — the *household*. Spouse ages, retire ages, salaries, contribution rates, Roth-401(k) splits, **employer 401(k) match** (`spouse_*_employer_match_rate` / `_max_pct`), starting balances, Social Security amounts and per-spouse claim ages (`inputs.ss.start_age_a` / `start_age_b`, `fra_a` / `fra_b`), HSA contribution target (`inputs.contrib.hsa_family`), pension data (incl. start age `inputs.pension.start_age`), expected expenses, etc.
+- **`Config`** — the *simulation / strategy*. Macro assumptions (`nominal_growth_rate`, `inflation`, `wage_growth`, `ss_cola_rate`, `bracket_indexing_rate`, `taxable_equity_div_yield`, `taxable_bond_interest_yield`), `rmd_start_age`, withdrawal / conversion strategy, the spending profile (`spending` block or `annual_expenses_today` scalar fallback), and the modular blocks `market` / `asset_location` / `mortality`.
+- **`Inputs`** — the *household*. Spouse ages, retire ages, salaries, contribution rates, Roth-401(k) splits, **employer 401(k) match** (`spouse_*_employer_match_rate` / `_max_pct`), starting balances, Social Security amounts and per-spouse claim ages (`inputs.ss.start_age_a` / `start_age_b`, `fra_a` / `fra_b`), HSA contribution target (`inputs.contrib.hsa_family`), pension data (incl. start age `inputs.pension.start_age`).
+
+---
+
+## Spending knobs — three names, one effective value
+
+Three legacy-overlapping fields all influence the spending figure that
+flows into the year-by-year cash-flow loop. Only **one** actually
+reaches the simulator. Here's the precedence the loader applies, in
+order:
+
+| Knob | Lives on | When it's used | Status |
+|---|---|---|---|
+| `config.spending.base_spending` | `Config.spending` (a `SpendingProfile`) | When `config.spending` is set (any `kind`: `flat` / `smile` / `custom`). Drives the smile multipliers and LTC shock. | **Active, recommended.** |
+| `config.annual_expenses_today` | `Config` scalar | Fallback when `config.spending` is `null` or omitted. The loader wraps it into a flat profile inflated by `config.inflation`. | **Active fallback only.** |
+| `inputs.annual_expenses` | `Inputs` scalar | Never. Vestigial field retained for backward compatibility. | **Deprecated — see warning below.** |
+
+### The precedence implemented in `Config.resolved_spending`
+
+```python
+def resolved_spending(self) -> SpendingProfile:
+    if self.spending is not None:
+        return self.spending                              # winner #1
+    return SpendingProfile.flat(
+        base_spending=self.annual_expenses_today,         # winner #2
+        inflation=self.inflation,
+    )
+```
+
+`inputs.annual_expenses` is not read anywhere in `simulator.py` or
+`config.py` — it's a field that survived the v2 `Config` ↔ `Inputs`
+split for backward compatibility only.
+
+### Warnings the loader emits
+
+The scenario loader issues warnings (not errors — old scenarios still
+load) when it detects a likely misconfiguration:
+
+| Trigger | Category | What the message says |
+|---|---|---|
+| `inputs.annual_expenses` set to any non-default value (e.g. via `--scenario`, `--set`, or direct Python construction) | `DeprecationWarning` | "Inputs.annual_expenses is deprecated and ignored by the simulator. Set Config.annual_expenses_today or Config.spending.base_spending instead." |
+| Scenario sets **both** `config.annual_expenses_today` and `config.spending.base_spending` to **different** values | `UserWarning` | "Scenario sets both config.annual_expenses_today ($X) and config.spending.base_spending ($Y). The simulator uses config.spending.base_spending when a spending block is present; config.annual_expenses_today is ignored in this case." |
+
+Matching values stay silent — having both fields with the same value
+is redundant but not misleading (and the example scenarios under
+`scenarios/example*.json` do exactly that as a reference template).
+
+### Migration guide for existing scenarios
+
+| Old form | New form |
+|---|---|
+| `"inputs": { "annual_expenses": 95000 }` (no `config.spending`) | `"config": { "annual_expenses_today": 95000 }` |
+| `"inputs": { "annual_expenses": 95000 }` + `config.spending.base_spending` already set | Delete the `inputs.annual_expenses` line — it was already ignored. |
+| `"config": { "annual_expenses_today": 85000, "spending": { …, "base_spending": 100000 } }` | Delete `config.annual_expenses_today` (it was being silently dropped by `resolved_spending()`), or set it equal to `base_spending` if you want to keep the fallback visible. |
 
 ---
 
@@ -721,7 +775,7 @@ A 90% prob_success with `median_ruin_year_offset=31` is a **very different** pla
 
 ### Levers that move it
 
-To **earlier** ruin (worse — useful for stress tests): lower `equity_mu`, higher `equity_sigma`, earlier `mortality.year_of_death_a`, bigger `inputs.annual_expenses`, smile + LTC shock, earlier `inputs.spouse_*_retire_age`.
+To **earlier** ruin (worse — useful for stress tests): lower `equity_mu`, higher `equity_sigma`, earlier `mortality.year_of_death_a`, bigger `config.spending.base_spending` (or `config.annual_expenses_today` on the no-spending-block path), smile + LTC shock, earlier `inputs.spouse_*_retire_age`.
 
 If small bumps to those levers move `median_ruin_year_offset` from year 30+ down to year 15–20, you've found a real fragility worth hedging (longer cash buffer, deferred retirement, lower spending floor).
 

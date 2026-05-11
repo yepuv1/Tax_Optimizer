@@ -1,0 +1,1154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Retirement Tax Optimization — Action Plan</title>
+  <style>
+    @page {
+      size: Letter;
+      margin: 0.7in;
+      @bottom-right {
+        content: counter(page) " / " counter(pages);
+        font-size: 9pt;
+        color: #94a3b8;
+      }
+      @bottom-left {
+        content: "tax_optimizer  ·  2026-05-10 21:27:48";
+        font-size: 9pt;
+        color: #94a3b8;
+      }
+    }
+    html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body {
+      font-family: -apple-system, "Helvetica Neue", "Segoe UI", Roboto, Arial, sans-serif;
+      color: #0f172a;
+      line-height: 1.55;
+      max-width: 920px;
+      margin: 2.2rem auto;
+      padding: 0 1.5rem 2rem;
+      font-size: 11pt;
+    }
+    h1 {
+      color: #0f172a;
+      font-size: 1.7rem;
+      border-bottom: 3px solid #0ea5e9;
+      padding-bottom: 0.4rem;
+      margin: 0 0 0.4rem;
+    }
+    h2 {
+      color: #0f172a;
+      font-size: 1.18rem;
+      margin: 1.6rem 0 0.4rem;
+      border-bottom: 1px solid #e2e8f0;
+      padding-bottom: 0.2rem;
+      page-break-after: avoid;
+    }
+    h3 { color: #0f172a; font-size: 1.02rem; margin: 1.1rem 0 0.3rem; }
+    p { margin: 0.45rem 0; }
+    em { color: #475569; }
+    strong { color: #0f172a; }
+    code {
+      background: #f1f5f9;
+      padding: 0.08rem 0.35rem;
+      border-radius: 4px;
+      font-size: 92%;
+      font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+    }
+    table {
+      border-collapse: collapse;
+      margin: 0.6rem 0 1rem;
+      width: 100%;
+      page-break-inside: auto;
+    }
+    tr { page-break-inside: avoid; page-break-after: auto; }
+    th, td {
+      border: 1px solid #cbd5e1;
+      padding: 0.36rem 0.65rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #f1f5f9; font-weight: 600; color: #0f172a; }
+    tr:nth-child(even) td { background: #fafbfc; }
+    td[align="right"], th[align="right"] { text-align: right; font-variant-numeric: tabular-nums; }
+    td[align="center"], th[align="center"] { text-align: center; }
+    blockquote {
+      border-left: 4px solid #94a3b8;
+      padding-left: 1rem;
+      color: #475569;
+      margin: 0.6rem 0 0.6rem 0;
+    }
+    hr { border: 0; border-top: 1px solid #e2e8f0; margin: 1.6rem 0; }
+    ul, ol { padding-left: 1.4rem; }
+    li { margin: 0.18rem 0; }
+    .meta {
+      color: #64748b;
+      font-size: 0.85em;
+      margin: 0.2rem 0 1.4rem;
+    }
+    .meta code { background: transparent; padding: 0; }
+  </style>
+</head>
+<body>
+  <p class="meta">Generated 2026-05-10 21:27:48 from <code>tax_optimizer</code> CLI</p>
+<h1>Retirement Tax Optimization — Action Plan</h1>
+<p><em>44-year horizon, ages 52/50 to 95, tax regime <code>TCJA_extended_2026</code>.</em></p>
+<p><em>Scenario file: <code>./scenarios/example01.json</code>.</em></p>
+<h2>TL;DR</h2>
+<p><strong>Verdict:</strong> <code>S3_optimized</code> beats <code>S0_baseline</code> by <strong>$2,543,707</strong> (+33.8%) in terminal after-tax NW.</p>
+<p><strong>Levers the optimizer wants you to change:</strong>
+- Spouse A Roth-401(k) share: 0% → <strong>100%</strong>
+- Spouse B Roth-401(k) share: 0% → <strong>100%</strong>
+- Roth conversion target bracket: 0% → <strong>24%</strong></p>
+<p><strong>Key risk readings:</strong>
+- P(success) under 5000 stochastic paths: <strong>90.5%</strong> (safe)
+- CVaR(10%) terminal NW: $92,363
+- Peak federal marginal rate: <strong>28%</strong>
+- Lifetime federal tax NPV: $1,358,342 (-266,192 vs S0)
+- Lifetime IRMAA NPV: $11,088 (-48,616 vs S0)</p>
+<h2>1. Household snapshot</h2>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th style="text-align: right;">Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Spouse A age (retire / SS)</td>
+<td style="text-align: right;">52 (65 / 70)</td>
+</tr>
+<tr>
+<td>Spouse B age (retire / SS)</td>
+<td style="text-align: right;">50 (67 / 67)</td>
+</tr>
+<tr>
+<td>Combined gross W-2 income</td>
+<td style="text-align: right;">$250,000</td>
+</tr>
+<tr>
+<td>Annual expenses (today&rsquo;s $)</td>
+<td style="text-align: right;">$95,000</td>
+</tr>
+<tr>
+<td>Total liquid + retirement assets</td>
+<td style="text-align: right;">$855,000</td>
+</tr>
+<tr>
+<td>&nbsp;&nbsp;&nbsp; Spouse A pretax (401k + IRA)</td>
+<td style="text-align: right;">$400,000</td>
+</tr>
+<tr>
+<td>&nbsp;&nbsp;&nbsp; Spouse B pretax (401k + IRA)</td>
+<td style="text-align: right;">$250,000</td>
+</tr>
+<tr>
+<td>&nbsp;&nbsp;&nbsp; Roth (both spouses, pooled)</td>
+<td style="text-align: right;">$60,000</td>
+</tr>
+<tr>
+<td>&nbsp;&nbsp;&nbsp; Taxable brokerage</td>
+<td style="text-align: right;">$120,000</td>
+</tr>
+<tr>
+<td>&nbsp;&nbsp;&nbsp; HSA / pension cash-balance</td>
+<td style="text-align: right;">$25,000 / $0</td>
+</tr>
+<tr>
+<td>Employer 401(k) match (A / B)</td>
+<td style="text-align: right;">50% on first 6% / 50% on first 6%</td>
+</tr>
+</tbody>
+</table>
+<h3>Assumptions driving this plan</h3>
+<table>
+<thead>
+<tr>
+<th>Assumption</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Heir marginal tax rate (pretax / HSA bequest haircut)</td>
+<td>22%</td>
+</tr>
+<tr>
+<td>Inflation</td>
+<td>2.5%/yr</td>
+</tr>
+<tr>
+<td>Nominal growth (deterministic baseline)</td>
+<td>6.0%/yr</td>
+</tr>
+<tr>
+<td>Market model</td>
+<td>LognormalModel (equity μ=7.0%/σ=18.0%, bond μ=4.0%/σ=6.0%, ρ=0.10)</td>
+</tr>
+<tr>
+<td>Federal tax regime</td>
+<td><code>TCJA_extended_2026</code> → <code>tcja_sunset_2026</code> in year 5</td>
+</tr>
+<tr>
+<td>State tax regime</td>
+<td><code>stateless</code></td>
+</tr>
+<tr>
+<td>Mortality</td>
+<td>Spouse A: year 30, Spouse B: year None (horizon = year 44)</td>
+</tr>
+<tr>
+<td>Step-up in basis at first death</td>
+<td>off</td>
+</tr>
+<tr>
+<td>ACA premium tax credit</td>
+<td>disabled</td>
+</tr>
+<tr>
+<td>Pre-65 healthcare (today&rsquo;s $)</td>
+<td>$0/yr</td>
+</tr>
+<tr>
+<td>Medicare base premium (today&rsquo;s $)</td>
+<td>$2,500/yr</td>
+</tr>
+<tr>
+<td>IRMAA MAGI lookback</td>
+<td>2 year(s)</td>
+</tr>
+</tbody>
+</table>
+<h3>Tax-regime change</h3>
+<p><em>Federal regime steps from <code>TCJA_extended_2026</code> to <code>tcja_sunset_2026</code> in year 5 (calendar 2031).</em></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th style="text-align: right;">Last year of old regime</th>
+<th style="text-align: right;">First year of new regime</th>
+<th style="text-align: right;">Δ</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Calendar year</td>
+<td style="text-align: right;">2030</td>
+<td style="text-align: right;">2031</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td>AGI</td>
+<td style="text-align: right;">$287,959</td>
+<td style="text-align: right;">$291,845</td>
+<td style="text-align: right;">$+3,886</td>
+</tr>
+<tr>
+<td>Peak marginal rate</td>
+<td style="text-align: right;">24%</td>
+<td style="text-align: right;">28%</td>
+<td style="text-align: right;">+4.0pp</td>
+</tr>
+<tr>
+<td>Federal tax</td>
+<td style="text-align: right;">$44,728</td>
+<td style="text-align: right;">$56,888</td>
+<td style="text-align: right;">$+12,160</td>
+</tr>
+</tbody>
+</table>
+<h3>Widow&rsquo;s-penalty risk</h3>
+<p><em>Spouse A dies year 30 (calendar 2056). Filing status switches to single in year 31 (calendar 2057). Survivor (Spouse B) files single for the remaining 13 year(s).</em></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th style="text-align: right;">Last MFJ year</th>
+<th style="text-align: right;">First single year</th>
+<th style="text-align: right;">Δ</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>AGI</td>
+<td style="text-align: right;">$301,561</td>
+<td style="text-align: right;">$326,588</td>
+<td style="text-align: right;">$+25,027</td>
+</tr>
+<tr>
+<td>Peak marginal rate</td>
+<td style="text-align: right;">15%</td>
+<td style="text-align: right;">25%</td>
+<td style="text-align: right;">+10.0pp</td>
+</tr>
+<tr>
+<td>Federal tax</td>
+<td style="text-align: right;">$23,972</td>
+<td style="text-align: right;">$51,882</td>
+<td style="text-align: right;">$+27,910</td>
+</tr>
+</tbody>
+</table>
+<h2>2. Recommended plan</h2>
+<p><strong>Winning strategy:</strong> <code>S3_optimized</code></p>
+<table>
+<thead>
+<tr>
+<th>Lever</th>
+<th style="text-align: right;">Recommended</th>
+<th style="text-align: right;">Currently</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Spouse A Roth share of deferral</td>
+<td style="text-align: right;">100%</td>
+<td style="text-align: right;">0%</td>
+</tr>
+<tr>
+<td>Spouse B Roth share of deferral</td>
+<td style="text-align: right;">100%</td>
+<td style="text-align: right;">0%</td>
+</tr>
+<tr>
+<td>Roth conversion target bracket (gap years)</td>
+<td style="text-align: right;">24%</td>
+<td style="text-align: right;">0%</td>
+</tr>
+</tbody>
+</table>
+<h3>Why the optimizer chose this</h3>
+<ul>
+<li><strong>Heir-rate framing:</strong> your heir marginal rate (22%) meets-or-exceeds your average retirement marginal (17%). Each pretax dollar you do <em>not</em> convert will be taxed at 22% on the bequest, so converting now (paying ≤ 17%) locks in a cheaper rate. Hence the 24% conversion target.</li>
+<li><strong>Sunset front-loading:</strong> the federal regime steps to <code>tcja_sunset_2026</code> in year 5 (calendar 2031); brackets compress and rates rise. Concentrating Roth conversions <em>before</em> the boundary locks in current-law rates.</li>
+<li><strong>Bucket imbalance:</strong> your pretax balance is 11× your Roth balance ($650,000 vs $60,000). The optimizer raises Roth-401(k) share and conversions to rebalance — left unchecked, RMDs on a 11× pretax pile push you into IRMAA and the 32-37% bracket every year after age 75.</li>
+</ul>
+<h2>3. Expected outcomes (deterministic, point-estimate)</h2>
+<p><em>Best value in each row is <strong>bolded</strong>. Higher is better for terminal NW; lower is better for tax, IRMAA, peak marginal.</em></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th style="text-align: right;">S0 baseline</th>
+<th style="text-align: right;">S2 bracket fill 22</th>
+<th style="text-align: right;">S1 all roth 401k</th>
+<th style="text-align: right;">S3 optimized</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Terminal after-tax NW</td>
+<td style="text-align: right;">$7,535,643</td>
+<td style="text-align: right;">$7,612,900</td>
+<td style="text-align: right;">$9,115,126</td>
+<td style="text-align: right;"><strong>$10,079,350</strong></td>
+</tr>
+<tr>
+<td>Lifetime federal tax (NPV)</td>
+<td style="text-align: right;">$1,624,534</td>
+<td style="text-align: right;">$1,600,783</td>
+<td style="text-align: right;">$1,680,829</td>
+<td style="text-align: right;"><strong>$1,358,342</strong></td>
+</tr>
+<tr>
+<td>Lifetime IRMAA (NPV)</td>
+<td style="text-align: right;">$59,704</td>
+<td style="text-align: right;">$54,427</td>
+<td style="text-align: right;">$57,046</td>
+<td style="text-align: right;"><strong>$11,088</strong></td>
+</tr>
+<tr>
+<td>Peak federal marginal rate</td>
+<td style="text-align: right;">28%</td>
+<td style="text-align: right;">28%</td>
+<td style="text-align: right;">28%</td>
+<td style="text-align: right;">28%</td>
+</tr>
+<tr>
+<td>Years with IRMAA</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">14</td>
+<td style="text-align: right;">16</td>
+<td style="text-align: right;"><strong>6</strong></td>
+</tr>
+<tr>
+<td>Peak IRMAA tier</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;"><strong>2</strong></td>
+</tr>
+</tbody>
+</table>
+<p><em>Peak federal marginal year (for <code>S3_optimized</code>): age <strong>57</strong>, AGI ~$291,845, marginal <strong>28%</strong>.</em></p>
+<h3>Sensitivity to the heir-tax assumption</h3>
+<p><em>The optimizer&rsquo;s verdict depends on how aggressively you discount terminal pretax dollars by the heir&rsquo;s eventual tax bill (see the <code>Assumptions driving this plan</code> block). The plan stays the same in each row below — we just re-score it at a different heir rate, so you can see how robust the answer is to your view of future tax rates.</em></p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Heir marginal rate</th>
+<th style="text-align: right;">Terminal after-tax NW</th>
+<th style="text-align: right;">Δ vs current</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;"><strong>10%</strong></td>
+<td style="text-align: right;">$10,091,463</td>
+<td style="text-align: right;">$+12,113</td>
+</tr>
+<tr>
+<td style="text-align: right;"><strong>22%</strong>  ← current assumption</td>
+<td style="text-align: right;">$10,079,350</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td style="text-align: right;"><strong>32%</strong></td>
+<td style="text-align: right;">$10,069,255</td>
+<td style="text-align: right;">$-10,095</td>
+</tr>
+<tr>
+<td style="text-align: right;"><strong>37%</strong></td>
+<td style="text-align: right;">$10,064,208</td>
+<td style="text-align: right;">$-15,142</td>
+</tr>
+</tbody>
+</table>
+<h2>4. Risk picture (Monte Carlo)</h2>
+<p><em>Based on 5000 stochastic paths under the <code>LognormalModel</code> market model.</em></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th style="text-align: right;">Value</th>
+<th>Reading</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Probability of success</td>
+<td style="text-align: right;">90.5%</td>
+<td>safe</td>
+</tr>
+<tr>
+<td>Terminal NW p5 / p50 / p95</td>
+<td style="text-align: right;">$0 / $7,929,910 / $39,109,539</td>
+<td>spread of bad-to-good outcomes</td>
+</tr>
+<tr>
+<td>CVaR(10%) terminal</td>
+<td style="text-align: right;">$92,363</td>
+<td>expected NW in the worst 10% of paths</td>
+</tr>
+<tr>
+<td>Median lifetime tax (NPV)</td>
+<td style="text-align: right;">$1,393,620</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Median ruin year</td>
+<td style="text-align: right;">41</td>
+<td><strong>at least half of failure paths run out by year 41</strong></td>
+</tr>
+</tbody>
+</table>
+<h3>Cross-model robustness check</h3>
+<p><em>Re-runs the same plan under additional market models so you can see whether the conclusion depends on which return-generating process you trust. Each row uses the same household plan; only the market model changes.</em></p>
+<table>
+<thead>
+<tr>
+<th>Market model</th>
+<th style="text-align: right;">P(success)</th>
+<th style="text-align: right;">Median terminal NW</th>
+<th style="text-align: right;">CVaR(10%)</th>
+<th>Note</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LognormalModel</code> (current)</td>
+<td style="text-align: right;">90.5%</td>
+<td style="text-align: right;">$7,929,910</td>
+<td style="text-align: right;">$92,363</td>
+<td>Parametric (μ, σ, ρ from cfg)</td>
+</tr>
+<tr>
+<td><code>BootstrapModel</code></td>
+<td style="text-align: right;">100.0%</td>
+<td style="text-align: right;">$43,142,773</td>
+<td style="text-align: right;">$6,555,599</td>
+<td>Historical-tail aware (block-resampled 1928–2023)</td>
+</tr>
+<tr>
+<td><code>HistoricalSequenceModel</code></td>
+<td style="text-align: right;">100.0%</td>
+<td style="text-align: right;">$69,996,320</td>
+<td style="text-align: right;">$31,577,690</td>
+<td>Preserves return sequences (~50 windows)</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><em>P(success) ranges 90%–100% across models — small enough to be noise, but worth tracking if you tighten the plan.</em></p>
+</blockquote>
+<h2>5. Highest-leverage levers (top 3 by tornado swing)</h2>
+<table>
+<thead>
+<tr>
+<th>Knob</th>
+<th>Range tested</th>
+<th>Best direction</th>
+<th style="text-align: right;">$ swing</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>inflation</code></td>
+<td>2% → 4%</td>
+<td>higher (+$1,445,967)</td>
+<td style="text-align: right;">$1,445,967</td>
+</tr>
+<tr>
+<td><code>roth_conversion_target_bracket</code></td>
+<td>$0 → $0</td>
+<td>higher (+$1,049,556)</td>
+<td style="text-align: right;">$1,049,556</td>
+</tr>
+<tr>
+<td><code>spouse_a_roth_401k_pct</code></td>
+<td>0% → 100%</td>
+<td>higher (+$967,016)</td>
+<td style="text-align: right;">$967,016</td>
+</tr>
+</tbody>
+</table>
+<h2>6. Year-by-year action timeline</h2>
+<h3>This year&rsquo;s concrete actions (calendar year 2026)</h3>
+<p><em>Year-1 dollar amounts from the optimized plan. Use these to set up payroll deductions and HSA / brokerage transfers immediately.</em></p>
+<ul>
+<li><strong>401(k) employee deferral:</strong> Spouse A $14,000 (100% Roth) + Spouse B $7,600 (100% Roth) = <strong>$21,600 total</strong></li>
+<li><strong>Employer 401(k) match (free money):</strong> Spouse A $4,200 + Spouse B $2,850 = <strong>$7,050 total</strong></li>
+<li><strong>HSA:</strong> $8,550</li>
+<li><strong>Roth conversion (pretax → Roth):</strong> $182,746 — pay the conversion tax from taxable, not from the converted amount</li>
+</ul>
+<p><strong>Expected year-1 tax bill:</strong> federal $80,376 + state $0 + FICA $19,125 = <strong>$99,501</strong></p>
+<h3>Multi-decade phases</h3>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Ages (Spouse A)</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Accumulation</strong></td>
+<td>52–64</td>
+<td>Defer 10% of A&rsquo;s salary (100% Roth / 0% Traditional) and 8% of B&rsquo;s (100% Roth / 0% Traditional). Max HSA. Build 1–2 years&rsquo; expenses in taxable as IRMAA buffer.</td>
+</tr>
+<tr>
+<td><strong>Gap years (conversion window)</strong></td>
+<td>67–74</td>
+<td>No wages and SS not yet started → fill the 24% bracket each year via pretax → Roth conversions. Pay conversion tax from taxable.</td>
+</tr>
+<tr>
+<td><strong>Medicare / IRMAA</strong></td>
+<td>65+</td>
+<td>IRMAA tiers depend on AGI from <strong>2 years prior</strong>. Watch the 22% / 24% bracket and the IRMAA cliffs at 65, 67.</td>
+</tr>
+<tr>
+<td><strong>SS claim</strong></td>
+<td>67</td>
+<td>Both spouses begin Social Security ($67,200/yr today). After this, conversion-window income includes SS.</td>
+</tr>
+<tr>
+<td><strong>RMDs begin</strong></td>
+<td>75</td>
+<td>Required minimum distributions hit Spouse A&rsquo;s pretax balance. Spouse B&rsquo;s RMDs follow on B&rsquo;s schedule. Reduce or stop conversions.</td>
+</tr>
+<tr>
+<td><strong>Drawdown</strong></td>
+<td>76–95</td>
+<td>Withdrawal sequence: <code>conventional</code>. Take RMDs first, then top up from taxable / Roth as needed.</td>
+</tr>
+</tbody>
+</table>
+<h2>7. Year-by-year withdrawal &amp; conversion plan</h2>
+<p><em>Full horizon: every simulated year from start age through the horizon. Pre-retirement rows (below the row marked <strong>RETIRE @ 65</strong>) carry meaningful AGI / federal tax / state tax columns even though withdrawal columns are mostly empty — useful to see when contributions phase into drawdown and to spot any pre-retirement Roth conversions. Cells with no activity render as <code>—</code>. Pass <code>year_table_scope="retirement"</code> (or <code>--year-table-scope retirement</code>) to collapse to retirement-only.</em></p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Age (A)</th>
+<th style="text-align: right;">Pretax W/D</th>
+<th style="text-align: right;">Roth conv.</th>
+<th style="text-align: right;">Roth W/D</th>
+<th style="text-align: right;">Taxable W/D</th>
+<th style="text-align: right;">RMD</th>
+<th style="text-align: right;">AGI</th>
+<th style="text-align: right;">Fed tax</th>
+<th style="text-align: right;">IRMAA</th>
+<th style="text-align: right;">Health $</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">52</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$182,746</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$426,800</td>
+<td style="text-align: right;">$80,376</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td style="text-align: right;">53</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$184,760</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$437,470</td>
+<td style="text-align: right;">$82,376</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td style="text-align: right;">54</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$187,017</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$448,407</td>
+<td style="text-align: right;">$84,428</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td style="text-align: right;">55</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$156,943</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$428,181</td>
+<td style="text-align: right;">$78,979</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td style="text-align: right;">56</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$7,935</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$287,959</td>
+<td style="text-align: right;">$44,728</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td style="text-align: right;">57</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$291,845</td>
+<td style="text-align: right;">$56,888</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td style="text-align: right;">58</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$304,310</td>
+<td style="text-align: right;">$59,655</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$321,126</td>
+<td style="text-align: right;">$63,507</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$337,441</td>
+<td style="text-align: right;">$67,225</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td style="text-align: right;">61</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$352,913</td>
+<td style="text-align: right;">$70,723</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td style="text-align: right;">62</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$365,688</td>
+<td style="text-align: right;">$73,536</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td style="text-align: right;">63</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$381,906</td>
+<td style="text-align: right;">$77,205</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td style="text-align: right;">64</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$401,505</td>
+<td style="text-align: right;">$81,714</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td style="text-align: right;"><strong>RETIRE @ 65</strong></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;"></td>
+</tr>
+<tr>
+<td style="text-align: right;">65</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$64,474</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$216,650</td>
+<td style="text-align: right;">$27,069</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$3,446</td>
+</tr>
+<tr>
+<td style="text-align: right;">66</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$82,394</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$240,410</td>
+<td style="text-align: right;">$30,912</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$3,532</td>
+</tr>
+<tr>
+<td style="text-align: right;">67</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$70,852</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$254,818</td>
+<td style="text-align: right;">$34,243</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$7,241</td>
+</tr>
+<tr>
+<td style="text-align: right;">68</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$66,290</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$270,062</td>
+<td style="text-align: right;">$37,470</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$7,423</td>
+</tr>
+<tr>
+<td style="text-align: right;">69</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$175,864</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$239,445</td>
+<td style="text-align: right;">$15,465</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$7,608</td>
+</tr>
+<tr>
+<td style="text-align: right;">70</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$195,744</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$315,623</td>
+<td style="text-align: right;">$37,866</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$7,798</td>
+</tr>
+<tr>
+<td style="text-align: right;">71</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$202,011</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$334,432</td>
+<td style="text-align: right;">$41,557</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$7,993</td>
+</tr>
+<tr>
+<td style="text-align: right;">72</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$205,668</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$330,667</td>
+<td style="text-align: right;">$40,118</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$8,193</td>
+</tr>
+<tr>
+<td style="text-align: right;">73</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$212,028</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$363,813</td>
+<td style="text-align: right;">$47,115</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$8,398</td>
+</tr>
+<tr>
+<td style="text-align: right;">74</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$216,124</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$346,662</td>
+<td style="text-align: right;">$42,523</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$8,608</td>
+</tr>
+<tr>
+<td style="text-align: right;">75</td>
+<td style="text-align: right;">$5,933</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$177,869</td>
+<td style="text-align: right;">$5,933</td>
+<td style="text-align: right;">$325,547</td>
+<td style="text-align: right;">$38,892</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$8,823</td>
+</tr>
+<tr>
+<td style="text-align: right;">76</td>
+<td style="text-align: right;">$5,355</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$179,974</td>
+<td style="text-align: right;">$5,355</td>
+<td style="text-align: right;">$309,299</td>
+<td style="text-align: right;">$34,550</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$9,044</td>
+</tr>
+<tr>
+<td style="text-align: right;">77</td>
+<td style="text-align: right;">$8,640</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$177,706</td>
+<td style="text-align: right;">$8,639</td>
+<td style="text-align: right;">$284,752</td>
+<td style="text-align: right;">$28,997</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$9,270</td>
+</tr>
+<tr>
+<td style="text-align: right;">78</td>
+<td style="text-align: right;">$8,563</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$181,234</td>
+<td style="text-align: right;">$8,563</td>
+<td style="text-align: right;">$282,767</td>
+<td style="text-align: right;">$27,960</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$9,501</td>
+</tr>
+<tr>
+<td style="text-align: right;">79</td>
+<td style="text-align: right;">$9,121</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$186,125</td>
+<td style="text-align: right;">$9,121</td>
+<td style="text-align: right;">$293,539</td>
+<td style="text-align: right;">$29,738</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$9,739</td>
+</tr>
+<tr>
+<td style="text-align: right;">80</td>
+<td style="text-align: right;">$11,187</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$193,231</td>
+<td style="text-align: right;">$11,187</td>
+<td style="text-align: right;">$329,278</td>
+<td style="text-align: right;">$37,156</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$9,982</td>
+</tr>
+<tr>
+<td style="text-align: right;">81</td>
+<td style="text-align: right;">$11,294</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$197,482</td>
+<td style="text-align: right;">$11,294</td>
+<td style="text-align: right;">$331,397</td>
+<td style="text-align: right;">$36,974</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$10,232</td>
+</tr>
+<tr>
+<td style="text-align: right;">82</td>
+<td style="text-align: right;">$12,908</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$189,288</td>
+<td style="text-align: right;">$12,908</td>
+<td style="text-align: right;">$301,561</td>
+<td style="text-align: right;">$23,972</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$5,244</td>
+</tr>
+<tr>
+<td style="text-align: right;">83</td>
+<td style="text-align: right;">$14,024</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$208,316</td>
+<td style="text-align: right;">$14,024</td>
+<td style="text-align: right;">$326,588</td>
+<td style="text-align: right;">$51,882</td>
+<td style="text-align: right;">$5,684</td>
+<td style="text-align: right;">$5,375</td>
+</tr>
+<tr>
+<td style="text-align: right;">84</td>
+<td style="text-align: right;">$11,581</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$212,357</td>
+<td style="text-align: right;">$11,580</td>
+<td style="text-align: right;">$290,941</td>
+<td style="text-align: right;">$43,809</td>
+<td style="text-align: right;">$5,826</td>
+<td style="text-align: right;">$5,509</td>
+</tr>
+<tr>
+<td style="text-align: right;">85</td>
+<td style="text-align: right;">$11,618</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$230,632</td>
+<td style="text-align: right;">$11,618</td>
+<td style="text-align: right;">$299,167</td>
+<td style="text-align: right;">$45,043</td>
+<td style="text-align: right;">$5,971</td>
+<td style="text-align: right;">$5,647</td>
+</tr>
+<tr>
+<td style="text-align: right;">86</td>
+<td style="text-align: right;">$10,161</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$237,435</td>
+<td style="text-align: right;">$10,161</td>
+<td style="text-align: right;">$272,557</td>
+<td style="text-align: right;">$38,963</td>
+<td style="text-align: right;">$2,437</td>
+<td style="text-align: right;">$5,788</td>
+</tr>
+<tr>
+<td style="text-align: right;">87</td>
+<td style="text-align: right;">$9,471</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$241,271</td>
+<td style="text-align: right;">$9,471</td>
+<td style="text-align: right;">$256,822</td>
+<td style="text-align: right;">$35,141</td>
+<td style="text-align: right;">$2,498</td>
+<td style="text-align: right;">$5,933</td>
+</tr>
+<tr>
+<td style="text-align: right;">88</td>
+<td style="text-align: right;">$9,959</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$248,061</td>
+<td style="text-align: right;">$9,959</td>
+<td style="text-align: right;">$266,858</td>
+<td style="text-align: right;">$36,817</td>
+<td style="text-align: right;">$2,560</td>
+<td style="text-align: right;">$6,081</td>
+</tr>
+<tr>
+<td style="text-align: right;">89</td>
+<td style="text-align: right;">$9,059</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$251,019</td>
+<td style="text-align: right;">$9,059</td>
+<td style="text-align: right;">$244,506</td>
+<td style="text-align: right;">$31,651</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$6,233</td>
+</tr>
+<tr>
+<td style="text-align: right;">90</td>
+<td style="text-align: right;">$7,144</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$249,361</td>
+<td style="text-align: right;">$7,143</td>
+<td style="text-align: right;">$187,013</td>
+<td style="text-align: right;">$19,838</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$6,389</td>
+</tr>
+<tr>
+<td style="text-align: right;">91</td>
+<td style="text-align: right;">$8,164</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$259,811</td>
+<td style="text-align: right;">$8,164</td>
+<td style="text-align: right;">$220,421</td>
+<td style="text-align: right;">$25,675</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$6,549</td>
+</tr>
+<tr>
+<td style="text-align: right;">92</td>
+<td style="text-align: right;">$8,660</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$268,065</td>
+<td style="text-align: right;">$8,660</td>
+<td style="text-align: right;">$235,084</td>
+<td style="text-align: right;">$28,165</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$6,713</td>
+</tr>
+<tr>
+<td style="text-align: right;">93</td>
+<td style="text-align: right;">$8,657</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$274,335</td>
+<td style="text-align: right;">$8,657</td>
+<td style="text-align: right;">$234,702</td>
+<td style="text-align: right;">$27,587</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$6,880</td>
+</tr>
+<tr>
+<td style="text-align: right;">94</td>
+<td style="text-align: right;">$9,188</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$400,773</td>
+<td style="text-align: right;">$9,187</td>
+<td style="text-align: right;">$288,739</td>
+<td style="text-align: right;">$37,445</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$7,052</td>
+</tr>
+<tr>
+<td style="text-align: right;">95</td>
+<td style="text-align: right;">$11,008</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$609,491</td>
+<td style="text-align: right;">$11,008</td>
+<td style="text-align: right;">$423,193</td>
+<td style="text-align: right;">$62,665</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">$7,229</td>
+</tr>
+</tbody>
+</table>
+<p><em>Pretax W/D = combined Spouse A + B pretax withdrawals; RMD = the IRS-required floor (A and B combined). Roth conversions show up as AGI in the same row but produce no cash to the household — they shift dollars from pretax → Roth and the conversion tax is paid from taxable. <strong>Health $</strong> = Medicare base premium + pre-65 healthcare − ACA premium tax credit; IRMAA stays as a separate column because it&rsquo;s a discrete AGI-cliff lever you can manage.</em></p>
+<h2>8. Always-good hygiene</h2>
+<ul>
+<li><strong>Max the HSA each year</strong> (triple tax-advantaged: deductible, tax-free growth, tax-free qualified withdrawals).</li>
+<li><strong>Hold 1–2 years of expenses in taxable</strong> as an IRMAA / sequence-of-returns buffer; it lets you avoid IRA withdrawals in down-market years and to manage AGI around IRMAA cliffs.</li>
+<li><strong>Re-run this annually</strong> with updated balances, salaries, and tax-regime assumptions. Roth-conversion targets in particular are very sensitive to bracket changes.</li>
+<li><strong>Beneficiary review:</strong> primary + contingent on every account, including the HSA (which becomes ordinary income to a non-spouse beneficiary).</li>
+</ul>
+<h2>9. Caveats — what this plan does NOT model</h2>
+<ul>
+<li><strong>State income tax</strong> outside the bundled <code>STATELESS / CA / NY / IL / MA</code> presets. Add a custom <code>StateTaxRegime</code> for your state if it&rsquo;s not in this list.</li>
+<li><strong>Estate / inherited-IRA dynamics</strong> beyond the flat <code>heir_marginal_rate</code> haircut on terminal pretax + HSA balances. SECURE Act 10-year drawdown timing for non-spouse heirs is not modeled.</li>
+<li><strong>Health-care shocks</strong> beyond a single optional LTC stress test.</li>
+<li><strong>Tax-law revisions</strong> beyond the bundled regimes (<code>TCJA_EXTENDED</code>, <code>PRE_TCJA_2017</code>, <code>SUNSET_2026</code>). Re-run with <code>cfg.tax_regime = SUNSET_2026</code> to stress-test current-law sunset.</li>
+</ul>
+<p><em>This is decision-support output, not tax/legal/investment advice. Consult a qualified professional before acting.</em></p>
+</body>
+</html>

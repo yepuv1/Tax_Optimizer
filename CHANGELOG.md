@@ -32,7 +32,296 @@ Categories used:
 
 ## [Unreleased]
 
-(no entries — last release `v5` is current.)
+### Changed
+
+- **§7 "Year-by-year withdrawal & conversion plan" now defaults to the
+  full horizon** ([`tax_optimizer/report.py`](tax_optimizer/report.py)).
+  Pre-v7, the §7 table silently filtered the simulator DataFrame down
+  to retirement years only — pre-retirement AGI / federal-tax / state-
+  tax / any-pre-retirement-conversion detail was hidden, which left
+  CLI users without context for plans that front-load conversions or
+  use mega-backdoor contributions during working years. The table now
+  spans every simulated year by default, with a visual
+  `**RETIRE @ N**` marker row dividing accumulation from drawdown.
+  The legacy compact view is still available via the new
+  `year_table_scope="retirement"` kwarg on `build_action_report` or
+  the matching `--year-table-scope retirement` CLI flag. The §7
+  caption advertises the opt-out in both directions.
+
+### Added
+
+- **CLI `--year-table-scope {full,retirement}` flag**
+  ([`tax_optimizer/__main__.py`](tax_optimizer/__main__.py)). Mirrors
+  the `year_table_scope` kwarg on `build_action_report`. Defaults to
+  `full`. Pass `retirement` to reproduce the pre-v7 compact view.
+
+### Deprecated
+
+- **`Inputs.annual_expenses` is now a no-op with a `DeprecationWarning`**
+  ([`tax_optimizer/inputs.py`](tax_optimizer/inputs.py)). The simulator
+  has not read this field in any v2+ release — `Config.resolved_spending()`
+  picks `Config.spending.base_spending` first and falls back to
+  `Config.annual_expenses_today`, never touching `Inputs.annual_expenses`.
+  Setting it to a non-default value now emits a `DeprecationWarning`
+  in `__post_init__` pointing the user at the two correct knobs. The
+  field is retained on the dataclass so legacy scenario JSON / `--set`
+  overrides keep round-tripping; only the simulator's behavior is
+  unchanged. Removed from `scenarios/example01.json` and
+  `scenarios/example02.json` (the values were ignored anyway).
+
+### Added
+
+- **Scenario-loader consistency warning for spending knobs**
+  ([`tax_optimizer/scenario.py`](tax_optimizer/scenario.py)
+  `_warn_spending_inconsistency`). When a scenario JSON sets both
+  `config.annual_expenses_today` and `config.spending.base_spending`
+  to **different** values, the loader now emits a `UserWarning`
+  explaining that `base_spending` wins and `annual_expenses_today` is
+  ignored in that case. Matching values stay silent (redundant but not
+  misleading; the bundled example scenarios use the matched-value
+  pattern as a reference template).
+- **CLI `--cross-model [MODELS]` flag**
+  ([`tax_optimizer/__main__.py`](tax_optimizer/__main__.py)). Surfaces
+  the v6 `cross_model_check()` Python API on the command line. Pass
+  the flag bare (e.g. `tax-optimizer --monte-carlo 1000 --cross-model`)
+  to use the built-in defaults (`BootstrapModel` +
+  `HistoricalSequenceModel`), or with a comma-separated list (e.g.
+  `--cross-model bootstrap,vanguard_2025,jpm_ltcma_2025`) to specify a
+  custom model menu. Recognized names: the built-in kinds (`lognormal`,
+  `bootstrap`, `historical_sequence`, alias `historical`) plus every
+  key in `CMA_PRESETS`. Companion flag `--cross-model-paths N`
+  (default 200) tunes the per-alternative-model Monte Carlo path
+  count. Requires `--monte-carlo > 0`; otherwise emits a clean error.
+  The resolved `{name: MonteCarloResult}` dict is threaded into
+  `build_action_report(..., extra_mc=...)` so the existing
+  "Cross-model robustness check" sub-section auto-renders inside §4.
+- **CMA-preset entries in `_MODEL_NOTES`**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py)). The
+  cross-model table's "Note" column now describes Vanguard / JPM /
+  Horizon / historical CMA presets instead of falling back to `—`,
+  matching the human-readable notes already shown for the built-in
+  kinds.
+
+### Tests
+
+- 20 new tests in
+  [`tests/test_cli_cross_model.py`](tests/test_cli_cross_model.py)
+  covering: argparse acceptance of `--cross-model` (bare, with value,
+  and the `--cross-model-paths` companion); `_parse_cross_model_arg`
+  resolution of built-in kinds, the `historical` alias, case-insensitive
+  input, whitespace tolerance, CMA presets, and unknown-name error
+  messaging that lists known options; subprocess smoke tests for the
+  end-to-end CLI happy path (default menu and custom CMA-mixed menu
+  both render the section, both required-flag guards reject early
+  with non-zero exit codes).
+- 13 new tests in
+  [`tests/test_spending_deprecation.py`](tests/test_spending_deprecation.py)
+  covering: `Inputs.annual_expenses` deprecation
+  (default-construction silent, non-default-construction warns,
+  warning message names the replacement knobs, explicit-default-value
+  silent, `apply_scenario` / `apply_set_overrides` propagate the
+  warning); `_warn_spending_inconsistency` (matching values silent,
+  mismatched values warn, message quotes both dollar amounts,
+  scalar-only / spending-only / `spending: null` / spending-without-
+  `base_spending` all silent).
+- 12 new tests in
+  [`tests/test_report_year_scope.py`](tests/test_report_year_scope.py)
+  covering: default `"full"` scope spans the entire horizon, emits the
+  `RETIRE @ N` marker row, advertises the opt-out in the §7 caption;
+  `"retirement"` scope reproduces the legacy compact view (ages ≥
+  retire only, no marker row, retirement-only caption text); explicit
+  scope validation rejects unknown values; the new
+  `--year-table-scope` CLI flag's argparse contract (default, valid
+  values, rejection of unknown values).
+  Test count: **380 → 425 passing**.
+
+### Docs
+
+- [`README.md`](README.md) gains two `--cross-model` CLI examples in
+  the usage block, a cross-reference under the v6 helper bullet, and
+  a callout note under the scenario JSON example pointing at the
+  three spending knobs and the new deprecation. The §7 row in the
+  "What the action report contains" table now documents the
+  full-horizon default + `year_table_scope` opt-out, and the CLI
+  usage block adds a `--year-table-scope retirement` example.
+- [`docs/market_models.md`](docs/market_models.md) gains a new "From
+  the CLI" subsection under §6 showing the flag's recognized model
+  names, the `--cross-model-paths` companion, and the seed-sharing
+  guarantee with `--monte-carlo`.
+- [`docs/scenario_guide.md`](docs/scenario_guide.md) gains a new
+  "Spending knobs — three names, one effective value" section that
+  documents `Config.resolved_spending()`'s precedence, the
+  loader-emitted warnings, and a migration table for legacy scenarios.
+  The stale `inputs.annual_expenses` reference in the
+  `median_ruin_year_offset` lever list is updated to point at
+  `config.spending.base_spending`.
+
+---
+
+## [v6] — Tier R (action-report polish) (2026-05-10)
+
+A 4-batch overhaul of the markdown action plan emitted by
+`build_action_report`, turning it from a "what the optimizer chose"
+summary into a decision document with quantified rationale, multi-model
+robustness checks, and concrete next-12-month actions.
+
+Total ≈ 1,050 LoC of source + ≈ 950 LoC of tests, all in one file
+([`tax_optimizer/report.py`](tax_optimizer/report.py)). Test count:
+**318 → 380 passing** (the 62 new tests live in
+[`tests/test_report_ra.py`](tests/test_report_ra.py),
+[`tests/test_report_rb.py`](tests/test_report_rb.py),
+[`tests/test_report_rc.py`](tests/test_report_rc.py), and
+[`tests/test_report_rd.py`](tests/test_report_rd.py)).
+
+The pre-existing 9-section report layout was preserved; new sections
+slot in alongside the old ones so external consumers see only
+additions. No `build_action_report(...)` argument changed default
+behaviour — every R-tier feature is opt-in or auto-detected from
+existing state.
+
+### Added *(Tier R-A — headline + transparency)*
+
+- **R-A.1 — TL;DR header**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py) `_tldr_section`).
+  New top-of-report block: one-line verdict ("S3 optimizer beats S0
+  by $X / +Y%"), a bullet list of levers the optimizer wants to change
+  (driven by the new `_lever_changes` helper), and key risk readings
+  (P(success), CVaR, peak marginal, lifetime tax / IRMAA Δ vs S0).
+  When the winner matches the user's inputs on every axis, renders
+  "No lever changes recommended" instead of forcing a diff table.
+- **R-A.2 — Assumptions block**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py)
+  `_assumptions_block`). A new sub-table inside §1 disclosing the
+  consequential assumptions: heir marginal rate, inflation, nominal
+  growth, market model (with μ/σ/ρ for `LognormalModel`), federal
+  regime + change year, state regime, mortality, step-up flag, ACA
+  flag, healthcare costs, IRMAA lookback. Pinning these to one place
+  lets advisors audit the recommendation without re-reading the JSON.
+- **R-A.3 — Side-by-side strategy comparison**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py) §3). §3 now
+  renders all 4 canonical strategies (S0/S1/S2/S3) as columns rather
+  than just "S3 vs S0", with the winning value bolded per row. Reveals
+  cases like "S0 = S1 = S2 because the JSON already at 100% Roth"
+  that the old format hid.
+
+### Fixed *(Tier R-A — pre-existing report bugs)*
+
+- **R-A.4 — Tornado direction labelling**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py) §5). The §5
+  tornado table previously emitted misleading `"higher (+$0)"`
+  recommendations for knobs already at their tested-range boundary.
+  Now detects `delta_high <= 0 and delta_low <= 0` and renders
+  `"at boundary in tested range (—)"`. Knobs that *do* improve in one
+  direction are labelled honestly with the positive delta.
+- **R-A.5 — Near-zero `$0` cells**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py) `_money`).
+  Floats that round to zero (e.g. `1e-9` cascade artifacts) now render
+  as `—` to match the legend's "no activity" convention. Previous
+  `float(v) == 0.0` check missed near-zero values, producing confusing
+  `$0` cells next to `—` cells for what are logically the same outcome.
+
+### Added *(Tier R-B — actionable content + risk callouts)*
+
+- **R-B.1 — "This year's concrete actions"**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py)
+  `_this_year_actions`). New §6 sub-section listing year-1 dollar
+  amounts the user should set up immediately: 401(k) employee
+  deferral (with Roth split), employer match (flagged as free money),
+  mega-backdoor, backdoor IRA, HSA, Roth conversion (if any),
+  upcoming RMD (if applicable), and the expected year-1 tax bill
+  (federal + state + FICA).
+- **R-B.2 — Widow's-penalty paragraph**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py)
+  `_widow_paragraph`). Auto-renders when one spouse predeceases the
+  other inside the horizon. Reads the last-MFJ vs first-single rows
+  from `w_df` and shows the AGI / marginal-rate / federal-tax delta
+  at the filing-status switch. Silent for households with no mortality
+  configured or with simultaneous death.
+- **R-B.3 — Regime-change paragraph**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py)
+  `_sunset_paragraph`). Auto-renders when `cfg.regime_change_year_offset`
+  is set. Shows the AGI / marginal / federal-tax delta at the boundary
+  year so the reader sees the bracket jump in dollars and percentage
+  points, not just regime names.
+- **R-B.4 — Conditional state-tax column in §7**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py) §7). The
+  year-by-year withdrawal table adds a `State tax` column when
+  `cfg.state_regime.name != "stateless"`. Avoids uniformly-zero
+  columns for stateless scenarios.
+- **R-B.5 — Conditional healthcare column in §7**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py) §7). New
+  `Health $` column collapsing `medicare_base_premium + health_pre65
+  - aca_apt_credit` per row, with the legend extended to explain that
+  IRMAA stays as its own column because it's a discrete AGI-cliff
+  lever. Auto-omitted when no row has nonzero healthcare costs.
+
+### Added *(Tier R-C — diagnostics + multi-scenario)*
+
+- **R-C.1 — Optimizer-rationale paragraph**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py)
+  `_optimizer_rationale`). Five heuristic pattern detectors generate
+  1-3 plain-English bullets explaining *why* the recommended plan
+  looks the way it does:
+  - heir-rate framing (heir vs avg-retirement marginal)
+  - sunset front-loading (regime change + conversions chosen)
+  - bucket imbalance (pretax / Roth ratio > 5×)
+  - mega-backdoor activity
+  - peak-marginal sticker shock (≥ 32%)
+- **R-C.2 — Heir-rate sensitivity sweep**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py)
+  `_heir_rate_sensitivity`). Re-scores the winning plan at
+  `heir_marginal_rate` ∈ {10%, 22%, 32%, 37%} (plus the current value
+  if not already in the set) and renders a Δ-vs-current table. The
+  plan never changes; only the bequest-haircut score does, so the
+  reader sees the robustness of the verdict to that one assumption.
+- **R-C.3 — `compare_scenarios()` public API**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py)
+  `compare_scenarios`). New top-level function rendering a side-by-side
+  markdown diff of N independent household configurations. Returns
+  `# Scenario comparison` markdown with three sub-tables: outcome
+  metrics (bolded best per row), scenario assumptions, and optional
+  Monte Carlo overlay when `mc=` dict is supplied. Useful for
+  "what if I move to CA vs NY", "what if I retire at 62 vs 67", etc.
+  Exported from package root as `tax_optimizer.compare_scenarios`.
+
+### Added *(Tier R-D.1 — cross-model robustness)*
+
+- **R-D.1 — Cross-model robustness check + `cross_model_check()` API**
+  ([`tax_optimizer/report.py`](tax_optimizer/report.py)
+  `cross_model_check`, `_cross_model_table`, and `build_action_report`
+  `extra_mc=` kwarg). New helper `cross_model_check(cfg, inputs, *,
+  n_paths=200, seed=42, models=None)` re-runs `simulate_paths` under
+  alternative market models and returns `{name: MonteCarloResult}`.
+  Defaults to `BootstrapModel` + `HistoricalSequenceModel` (the two
+  non-parametric options that complement the typical parametric
+  `LognormalModel`). `build_action_report(..., extra_mc=...)` then
+  renders a new `### Cross-model robustness check` table inside §4
+  showing each model's P(success), median terminal NW, and CVaR(10%),
+  with auto-emitted callouts: model-risk flag if any model drops below
+  90%, neutral note for ≥ 5pp spread, "all robust" confirmation when
+  all models agree. Exported from package root as
+  `tax_optimizer.cross_model_check`. ~3-5 seconds of additional compute
+  at default settings.
+
+### Tests
+
+- 19 new tests in [`tests/test_report_ra.py`](tests/test_report_ra.py)
+  covering TL;DR, assumptions block, 4-strategy comparison, tornado
+  direction fix, near-zero rendering, and `_lever_changes` helper.
+- 15 new tests in [`tests/test_report_rb.py`](tests/test_report_rb.py)
+  covering this-year actions, widow paragraph (both-live / same-year /
+  A-first / B-first), sunset paragraph, state-tax column conditional,
+  healthcare column conditional.
+- 17 new tests in [`tests/test_report_rc.py`](tests/test_report_rc.py)
+  covering rationale pattern detectors, heir-rate sensitivity sweep
+  (canonical rates + custom rate + monotonicity), and `compare_scenarios`
+  (single/multi-scenario, bolding, duplicate-name validation, empty
+  input, MC overlay, None-mortality handling).
+- 11 new tests in [`tests/test_report_rd.py`](tests/test_report_rd.py)
+  covering `cross_model_check` (default models, override, market actually
+  applied, deterministic edge case, no mutation), `extra_mc` integration
+  (no-section default, renders when provided, silent when `mc=None`,
+  "all robust" callout, model-note column), and the public-export contract.
 
 ---
 

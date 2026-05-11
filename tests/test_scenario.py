@@ -139,17 +139,21 @@ class TestApplyScenario:
             )
 
     def test_simple_scalar_overrides_apply(self) -> None:
-        cfg, inp = apply_scenario(
-            Config(),
-            Inputs(),
-            {
-                "config": {"horizon_age": 95, "inflation": 0.03},
-                "inputs": {
-                    "spouse_a_age_start": 52,
-                    "annual_expenses": 95_000,
+        # `annual_expenses` is deprecated and emits a DeprecationWarning;
+        # the value is still round-tripped through the loader for legacy
+        # scenario files. See `Inputs.__post_init__`.
+        with pytest.warns(DeprecationWarning, match="annual_expenses"):
+            cfg, inp = apply_scenario(
+                Config(),
+                Inputs(),
+                {
+                    "config": {"horizon_age": 95, "inflation": 0.03},
+                    "inputs": {
+                        "spouse_a_age_start": 52,
+                        "annual_expenses": 95_000,
+                    },
                 },
-            },
-        )
+            )
         assert cfg.horizon_age == 95
         assert cfg.inflation == 0.03
         assert inp.spouse_a_age_start == 52
@@ -406,9 +410,13 @@ class TestApplySetOverrides:
         assert cfg.horizon_age == 95
 
     def test_simple_float_override(self) -> None:
-        cfg, inp = apply_set_overrides(
-            Config(), Inputs(), ["inputs.annual_expenses=120000"]
-        )
+        # Deprecated knob; --set still threads the value through but
+        # the simulator ignores it. The deprecation warning is part of
+        # the asserted behavior so we know it fires on every legacy use.
+        with pytest.warns(DeprecationWarning, match="annual_expenses"):
+            cfg, inp = apply_set_overrides(
+                Config(), Inputs(), ["inputs.annual_expenses=120000"]
+            )
         assert inp.annual_expenses == 120_000
 
     def test_string_value_falls_back_to_bare_token(self) -> None:
