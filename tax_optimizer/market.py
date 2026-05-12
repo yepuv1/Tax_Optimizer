@@ -251,10 +251,35 @@ class BootstrapModel:
     bond_history: tuple[float, ...] = _HIST_BOND
 
     def __post_init__(self) -> None:
+        # F9: validate construction inputs eagerly. Pre-v6.2 silent
+        # failures: `block_size <= 0` produced a divide-or-modulo
+        # quirk in `n_blocks`; `block_size > len(history)` made
+        # `rng.integers(0, n_hist - block_size + 1)` reject a non-
+        # positive `high`. Mismatched history lengths were silently
+        # truncated.
+        if self.block_size <= 0:
+            raise ValueError(
+                f"BootstrapModel.block_size must be > 0, got {self.block_size}"
+            )
+        if len(self.equity_history) != len(self.bond_history):
+            raise ValueError(
+                "BootstrapModel.equity_history and bond_history must have "
+                f"the same length; got {len(self.equity_history)} and "
+                f"{len(self.bond_history)}."
+            )
+        if self.block_size > len(self.equity_history):
+            raise ValueError(
+                f"BootstrapModel.block_size ({self.block_size}) must be "
+                f"<= history length ({len(self.equity_history)})."
+            )
         self._equity_path: np.ndarray | None = None
         self._bond_path: np.ndarray | None = None
 
     def begin_path(self, n_years: int, rng: np.random.Generator) -> None:
+        if n_years <= 0:
+            raise ValueError(
+                f"BootstrapModel.begin_path: n_years must be > 0, got {n_years}"
+            )
         eq_hist = np.asarray(self.equity_history)
         bd_hist = np.asarray(self.bond_history)
         n_hist = len(eq_hist)

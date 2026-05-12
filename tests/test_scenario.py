@@ -235,6 +235,10 @@ class TestMarketCoercion:
         assert cfg.market.equity_mu == 0.07
 
     def test_bootstrap_with_explicit_history(self) -> None:
+        # History must be at least as long as the block size — see the
+        # F9 validator added in v6.2 (`block_size > len(history)`
+        # makes `rng.integers(0, n_hist - block_size + 1)` reject a
+        # non-positive `high`, breaking `begin_path`).
         cfg, _ = apply_scenario(
             Config(),
             Inputs(),
@@ -242,15 +246,15 @@ class TestMarketCoercion:
                 "config": {
                     "market": {
                         "kind": "bootstrap",
-                        "block_size": 5,
-                        "equity_history": [0.1, 0.2, -0.05],
-                        "bond_history": [0.04, 0.05, 0.03],
+                        "block_size": 3,
+                        "equity_history": [0.1, 0.2, -0.05, 0.08, 0.04],
+                        "bond_history": [0.04, 0.05, 0.03, 0.02, 0.06],
                     }
                 }
             },
         )
         assert isinstance(cfg.market, BootstrapModel)
-        assert cfg.market.block_size == 5
+        assert cfg.market.block_size == 3
         # Tuples preferred internally for hashability/immutability.
         assert isinstance(cfg.market.equity_history, tuple)
 

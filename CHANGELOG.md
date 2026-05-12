@@ -32,6 +32,34 @@ Categories used:
 
 ## [Unreleased]
 
+### Fixed — v6.2 functional review (batch 3: defensive / API)
+
+- **LOW — `BootstrapModel` rejects invalid construction inputs at
+  build time** ([`tax_optimizer/market.py`](tax_optimizer/market.py)).
+  Now raises `ValueError` if `block_size <= 0`,
+  `block_size > len(equity_history)`, or
+  `len(equity_history) != len(bond_history)`. `begin_path(n_years=0)`
+  is also rejected. Previously these surfaced as opaque numpy errors
+  (or silently truncated histories) deep inside path generation.
+- **LOW — `simulate_paths` rejects `n_paths < 1`**
+  ([`tax_optimizer/monte_carlo.py`](tax_optimizer/monte_carlo.py)).
+  Previously accepted zero/negative and returned a zero-row result
+  that silently poisoned every downstream summary (NaN percentiles,
+  CVaR, ruin rate). Now raises `ValueError`.
+- **LOW — `Mortality.survivor_label` docstring matches code**
+  ([`tax_optimizer/mortality.py`](tax_optimizer/mortality.py)). The
+  old docstring claimed `None` for both "both alive" and "both
+  dead"; the code actually returns the string `"neither"` for
+  both-dead. The docstring now explicitly enumerates all four return
+  values.
+- **LOW — Pension `PENSION_QTR_SSWB` kink indexes forward with wage
+  growth in `project_pension_balance`** ([`tax_optimizer/pension.py`](tax_optimizer/pension.py)).
+  The SSWB tracks the National Average Wage Index in real life;
+  freezing the 2025 value silently pushed more earnings into the 11%
+  high band each decade. `pension_annual_credit` gained an optional
+  `qtr_sswb` override; the projector grows the kink at the supplied
+  `wage_growth` each year.
+
 ### Fixed — v6.2 functional review (batch 2: MEDIUM-severity correctness)
 
 - **MED — HSA family cap downshifts to self-only when one spouse is on

@@ -83,7 +83,20 @@ class Mortality:
         return "single"
 
     def survivor_label(self, year_offset: int) -> str | None:
-        """Return 'a', 'b', or None (both alive or both dead)."""
+        """Return who is alive at the start of `year_offset`.
+
+        Possible values:
+
+          * ``None``       — both spouses alive
+          * ``"a"``        — only spouse A alive (B died)
+          * ``"b"``        — only spouse B alive (A died)
+          * ``"neither"``  — both dead (estate / heir-mode years)
+
+        Downstream callers (report / widow narrative) rely on the
+        string discriminant for the "both dead" case rather than a
+        second ``None``, so this method does NOT collapse the
+        both-dead and both-alive cases into the same sentinel.
+        """
         a, b = self.alive_a(year_offset), self.alive_b(year_offset)
         if a and b:
             return None

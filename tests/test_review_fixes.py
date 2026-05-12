@@ -735,3 +735,147 @@ class TestMcRuinIncludesHsaPost65:
             "Pre-65 household with only HSA can't tap it for general "
             "spending — should register as ruined."
         )
+
+
+# ===========================================================================
+# v6.2 — batch 3 (LOW-severity defensive / API)
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# F9 — BootstrapModel validators
+# ---------------------------------------------------------------------------
+
+class TestBootstrapModelValidators:
+    def test_zero_block_size_rejected(self) -> None:
+        from tax_optimizer.market import BootstrapModel
+
+        with pytest.raises(ValueError, match="block_size must be > 0"):
+            BootstrapModel(block_size=0)
+
+    def test_negative_block_size_rejected(self) -> None:
+        from tax_optimizer.market import BootstrapModel
+
+        with pytest.raises(ValueError, match="block_size must be > 0"):
+            BootstrapModel(block_size=-1)
+
+    def test_history_length_mismatch_rejected(self) -> None:
+        from tax_optimizer.market import BootstrapModel
+
+        with pytest.raises(ValueError, match="same length"):
+            BootstrapModel(
+                block_size=2,
+                equity_history=(0.1, 0.2, 0.3),
+                bond_history=(0.04, 0.05),
+            )
+
+    def test_block_size_larger_than_history_rejected(self) -> None:
+        from tax_optimizer.market import BootstrapModel
+
+        with pytest.raises(ValueError, match="<= history length"):
+            BootstrapModel(
+                block_size=10,
+                equity_history=(0.1, 0.2, 0.3),
+                bond_history=(0.04, 0.05, 0.06),
+            )
+
+    def test_begin_path_zero_years_rejected(self) -> None:
+        import numpy as np
+        from tax_optimizer.market import BootstrapModel
+
+        m = BootstrapModel(block_size=3)
+        with pytest.raises(ValueError, match="n_years must be > 0"):
+            m.begin_path(0, np.random.default_rng(0))
+
+
+# ---------------------------------------------------------------------------
+# F13 — simulate_paths rejects n_paths < 1
+# ---------------------------------------------------------------------------
+
+class TestSimulatePathsRejectsZero:
+    def test_zero_paths_rejected(self) -> None:
+        from tax_optimizer.monte_carlo import simulate_paths
+
+        with pytest.raises(ValueError, match="n_paths must be >= 1"):
+            simulate_paths(Config(), Inputs(), n_paths=0)
+
+    def test_negative_paths_rejected(self) -> None:
+        from tax_optimizer.monte_carlo import simulate_paths
+
+        with pytest.raises(ValueError, match="n_paths must be >= 1"):
+            simulate_paths(Config(), Inputs(), n_paths=-5)
+
+
+# ---------------------------------------------------------------------------
+# F18 — pension kink indexes forward with wage growth
+# ---------------------------------------------------------------------------
+
+class TestPensionKinkIndexesForward:
+    def test_kink_grows_with_wage_growth_across_decades(self) -> None:
+        """Project two identical pensions across 20 years, one with
+        the (correct) inflation-indexed kink and one with the (old)
+        frozen kink. The frozen-kink projection should over-credit
+        because more of the salary spills into the high band as the
+        salary grows past the un-indexed threshold.
+        """
+        from tax_optimizer.pension import (
+            PENSION_QTR_SSWB,
+            pension_annual_credit,
+            project_pension_balance,
+        )
+
+        salary_today = 100_000.0
+        years = 20
+        wage_growth = 0.03
+
+        # Projected balance with the indexed kink (current behavior).
+        bal_indexed = project_pension_balance(
+            start_balance=0.0,
+            start_earnings=salary_today,
+            years_to_retire=years,
+            wage_growth=wage_growth,
+        )
+
+        # Reference: a hand-rolled projection with the FROZEN kink
+        # (i.e. pre-v6.2 behavior). With wage growth past 30 years,
+        # the un-indexed kink lets MORE of the salary into the 11%
+        # band each year. So the frozen-kink balance should be
+        # strictly LARGER than the indexed one.
+        bal_frozen = 0.0
+        salary = salary_today
+        from tax_optimizer.pension import PENSION_INTEREST
+        for _ in range(years):
+            bal_frozen = bal_frozen * (1 + PENSION_INTEREST) + pension_annual_credit(
+                salary, qtr_sswb=PENSION_QTR_SSWB
+            )
+            salary *= 1 + wage_growth
+
+        # The fix should produce a SMALLER balance (more of the salary
+        # still falls in the 6% band each year because the kink kept up).
+        assert bal_indexed < bal_frozen, (
+            f"Indexed-kink projection (${bal_indexed:,.0f}) should be "
+            f"smaller than frozen-kink (${bal_frozen:,.0f}) — the kink "
+            f"should grow alongside the salary, not stay at 2025's "
+            f"value indefinitely."
+        )
+
+
+# ---------------------------------------------------------------------------
+# F12 — survivor_label docstring matches code
+# ---------------------------------------------------------------------------
+
+class TestSurvivorLabelDocstring:
+    def test_docstring_lists_neither_explicitly(self) -> None:
+        """The docstring should explicitly call out the four return
+        values so callers know `'neither'` is a possible string (and
+        not just `None`)."""
+        from tax_optimizer.mortality import Mortality
+
+        doc = Mortality.survivor_label.__doc__ or ""
+        for token in ("None", '"a"', '"b"', '"neither"'):
+            assert token in doc, (
+                f"survivor_label docstring is missing {token!r}; the "
+                f"prior docstring claimed `None` for both-alive and "
+                f"both-dead but the code returns the string "
+                f"'neither' for both-dead."
+            )

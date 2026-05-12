@@ -143,7 +143,18 @@ def simulate_paths(
 
     `keep_paths=False` discards per-year DataFrames and returns only the
     aggregate statistics — useful when running thousands of paths.
+
+    Raises ``ValueError`` if ``n_paths < 1`` (F13). Previously accepted
+    zero or negative values and silently returned a zero-row result,
+    which then poisoned every downstream summary (``np.percentile`` on
+    an empty array warns and returns NaN).
     """
+    if n_paths < 1:
+        raise ValueError(
+            f"simulate_paths: n_paths must be >= 1, got {n_paths}. "
+            f"A zero-path MC result silently breaks every aggregate "
+            f"(percentiles, CVaR, ruin probability)."
+        )
     rng_master = np.random.default_rng(seed)
     seeds = rng_master.integers(0, 2**31 - 1, size=n_paths)
 
