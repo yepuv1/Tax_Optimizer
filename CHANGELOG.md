@@ -32,6 +32,57 @@ Categories used:
 
 ## [Unreleased]
 
+### Fixed — v6.3 BP RAP fidelity (pension module rewrite)
+
+Cross-checked the pension module against the "How the plan works"
+section (pages 8-13) of the BP Retirement Accumulation Plan (RAP)
+Summary Plan Description (August 2023 edition). Three real
+correctness gaps were found and fixed:
+
+- **HIGH — Pay-credit tiers now respect age AND years-of-service**
+  ([`tax_optimizer/pension.py`](tax_optimizer/pension.py)). Pre-v6.3
+  `pension_annual_credit` hardcoded the **top** tier (6% / 11%) for
+  every participant, overstating accrual for early-career employees
+  by 33-57%. The function now implements the BP RAP page-9 table:
+  the rate is selected by the higher of the age band (<40 / 40-49 /
+  50+) and the service band (<10 / 10-19 / 20+). New helper
+  `pay_credit_rates(age, years_of_service)` returns
+  ``(low, high)`` per tier.
+- **HIGH — IRS §401(a)(17) compensation limit applied** to eligible
+  earnings ([`tax_optimizer/pension.py`](tax_optimizer/pension.py)).
+  Pre-v6.3 a $500k earner accrued credits on the full salary; the
+  SPD caps eligible earnings at the IRS limit ($350k in 2025,
+  inflation-indexed). The simulator and the projector now index
+  the cap forward with wage growth.
+- **MEDIUM — Interest credit honors pre-2016 / post-2016 floor**
+  ([`tax_optimizer/pension.py`](tax_optimizer/pension.py)). New
+  `effective_interest_rate(rate, *, pre_2016_participant)` applies
+  `max(rate, floor)` where floor = 5% (pre-2016) or 2% (post-2016)
+  per BP RAP page 10. The simulator's annual rate is now this
+  floored value rather than a bare 4.8% constant. The default
+  ``pre_2016_participant=False`` preserves pre-v6.3 behavior for
+  the existing test corpus; BP RAP participants who were eligible
+  before January 1, 2016 should flip the knob to ``True``.
+
+API additions:
+
+- **`PensionInputs`** gained four fields (all default to preserve
+  pre-v6.3 behavior): `years_of_service_today`,
+  `pre_2016_participant`, `interest_rate`,
+  `irs_comp_limit_today`. The JSON scenario loader handles them
+  automatically via dataclass-field introspection.
+- **`pension_annual_credit`** and **`project_pension_balance`**
+  gained keyword arguments for age, YoS, comp limit, and interest
+  rate (all optional / backward-compatible).
+
+Regression coverage in [`tests/test_pension.py`](tests/test_pension.py)
+(18 new tests across `TestPayCreditTiers`,
+`TestBpRapWorkedExample1`, `TestIrsCompensationLimit`,
+`TestInterestRateFloor`, `TestProjectorTierTransition`). The
+worked-example test reproduces Example 1 on page 12 of the SPD
+within $100 (annual-aggregate approximation vs SPD's monthly
+compounding).
+
 ### Docs — v6.2 functional review (batch 4: modeling-scope clarifications)
 
 - **`pension.py` module docstring** now explicitly calls out the

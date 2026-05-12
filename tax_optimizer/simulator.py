@@ -24,6 +24,8 @@ from .limits import SECTION_415C_LIMIT, elective_deferral_cap, hsa_family_cap
 from .payroll import OASDI_WAGE_BASE_2026, fica_household
 from .pension import (
     PENSION_INTEREST,
+    PENSION_QTR_SSWB,
+    effective_interest_rate,
     pension_annual_credit,
     project_pension_balance,
 )
@@ -99,6 +101,11 @@ def simulate(
         inputs.income.spouse_a_gross,
         max(0, inputs.pension.start_age - inputs.spouse_a_age_start),
         wage_growth=cfg.wage_growth,
+        start_age=inputs.spouse_a_age_start,
+        years_of_service_today=inputs.pension.years_of_service_today,
+        interest_rate=inputs.pension.interest_rate,
+        pre_2016_participant=inputs.pension.pre_2016_participant,
+        comp_limit_today=inputs.pension.irs_comp_limit_today,
     )
 
     for year_offset in range(n_years):
@@ -916,9 +923,37 @@ def simulate(
         state.taxable *= 1 + asset_loc.taxable.annual_return(eq_r, bd_r) - cfg.taxable_drag
         state.hsa *= 1 + asset_loc.hsa.annual_return(eq_r, bd_r)
         if a_age < inputs.pension.start_age:
-            state.pension_balance *= 1 + PENSION_INTEREST
+            # BP RAP interest credit: honor the participant's
+            # configured rate (with the appropriate pre-/post-2016
+            # floor). Falls back to PENSION_INTEREST if neither was
+            # set on PensionInputs.
+            yearly_rate = effective_interest_rate(
+                inputs.pension.interest_rate
+                if inputs.pension.interest_rate is not None
+                else PENSION_INTEREST,
+                pre_2016_participant=inputs.pension.pre_2016_participant,
+            )
+            state.pension_balance *= 1 + yearly_rate
+            # Index the SSWB-quarter and IRS comp limit forward to
+            # the current year. Both real-world figures track wage
+            # growth; freezing them silently pushed more earnings
+            # into the high band each year and ignored the cap on
+            # high earners.
+            current_kink = PENSION_QTR_SSWB * (1 + cfg.wage_growth) ** year_offset
+            current_cap = inputs.pension.irs_comp_limit_today * (
+                1 + cfg.wage_growth
+            ) ** year_offset
+            current_yos = (
+                inputs.pension.years_of_service_today + year_offset
+                if inputs.pension.years_of_service_today is not None
+                else None
+            )
             state.pension_balance += pension_annual_credit(
-                spouse_a_salary if a_working else 0.0
+                spouse_a_salary if a_working else 0.0,
+                age=a_age,
+                years_of_service=current_yos,
+                qtr_sswb=current_kink,
+                comp_limit=current_cap,
             )
 
         # Salary growth only for living working spouses.

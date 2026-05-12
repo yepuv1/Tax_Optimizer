@@ -97,9 +97,41 @@ class CurrentContrib:
 
 @dataclass
 class PensionInputs:
+    """Cash-balance pension inputs (BP-RAP-calibrated).
+
+    Required fields (legacy):
+
+      * ``balance_today``    — current cash-balance account value.
+      * ``monthly_at_nrd``   — projected monthly annuity at NRD.
+      * ``start_age``        — Normal Retirement Date (default 65).
+
+    BP RAP-specific fields (default values preserve pre-v6.3
+    behavior — the simulator computes pay credits using the top
+    6%/11% tier when no age / service info is provided):
+
+      * ``years_of_service_today`` — used to select the pay-credit
+        tier each year; the model advances it +1 every working
+        year. Set to ``None`` to keep the legacy 6%/11% behavior.
+      * ``pre_2016_participant`` — controls the minimum-interest
+        floor (5% pre-2016, 2% post-2016).
+      * ``interest_rate`` — annual interest-credit rate; defaults
+        to the participant's floor. Override to model a specific
+        30-yr-Treasury assumption.
+      * ``irs_comp_limit_today`` — IRS §401(a)(17) cap in today's
+        dollars (defaults to 2025's $350k). Indexed forward with
+        wage growth.
+    """
+
     balance_today: float = 0.0
     monthly_at_nrd: float = 0.0
     start_age: int = 65  # NRD: age Spouse A's pension annuity begins.
+    years_of_service_today: int | None = None
+    # Default `False` (post-2016 / 2% floor) so the legacy 4.8% interest
+    # default doesn't get floored to 5%. BP RAP participants who were
+    # eligible before January 1, 2016 should flip this to `True`.
+    pre_2016_participant: bool = False
+    interest_rate: float | None = None
+    irs_comp_limit_today: float = 350_000.0
 
     @property
     def annual_at_nrd(self) -> float:
