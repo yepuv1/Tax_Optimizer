@@ -32,6 +32,37 @@ Categories used:
 
 ## [Unreleased]
 
+### Fixed — v6.3 BP RAP fidelity follow-ups (retire_age + bonus eligibility)
+
+- **HIGH — Annual incentive payments (bonus) now count as eligible
+  earnings for pension pay credits**
+  ([`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)). Per
+  BP RAP page 9, "Payments made under an annual incentive plan at
+  the business unit or stream level" are pension-eligible.
+  Pre-fix the simulator passed only `spouse_a_salary` to
+  `pension_annual_credit`, **excluding `spouse_a_bonus`**. For
+  participants with material bonuses (e.g. $100k/yr) this understated
+  pension accrual by 30-50% over a working career. The IRS
+  §401(a)(17) comp cap inside `pension_annual_credit` still applies
+  to the combined base+bonus figure, so high-earner ceiling still
+  binds.
+- **MEDIUM — Projector reference now honors `retire_age`**
+  ([`tax_optimizer/pension.py`](tax_optimizer/pension.py)).
+  `project_pension_balance` accepted no retire-age argument and
+  silently credited pay-credits all the way to NRD. For users
+  whose `spouse_a_retire_age < pension.start_age`, the projector
+  overstated the reference balance by ~4% per year of gap, scaling
+  the user's `monthly_at_nrd` input DOWN by the same margin
+  (because the simulator's annuity = input × actual / projected).
+  The simulator now passes `retire_age=inputs.spouse_a_retire_age`,
+  bringing actual / projected ≈ 100% and using the user's
+  `monthly_at_nrd` input directly.
+
+Both fixes are required for BP RAP scenarios to honor the user's
+`monthly_at_nrd` (from BP NetBenefits) without silent scaling. New
+regression tests in `tests/test_pension.py::TestProjectorRespectsRetireAge`
+and `TestSimulatorIncludesBonusInPension`.
+
 ### Fixed — v6.3 BP RAP fidelity (pension module rewrite)
 
 Cross-checked the pension module against the "How the plan works"

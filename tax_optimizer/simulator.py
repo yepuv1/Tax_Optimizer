@@ -96,9 +96,14 @@ def simulate(
 
     # Reference projected pension balance at NRD; used to scale annuity
     # if the actual cash-balance grew faster (or slower) than expected.
+    # Pass `retire_age` so the projector stops pay credits at
+    # retirement (the simulator does too — without this knob the
+    # projector overstates by 4-15% for users who retire before NRD,
+    # which scales the user's `monthly_at_nrd` input DOWN by the same
+    # margin in the simulator's annuity calculation).
     test_balance = project_pension_balance(
         inputs.pension.balance_today,
-        inputs.income.spouse_a_gross,
+        inputs.income.spouse_a_gross + inputs.income.spouse_a_bonus,
         max(0, inputs.pension.start_age - inputs.spouse_a_age_start),
         wage_growth=cfg.wage_growth,
         start_age=inputs.spouse_a_age_start,
@@ -106,6 +111,7 @@ def simulate(
         interest_rate=inputs.pension.interest_rate,
         pre_2016_participant=inputs.pension.pre_2016_participant,
         comp_limit_today=inputs.pension.irs_comp_limit_today,
+        retire_age=inputs.spouse_a_retire_age,
     )
 
     for year_offset in range(n_years):
@@ -948,8 +954,14 @@ def simulate(
                 if inputs.pension.years_of_service_today is not None
                 else None
             )
+            # BP RAP eligible earnings include base salary AND annual
+            # incentive payments (SPD page 9). The IRS §401(a)(17)
+            # comp cap is applied inside `pension_annual_credit`.
+            eligible_earnings = (
+                (spouse_a_salary + spouse_a_bonus) if a_working else 0.0
+            )
             state.pension_balance += pension_annual_credit(
-                spouse_a_salary if a_working else 0.0,
+                eligible_earnings,
                 age=a_age,
                 years_of_service=current_yos,
                 qtr_sswb=current_kink,

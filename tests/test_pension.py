@@ -314,3 +314,122 @@ class TestProjectorTierTransition:
         # The YoS=10 path should accrue strictly more (5% × min(80k, 46125) + …
         # vs 4% × min(80k, 46125) + …).
         assert bal_at_transition > bal_no_transition
+
+
+class TestProjectorRespectsRetireAge:
+    """BP RAP rule: pay credits stop at termination of service, but
+    interest credits continue accruing until benefit payment. The
+    projector previously credited pay credits all the way to NRD,
+    overstating the reference balance for users who retired before
+    NRD and silently scaling their input `monthly_at_nrd` down."""
+
+    def test_retire_age_stops_pay_credits(self) -> None:
+        # Start at 54, NRD 67, retire at 65. 11 years of pay credits,
+        # 2 years of interest-only.
+        with_retire = project_pension_balance(
+            start_balance=400_000.0,
+            start_earnings=200_000.0,
+            years_to_retire=13,
+            wage_growth=0.01,
+            start_age=54,
+            years_of_service_today=20,
+            interest_rate=0.05,
+            comp_limit_today=350_000.0,
+            retire_age=65,
+        )
+        # Same path but the projector doesn't know about retire_age
+        # → credits all 13 years.
+        without_retire = project_pension_balance(
+            start_balance=400_000.0,
+            start_earnings=200_000.0,
+            years_to_retire=13,
+            wage_growth=0.01,
+            start_age=54,
+            years_of_service_today=20,
+            interest_rate=0.05,
+            comp_limit_today=350_000.0,
+            retire_age=None,
+        )
+        assert with_retire < without_retire, (
+            "Honoring retire_age should yield a smaller projected "
+            "balance (fewer pay credits) than ignoring it."
+        )
+        # Sanity: the difference should be roughly 2 years of pay
+        # credits compounded by ~2 years of interest. At ~$20-25k of
+        # credit per year × 2 ≈ $40-50k.
+        assert 30_000 < (without_retire - with_retire) < 80_000
+
+
+class TestSimulatorIncludesBonusInPension:
+    """BP RAP page 9: eligible earnings include 'Payments made under
+    an annual incentive plan'. The simulator must include
+    `spouse_a_bonus` in the pension pay-credit base."""
+
+    def test_bonus_increases_pension_balance(self) -> None:
+        from tax_optimizer import Config, Inputs, simulate
+        from tax_optimizer.inputs import CurrentIncome, PensionInputs, StartingBalances
+        from tax_optimizer.mortality import Mortality
+        from tax_optimizer.spending import SpendingProfile
+
+        cfg = Config(
+            horizon_age=68,
+            nominal_growth_rate=0.0,
+            taxable_equity_div_yield=0.0,
+            taxable_bond_interest_yield=0.0,
+            taxable_drag=0.0,
+            inflation=0.0,
+            wage_growth=0.0,
+            spending=SpendingProfile.flat(base_spending=80_000.0, inflation=0.0),
+            annual_expenses_today=80_000.0,
+            aca_enabled=False,
+            mortality=Mortality(),
+        )
+        common_kwargs = dict(
+            spouse_a_age_start=55,
+            spouse_b_age_start=55,
+            spouse_a_retire_age=65,
+            spouse_b_retire_age=65,
+            starting=StartingBalances(
+                spouse_a_pretax_401k=200_000.0,
+                spouse_b_pretax_401k=0.0,
+                spouse_a_roth_ira=0.0,
+                spouse_b_roth_ira=0.0,
+                taxable_brokerage=500_000.0,
+                hsa=0.0,
+            ),
+            pension=PensionInputs(
+                balance_today=200_000.0,
+                monthly_at_nrd=2_000.0,
+                start_age=67,
+                years_of_service_today=20,
+                pre_2016_participant=True,
+            ),
+        )
+        inp_no_bonus = Inputs(
+            **common_kwargs,
+            income=CurrentIncome(spouse_a_gross=150_000.0, spouse_a_bonus=0.0),
+        )
+        inp_with_bonus = Inputs(
+            **common_kwargs,
+            income=CurrentIncome(spouse_a_gross=150_000.0, spouse_a_bonus=50_000.0),
+        )
+        df_no_bonus = simulate(cfg, inp_no_bonus)
+        df_with_bonus = simulate(cfg, inp_with_bonus)
+
+        # Last working year before retirement: age 64.
+        bal_no_bonus = df_no_bonus[df_no_bonus["spouse_a_age"] == 64][
+            "pension_balance"
+        ].iloc[0]
+        bal_with_bonus = df_with_bonus[df_with_bonus["spouse_a_age"] == 64][
+            "pension_balance"
+        ].iloc[0]
+        assert bal_with_bonus > bal_no_bonus, (
+            "Including the $50k bonus in pension-eligible earnings "
+            "should produce a higher pension balance at retirement."
+        )
+        # The extra $50k/year for ~10 years at 11% = ~$5500/yr credit,
+        # compounded at 5% over 10 years ≈ $69k extra.
+        assert bal_with_bonus - bal_no_bonus > 50_000, (
+            "Pension-balance lift from including a $50k annual bonus "
+            "over 10 working years should be at least $50k."
+        )

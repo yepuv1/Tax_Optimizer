@@ -187,22 +187,30 @@ def project_pension_balance(
     interest_rate: float | None = None,
     pre_2016_participant: bool = False,
     comp_limit_today: float | None = None,
+    retire_age: int | None = None,
 ) -> float:
     """Forward-project a cash-balance account to retirement.
 
     Each year:
 
       * Apply the interest credit to the prior balance.
-      * Add the year's pay credit, computed against the current
+      * If the participant is still working (``start_age + offset <
+        retire_age``), add a pay credit computed against the current
         SSWB-quarter kink and IRS comp-limit (both indexed forward
-        with ``wage_growth``).
+        with ``wage_growth``). Once the participant has retired, only
+        interest credits continue accruing until ``years_to_retire``
+        elapses (matching the BP RAP rule: pay credits stop at
+        termination, interest credits continue until benefit payment).
       * Tier is recomputed each year using ``start_age + year`` and
         ``years_of_service_today + year`` (so a participant crossing
         age 50 or 20 YoS during the projection switches to the
         higher tier).
 
     Pre-v6.3 callers that don't pass ``start_age`` / ``years_of_service_today``
-    still get the legacy top-tier behavior.
+    still get the legacy top-tier behavior. Pre-v6.3 callers that
+    don't pass ``retire_age`` get the old "credits all the way to
+    NRD" behavior — set ``retire_age`` to stop pay credits at
+    actual retirement (the simulator passes this automatically).
     """
     # `interest_rate=None` keeps backward compat with pre-v6.3 callers:
     # falls back to `PENSION_INTEREST` (4.8%) before applying the
@@ -221,13 +229,19 @@ def project_pension_balance(
         yos_now = (
             (years_of_service_today + offset) if years_of_service_today is not None else None
         )
-        bal += pension_annual_credit(
-            earn,
-            age=age_now,
-            years_of_service=yos_now,
-            qtr_sswb=kink,
-            comp_limit=cap,
+        is_working = (
+            retire_age is None
+            or age_now is None
+            or age_now < retire_age
         )
+        if is_working:
+            bal += pension_annual_credit(
+                earn,
+                age=age_now,
+                years_of_service=yos_now,
+                qtr_sswb=kink,
+                comp_limit=cap,
+            )
         earn *= 1 + wage_growth
         kink *= 1 + wage_growth
         cap *= 1 + wage_growth
