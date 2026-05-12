@@ -15,11 +15,20 @@ PENSION_HIGH_RATE: float = 0.11
 
 
 def pension_annual_credit(annual_eligible_earnings: float) -> float:
-    """Annual credit added to the cash-balance account for a given salary."""
-    monthly_e = annual_eligible_earnings / 12.0
-    low_credit = min(monthly_e, PENSION_QTR_SSWB) * PENSION_LOW_RATE
-    high_credit = max(0.0, monthly_e - PENSION_QTR_SSWB) * PENSION_HIGH_RATE
-    return (low_credit + high_credit) * 12
+    """Annual credit added to the cash-balance account for a given salary.
+
+    Works in **annual** dollars throughout: `PENSION_QTR_SSWB` is one
+    quarter of the *annual* Social Security wage base, so the low-rate
+    tier covers earnings up to that figure and the high-rate tier
+    covers earnings above it. (Pre-v6.2 the function divided salary by
+    12 before comparing to the annual threshold, which kept the high
+    band dormant for any salary below ~$553k and systematically
+    understated pension accrual by 30-40% for typical incomes.)
+    """
+    earnings = max(0.0, annual_eligible_earnings)
+    low_credit = min(earnings, PENSION_QTR_SSWB) * PENSION_LOW_RATE
+    high_credit = max(0.0, earnings - PENSION_QTR_SSWB) * PENSION_HIGH_RATE
+    return low_credit + high_credit
 
 
 def project_pension_balance(

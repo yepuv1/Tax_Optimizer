@@ -4,16 +4,32 @@ These functions return *gross* withdrawals per bucket given a net-spending
 target. They're pure (no state mutation); the simulator applies the
 balance changes after computing federal tax + IRMAA on the final
 combined income line.
+
+Solvers can optionally take a `state_tax_fn` callable so the gross-up
+accounts for state income tax on the incremental withdrawal. Without
+it (the default, backward compat), the gross-up is federal-only —
+which silently underdrew by ~9-12% for CA/MA/OR users in cascade
+years until v6.2.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable, Optional
 
 from .config import Config
 from .state import State
 from .tax.federal import amount_to_fill_bracket, federal_tax
 from .tax.regimes import TaxRegime
+
+
+StateTaxFn = Callable[[dict, float], float]
+"""Signature: `state_tax_fn(kwargs, ss_taxable_federal) -> state_tax_dollars`.
+
+Takes the same kwargs dict the solver feeds to `federal_tax`, plus the
+`ss_taxable` value `federal_tax` returned on that same call (so the
+state tax function doesn't have to recompute it). Returns total state
+income tax in dollars.
+"""
 
 
 def _solve_pretax_for_net(
@@ -22,16 +38,25 @@ def _solve_pretax_for_net(
     *,
     regime: TaxRegime,
     filing_status: str,
+    state_tax_fn: Optional[StateTaxFn] = None,
 ) -> float:
     if net_target <= 0:
         return 0.0
-    base_tax = federal_tax(regime=regime, filing_status=filing_status, **base_kwargs)["tax"]
+    base_fed = federal_tax(regime=regime, filing_status=filing_status, **base_kwargs)
+    base_tax = base_fed["tax"]
+    base_state = state_tax_fn(base_kwargs, base_fed["ss_taxable"]) if state_tax_fn else 0.0
     lo, hi = 0.0, net_target * 2.0 + 50_000.0
     for _ in range(50):
         mid = 0.5 * (lo + hi)
         kw = dict(base_kwargs)
         kw["pretax_withdrawal"] = kw.get("pretax_withdrawal", 0.0) + mid
-        net = mid - (federal_tax(regime=regime, filing_status=filing_status, **kw)["tax"] - base_tax)
+        new_fed = federal_tax(regime=regime, filing_status=filing_status, **kw)
+        fed_delta = new_fed["tax"] - base_tax
+        state_delta = (
+            state_tax_fn(kw, new_fed["ss_taxable"]) - base_state
+            if state_tax_fn else 0.0
+        )
+        net = mid - fed_delta - state_delta
         if net < net_target:
             lo = mid
         else:
@@ -48,17 +73,26 @@ def _solve_taxable_for_net(
     *,
     regime: TaxRegime,
     filing_status: str,
+    state_tax_fn: Optional[StateTaxFn] = None,
 ) -> float:
     if net_target <= 0:
         return 0.0
-    base_tax = federal_tax(regime=regime, filing_status=filing_status, **base_kwargs)["tax"]
+    base_fed = federal_tax(regime=regime, filing_status=filing_status, **base_kwargs)
+    base_tax = base_fed["tax"]
+    base_state = state_tax_fn(base_kwargs, base_fed["ss_taxable"]) if state_tax_fn else 0.0
     lo, hi = 0.0, net_target * 2.0 + 50_000.0
     for _ in range(50):
         mid = 0.5 * (lo + hi)
         gain = mid * (1 - basis_frac)
         kw = dict(base_kwargs)
         kw["ltcg"] = kw.get("ltcg", 0.0) + gain
-        net = mid - (federal_tax(regime=regime, filing_status=filing_status, **kw)["tax"] - base_tax)
+        new_fed = federal_tax(regime=regime, filing_status=filing_status, **kw)
+        fed_delta = new_fed["tax"] - base_tax
+        state_delta = (
+            state_tax_fn(kw, new_fed["ss_taxable"]) - base_state
+            if state_tax_fn else 0.0
+        )
+        net = mid - fed_delta - state_delta
         if net < net_target:
             lo = mid
         else:
@@ -80,6 +114,7 @@ def withdraw_for_need(
     *,
     regime: TaxRegime,
     filing_status: str,
+    state_tax_fn: Optional[StateTaxFn] = None,
 ) -> dict:
     """Return gross withdrawals split per spouse for pretax.
 
@@ -121,6 +156,7 @@ def withdraw_for_need(
                 _solve_taxable_for_net(
                     min(remaining, state.taxable), ctx, basis_frac,
                     regime=regime, filing_status=filing_status,
+                    state_tax_fn=state_tax_fn,
                 ),
                 state.taxable,
             )
@@ -135,7 +171,11 @@ def withdraw_for_need(
             remaining = max(0.0, remaining - max(0.0, net_from_t))
         if remaining > 0 and pretax_room > 0:
             extra = min(
-                _solve_pretax_for_net(remaining, ctx, regime=regime, filing_status=filing_status),
+                _solve_pretax_for_net(
+                    remaining, ctx,
+                    regime=regime, filing_status=filing_status,
+                    state_tax_fn=state_tax_fn,
+                ),
                 pretax_room,
             )
             ax, bx = split_extra(extra)
@@ -153,13 +193,21 @@ def withdraw_for_need(
             w_p = remaining * (max(pretax_room, 0) / avail)
             w_r = remaining * (state.roth / avail)
             tw = min(
-                _solve_taxable_for_net(w_t, ctx, basis_frac, regime=regime, filing_status=filing_status),
+                _solve_taxable_for_net(
+                    w_t, ctx, basis_frac,
+                    regime=regime, filing_status=filing_status,
+                    state_tax_fn=state_tax_fn,
+                ),
                 state.taxable,
             )
             ctx["ltcg"] = ctx.get("ltcg", 0.0) + tw * (1 - basis_frac)
             taxable_w += tw
             pw = min(
-                _solve_pretax_for_net(w_p, ctx, regime=regime, filing_status=filing_status),
+                _solve_pretax_for_net(
+                    w_p, ctx,
+                    regime=regime, filing_status=filing_status,
+                    state_tax_fn=state_tax_fn,
+                ),
                 pretax_room,
             )
             ax, bx = split_extra(pw)
@@ -176,7 +224,11 @@ def withdraw_for_need(
         if remaining > 0 and headroom > 0 and pretax_room > 0:
             cap = min(headroom, pretax_room)
             extra = min(
-                _solve_pretax_for_net(min(remaining, cap * 0.85), ctx, regime=regime, filing_status=filing_status),
+                _solve_pretax_for_net(
+                    min(remaining, cap * 0.85), ctx,
+                    regime=regime, filing_status=filing_status,
+                    state_tax_fn=state_tax_fn,
+                ),
                 cap,
             )
             ax, bx = split_extra(extra)
@@ -189,6 +241,7 @@ def withdraw_for_need(
                 _solve_taxable_for_net(
                     min(remaining, state.taxable), ctx, basis_frac,
                     regime=regime, filing_status=filing_status,
+                    state_tax_fn=state_tax_fn,
                 ),
                 state.taxable,
             )
@@ -223,6 +276,7 @@ def cover_deficit(
     hsa_unlocked: bool = False,
     regime: TaxRegime,
     filing_status: str,
+    state_tax_fn: Optional[StateTaxFn] = None,
 ) -> tuple[dict[str, float], float]:
     """Pull `deficit` net dollars from accounts in tax-efficient order.
 
@@ -261,6 +315,23 @@ def cover_deficit(
 
     kw = dict(base_kwargs)
 
+    def _net_after_marginal_tax(prev_kw: dict, new_kw: dict, gross: float) -> float:
+        """Net produced from `gross` after both federal and state marginal tax.
+
+        Computes the delta in federal + state tax between `prev_kw` and
+        `new_kw` (which differ by the additional cascade draw the caller
+        just added to `new_kw`), and subtracts from gross.
+        """
+        prev_fed = federal_tax(regime=regime, filing_status=filing_status, **prev_kw)
+        new_fed = federal_tax(regime=regime, filing_status=filing_status, **new_kw)
+        fed_delta = max(0.0, new_fed["tax"] - prev_fed["tax"])
+        state_delta = 0.0
+        if state_tax_fn is not None:
+            prev_state = state_tax_fn(prev_kw, prev_fed["ss_taxable"])
+            new_state = state_tax_fn(new_kw, new_fed["ss_taxable"])
+            state_delta = max(0.0, new_state - prev_state)
+        return gross - fed_delta - state_delta
+
     # 1. Taxable: realize gains at LTCG rate. Solver returns the gross
     # withdrawal needed to net the (capped) target.
     taxable_room = max(0.0, state.taxable - taxable_already)
@@ -268,17 +339,18 @@ def cover_deficit(
         target = min(deficit, taxable_room)
         tw = min(
             _solve_taxable_for_net(
-                target, kw, basis_frac, regime=regime, filing_status=filing_status
+                target, kw, basis_frac,
+                regime=regime, filing_status=filing_status,
+                state_tax_fn=state_tax_fn,
             ),
             taxable_room,
         )
         if tw > 0:
-            base_tax = federal_tax(regime=regime, filing_status=filing_status, **kw)["tax"]
+            prev_kw = dict(kw)
             kw["ltcg"] = kw.get("ltcg", 0.0) + tw * (1 - basis_frac)
-            new_tax = federal_tax(regime=regime, filing_status=filing_status, **kw)["tax"]
-            net_produced = tw - max(0.0, new_tax - base_tax)
+            net_produced = _net_after_marginal_tax(prev_kw, kw, tw)
             out["taxable"] += tw
-            deficit = max(0.0, deficit - net_produced)
+            deficit = max(0.0, deficit - max(0.0, net_produced))
 
     # 2. Roth: tax-free (blind spot: 5-year rule on conversions ignored).
     roth_room = max(0.0, state.roth - roth_already)
@@ -297,17 +369,18 @@ def cover_deficit(
     if deficit > 0 and hsa_room > 0:
         gross = min(
             _solve_pretax_for_net(
-                deficit, kw, regime=regime, filing_status=filing_status
+                deficit, kw,
+                regime=regime, filing_status=filing_status,
+                state_tax_fn=state_tax_fn,
             ),
             hsa_room,
         )
         if gross > 0:
             out["hsa"] += gross
-            base_tax = federal_tax(regime=regime, filing_status=filing_status, **kw)["tax"]
+            prev_kw = dict(kw)
             kw["pretax_withdrawal"] = kw.get("pretax_withdrawal", 0.0) + gross
-            new_tax = federal_tax(regime=regime, filing_status=filing_status, **kw)["tax"]
-            net_produced = gross - max(0.0, new_tax - base_tax)
-            deficit = max(0.0, deficit - net_produced)
+            net_produced = _net_after_marginal_tax(prev_kw, kw, gross)
+            deficit = max(0.0, deficit - max(0.0, net_produced))
 
     # 3. Pretax: gross up for marginal ordinary rate; split pro-rata.
     pretax_a_room = max(0.0, state.spouse_a_pretax - pretax_a_already)
@@ -316,7 +389,9 @@ def cover_deficit(
     if deficit > 0 and pretax_room > 0:
         gross = min(
             _solve_pretax_for_net(
-                deficit, kw, regime=regime, filing_status=filing_status
+                deficit, kw,
+                regime=regime, filing_status=filing_status,
+                state_tax_fn=state_tax_fn,
             ),
             pretax_room,
         )
@@ -327,10 +402,9 @@ def cover_deficit(
             out["pretax_a"] += ax
             out["pretax_b"] += bx
             out["pretax"] = out["pretax_a"] + out["pretax_b"]
-            base_tax = federal_tax(regime=regime, filing_status=filing_status, **kw)["tax"]
+            prev_kw = dict(kw)
             kw["pretax_withdrawal"] = kw.get("pretax_withdrawal", 0.0) + gross
-            new_tax = federal_tax(regime=regime, filing_status=filing_status, **kw)["tax"]
-            net_produced = gross - max(0.0, new_tax - base_tax)
-            deficit = max(0.0, deficit - net_produced)
+            net_produced = _net_after_marginal_tax(prev_kw, kw, gross)
+            deficit = max(0.0, deficit - max(0.0, net_produced))
 
     return out, max(0.0, deficit)

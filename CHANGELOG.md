@@ -32,8 +32,107 @@ Categories used:
 
 ## [Unreleased]
 
+### Fixed — v6.2 functional review (batch 1: HIGH-severity math/state)
+
+- **HIGH — `pension.pension_annual_credit` no longer silently keeps the
+  high-rate band dormant for typical salaries**
+  ([`tax_optimizer/pension.py`](tax_optimizer/pension.py)). The
+  pre-v6.2 function divided annual earnings by 12 before comparing to
+  `PENSION_QTR_SSWB` (which is one quarter of the *annual* SS wage
+  base), then multiplied the per-month credit back up by 12. The two
+  cancelled algebraically only for the all-low-band leg — the high-
+  rate (11%) band did not fire until annual salary exceeded ~$553k.
+  Effect: 30-40% underprediction of accrued pension for salaries
+  between $50k and $300k. Now both legs evaluate against annual
+  earnings against an annual threshold.
+  ([`tests/test_pension.py`](tests/test_pension.py),
+  [`tests/test_review_fixes.py::TestPensionCreditHighBandFires`](tests/test_review_fixes.py)
+  for regression coverage.)
+- **HIGH — Deficit cascade now grosses up for **state income tax** in
+  addition to federal** ([`tax_optimizer/withdrawals.py`](tax_optimizer/withdrawals.py),
+  [`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)). The
+  `_solve_pretax_for_net` / `_solve_taxable_for_net` helpers used to
+  only account for federal-tax delta when computing the gross
+  withdrawal needed to net a target. Households in CA/MA/OR/NY came
+  up 6-12% short on every cascade leg, surfacing as silent unfunded
+  gaps or post-hoc rebalancing artifacts. The solvers now accept an
+  optional `state_tax_fn` callable; the simulator wires it to the
+  household's resolved state regime so the gross-up is correct in all
+  regimes (including STATELESS, where the closure returns 0 and
+  behavior is unchanged).
+  ([`tests/test_review_fixes.py::TestCascadeIncorporatesStateTax`](tests/test_review_fixes.py).)
+- **HIGH — Pension annuity initializes when simulation starts at-or-
+  past NRD** ([`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)).
+  Pre-v6.2 the initialization guard was `a_age == inputs.pension.start_age`,
+  which silently dropped the pension for already-retired-with-pension
+  households whose simulation horizon begins after the pension's
+  Normal Retirement Date. The check is now `a_age >=
+  inputs.pension.start_age`. When the user starts at-or-after NRD with
+  no accumulated cash-balance, we honor `monthly_at_nrd` as the
+  baseline (instead of scaling by the zero accumulator).
+  ([`tests/test_review_fixes.py::TestPensionAnnuityInitWhenAlreadyAtNRD`](tests/test_review_fixes.py).)
+
+### Fixed
+
+- **HIGH — `inputs.income.*` (interest, capital gains, dividends) no
+  longer drops to zero when only spouse A retires**
+  ([`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)). The
+  pre-fix gate keyed the non-portfolio income extras on `a_working`
+  alone, so a household where A retires at 62 while B keeps earning
+  silently lost those streams for the staggered window. The gate now
+  follows the in-code comment: `anyone_working = a_working or b_working`.
+  Discovered by the package-wide error review (review finding #2).
+- **HIGH — `--seed N` on the CLI now actually reseeds Monte Carlo
+  objectives** ([`tax_optimizer/__main__.py`](tax_optimizer/__main__.py)).
+  `_run_objective_optimizer` was only threading `args.seed` into the
+  differential-evolution sampler (`seed=`). The MC draws scored by
+  `--mc-objective {cvar,p_success}` kept their built-in default of
+  42 regardless of the CLI flag, so two distinct seeds produced
+  identical MC objective curves. Fix threads `args.seed` into BOTH
+  `seed=` and `mc_seed=`. Discovered by the review (finding #3).
+- **HIGH — `Config(rmd_start_age < 72)` is now rejected; `rmd_amount`
+  defends against under-72 ages** ([`tax_optimizer/config.py`](tax_optimizer/config.py),
+  [`tax_optimizer/rmd.py`](tax_optimizer/rmd.py)). Previously, any
+  `rmd_start_age` below the youngest IRS Uniform Lifetime Table entry
+  (72) caused `rmd_amount` to fall through to `divisor = 1.0` and
+  return the **entire** pretax balance as the year's RMD. `Config.__post_init__`
+  now raises `ValueError` at construction, and `rmd_amount` returns
+  `0.0` (not `balance / 1.0`) for any age below the table's youngest
+  key as a belt-and-suspenders. Discovered by the review (finding #4).
+- **HIGH — Post-deficit-cascade IRMAA now respects
+  `cfg.irmaa_lookback_years`** ([`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)).
+  The initial-pass IRMAA correctly honored the 2-year MAGI lookback
+  (TC-5), but the post-cascade recompute always reset IRMAA to the
+  current-year cascade-inflated AGI. This silently inflated IRMAA in
+  any year the cascade fired under a positive lookback (which is the
+  SSA-realistic setting). The recompute now only re-fires IRMAA when
+  `irmaa_lookback_years <= 0`; under any positive lookback the
+  cascade's effect on future-year IRMAA still flows through the
+  `state.prior_agi` / `state.agi_lag_2` chain. Discovered by the
+  review (finding #6).
+- **MEDIUM — Report's market-model row no longer prints `NoneType` for
+  the default `Config()`** ([`tax_optimizer/report.py`](tax_optimizer/report.py)).
+  `_market_summary`, the cross-model robustness table, and the §4
+  Monte Carlo blurb now route through `cfg.resolved_market()`, so a
+  `Config()` with `market=None` correctly renders the deterministic
+  fallback the simulator actually uses. Discovered by the review
+  (findings #5, #18).
+
 ### Changed
 
+- **`scenarios/example.json` renamed to `scenarios/example01.json`**
+  to match the canonical name already used in `README.md`,
+  `docs/scenario_guide.md`, and `CHANGELOG.md` references. The smoke
+  test that loads each shipped scenario (`tests/test_simulator.py`)
+  was previously `pytest.skip`-ing on the missing `example01.json`
+  path; the test now `assert`s existence so a future rename can never
+  silently regress. Notebook (`retirement_planning_demo.ipynb`)
+  source cells are updated too. Discovered by the review (finding #1).
+- **Minor cleanup of dead locals and unused imports**
+  (`tax_optimizer/report.py`, `tax_optimizer/sensitivity.py`,
+  `tax_optimizer/simulator.py`, `tax_optimizer/tax/state.py`). Removed
+  the unused `pre_rmd_rows` and `base_sum` locals flagged by ruff
+  F841, plus four F401 imports never referenced by their modules.
 - **§7 "Year-by-year withdrawal & conversion plan" now defaults to the
   full horizon** ([`tax_optimizer/report.py`](tax_optimizer/report.py)).
   Pre-v7, the §7 table silently filtered the simulator DataFrame down
@@ -133,7 +232,22 @@ Categories used:
   scope validation rejects unknown values; the new
   `--year-table-scope` CLI flag's argparse contract (default, valid
   values, rejection of unknown values).
-  Test count: **380 → 425 passing**.
+- 12 new tests in
+  [`tests/test_review_fixes.py`](tests/test_review_fixes.py) — regression
+  coverage for each of the six HIGH review findings: `example01.json`
+  rename guard, staggered-retirement income preservation, CLI
+  `mc_seed=` thread, `rmd_start_age` validator + `rmd_amount` defense,
+  `_market_summary` routing through `resolved_market()`, and
+  post-cascade IRMAA respecting the lookback knob.
+- [`tests/test_simulator.py`](tests/test_simulator.py) — replaced the
+  silent `pytest.skip` with a hard `assert` on `scenarios/example01.json`
+  so the canonical example scenario's existence is a tested invariant.
+- [`tests/test_tier_c.py::TestConversionReservesRMD`](tests/test_tier_c.py)
+  — bumped the test's `rmd_start_age` from 70 → 72 to match the new
+  `Config.__post_init__` validator. Still verifies the same TC-7
+  behavior (a fixed conversion can't truncate the year's RMD), just
+  at the lowest age the IRS table publishes a divisor for.
+  Test count: **380 → 437 passing**.
 
 ### Docs
 

@@ -15,33 +15,55 @@ from tax_optimizer.pension import (
 
 
 class TestAnnualCredit:
+    """`PENSION_QTR_SSWB` is one quarter of the *annual* Social Security
+    wage base, so the kink is at ~$46,125 of **annual** earnings — not
+    monthly. The v6.2 fix corrected an earlier divide-by-12 / multiply-
+    by-12 cancellation that kept the high-rate band dormant until
+    annual salary exceeded ~$553k.
+    """
+
     def test_zero_earnings_zero_credit(self) -> None:
         assert pension_annual_credit(0.0) == 0.0
 
     def test_below_kink_uses_only_low_rate(self) -> None:
-        # Monthly earnings below the SSWB-quarter kink ($46_125/mo).
-        # Annual credit = 12 * (monthly * low_rate).
-        annual_e = 60_000.0
-        out = pension_annual_credit(annual_e)
-        # monthly = 5_000, low_credit = 5_000 * 0.06 = 300/mo, annual = 3_600.
-        assert out == pytest.approx(3_600.0)
+        # $30,000 annual is well below the ~$46,125 annual kink.
+        annual_e = 30_000.0
+        expected = annual_e * PENSION_LOW_RATE
+        assert pension_annual_credit(annual_e) == pytest.approx(expected)
 
     def test_at_kink_no_high_credit(self) -> None:
-        # Earnings exactly at the kink → high_credit term is zero.
-        annual_e = PENSION_QTR_SSWB * 12
-        out = pension_annual_credit(annual_e)
-        # All credit comes from the low rate at the kink amount.
-        expected = PENSION_QTR_SSWB * PENSION_LOW_RATE * 12
-        assert out == pytest.approx(expected)
+        # Earnings exactly at the annual kink → only the low band fires.
+        annual_e = PENSION_QTR_SSWB
+        expected = PENSION_QTR_SSWB * PENSION_LOW_RATE
+        assert pension_annual_credit(annual_e) == pytest.approx(expected)
 
     def test_above_kink_blends_low_and_high(self) -> None:
-        # 2x the kink → half low, half high
-        monthly_kink = PENSION_QTR_SSWB
-        annual_e = monthly_kink * 2 * 12  # double the kink
-        low = monthly_kink * PENSION_LOW_RATE
-        high = monthly_kink * PENSION_HIGH_RATE
-        expected = (low + high) * 12
+        # 2x the annual kink → half at the low rate, half at the high rate.
+        annual_e = 2 * PENSION_QTR_SSWB
+        low = PENSION_QTR_SSWB * PENSION_LOW_RATE
+        high = PENSION_QTR_SSWB * PENSION_HIGH_RATE
+        expected = low + high
         assert pension_annual_credit(annual_e) == pytest.approx(expected)
+
+    def test_high_band_fires_at_typical_salary(self) -> None:
+        # Regression test for the v6.2 fix: a $200k annual salary should
+        # land MOSTLY in the high band, not entirely in the low band.
+        annual_e = 200_000.0
+        out = pension_annual_credit(annual_e)
+        assert out > 200_000.0 * PENSION_LOW_RATE, (
+            "$200k salary should produce a credit > the all-low-band "
+            "amount; otherwise the pre-v6.2 monthly-vs-annual bug has "
+            "regressed."
+        )
+        expected = (
+            PENSION_QTR_SSWB * PENSION_LOW_RATE
+            + (annual_e - PENSION_QTR_SSWB) * PENSION_HIGH_RATE
+        )
+        assert out == pytest.approx(expected)
+
+    def test_negative_earnings_treated_as_zero(self) -> None:
+        # Defensive: a stray negative salary doesn't produce a credit.
+        assert pension_annual_credit(-50_000.0) == 0.0
 
 
 class TestProjectPensionBalance:

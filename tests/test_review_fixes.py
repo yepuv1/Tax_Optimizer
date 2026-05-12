@@ -303,3 +303,220 @@ class TestPostCascadeIrmaaLookback:
         # With current-year AGI, this household is firmly into an IRMAA
         # tier — surcharge should be strictly positive.
         assert first_year["irmaa"] > 0.0
+
+
+# ===========================================================================
+# v6.2 — functional review fixes (F1/F2/F10 + B2 fixes)
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# F1 — pension_annual_credit annual-vs-monthly bug
+# ---------------------------------------------------------------------------
+
+class TestPensionCreditHighBandFires:
+    """Pre-v6.2 the high-rate band almost never fired for normal salaries
+    because the threshold (an *annual* dollar amount) was compared
+    against monthly earnings. The fix evaluates both legs in annual
+    dollars."""
+
+    def test_high_band_credit_exceeds_low_band_only(self) -> None:
+        from tax_optimizer.pension import (
+            PENSION_HIGH_RATE,
+            PENSION_LOW_RATE,
+            PENSION_QTR_SSWB,
+            pension_annual_credit,
+        )
+
+        # A salary 2x the kink should produce a *materially* larger
+        # credit than the all-low-band approximation. With low=6% /
+        # high=11%, 2× the kink gives 0.17× kink in credit vs 0.12×
+        # kink for all-low — ~42% uplift.
+        salary = 2 * PENSION_QTR_SSWB
+        credit = pension_annual_credit(salary)
+        all_low = salary * PENSION_LOW_RATE
+        assert credit > all_low * 1.3, (
+            f"Salary at 2× the kink produced credit ${credit:,.0f}; "
+            f"all-low-band would be ${all_low:,.0f}. With the high band "
+            f"working, the credit should be substantially larger."
+        )
+        # And the closed form should match.
+        expected = (
+            PENSION_QTR_SSWB * PENSION_LOW_RATE
+            + PENSION_QTR_SSWB * PENSION_HIGH_RATE
+        )
+        assert credit == pytest.approx(expected)
+
+
+# ---------------------------------------------------------------------------
+# F2 — deficit cascade ignores state income tax
+# ---------------------------------------------------------------------------
+
+class TestCascadeIncorporatesStateTax:
+    """The `_solve_pretax_for_net` / `_solve_taxable_for_net` helpers
+    used to gross up only for federal tax. Households in CA/MA/OR
+    came up 9-12% short on every cascade leg until v6.2."""
+
+    def test_pretax_solver_grosses_up_for_state_tax(self) -> None:
+        from tax_optimizer.tax.regimes import TCJA_EXTENDED
+        from tax_optimizer.withdrawals import _solve_pretax_for_net
+
+        regime = TCJA_EXTENDED
+        base_kwargs: dict = dict(
+            wages=0.0, interest=0.0, ordinary_div=0.0,
+            qualified_div=0.0, ltcg=0.0, pension=0.0,
+            pretax_withdrawal=0.0, roth_conversion=0.0,
+            social_security=0.0,
+        )
+
+        # Federal-only gross.
+        gross_fed_only = _solve_pretax_for_net(
+            100_000.0, base_kwargs,
+            regime=regime, filing_status="married_joint",
+        )
+
+        # Add a 10% flat state tax via the closure.
+        def flat_state_tax(kw: dict, ss_taxable: float) -> float:
+            return 0.10 * (
+                kw.get("pretax_withdrawal", 0.0)
+                + kw.get("wages", 0.0)
+                + kw.get("interest", 0.0)
+                + kw.get("ordinary_div", 0.0)
+                + kw.get("ltcg", 0.0)
+                + kw.get("roth_conversion", 0.0)
+            )
+
+        gross_with_state = _solve_pretax_for_net(
+            100_000.0, base_kwargs,
+            regime=regime, filing_status="married_joint",
+            state_tax_fn=flat_state_tax,
+        )
+
+        # The state-tax-aware solver should pull a *larger* gross to
+        # cover the additional 10% bite.
+        assert gross_with_state > gross_fed_only + 5_000.0, (
+            f"State-tax-aware gross (${gross_with_state:,.0f}) should "
+            f"meaningfully exceed federal-only gross "
+            f"(${gross_fed_only:,.0f}) when net target is $100k and "
+            f"state rate is 10%."
+        )
+
+    def test_cascade_in_high_state_tax_state_pulls_more(self) -> None:
+        """End-to-end: same scenario, CA vs NV. CA's cascade should
+        produce a larger sum of `extra` draws because the gross-up
+        accounts for state tax."""
+        from tax_optimizer.withdrawals import cover_deficit
+        from tax_optimizer.tax.regimes import TCJA_EXTENDED
+        from tax_optimizer.tax.state import CA, STATELESS, state_tax
+        from tax_optimizer.state import State
+
+        regime = TCJA_EXTENDED
+        base_kwargs: dict = dict(
+            wages=0.0, interest=0.0, ordinary_div=0.0,
+            qualified_div=0.0, ltcg=0.0, pension=0.0,
+            pretax_withdrawal=0.0, roth_conversion=0.0,
+            social_security=0.0,
+        )
+
+        st = State(
+            year=0, spouse_a_age=70, spouse_b_age=70,
+            spouse_a_pretax=500_000.0, spouse_b_pretax=500_000.0,
+            roth=0.0, taxable=0.0, hsa=0.0, pension_balance=0.0,
+        )
+
+        def make_state_tax_fn(state_regime):
+            def fn(kw: dict, ss_taxable: float) -> float:
+                return state_tax(
+                    regime=state_regime,
+                    filing_status="married_joint",
+                    wages_box1=kw.get("wages", 0.0),
+                    interest=kw.get("interest", 0.0),
+                    ordinary_div=kw.get("ordinary_div", 0.0),
+                    qualified_div=kw.get("qualified_div", 0.0),
+                    ltcg=kw.get("ltcg", 0.0),
+                    pension=kw.get("pension", 0.0),
+                    pretax_withdrawal=kw.get("pretax_withdrawal", 0.0),
+                    roth_conversion=kw.get("roth_conversion", 0.0),
+                    social_security=kw.get("social_security", 0.0),
+                    ss_taxable_federal=ss_taxable,
+                    hsa_contrib=0.0,
+                    age_a=70, age_b=70, alive_a=True, alive_b=True,
+                )["state_tax"]
+            return fn
+
+        extra_nv, _ = cover_deficit(
+            deficit=100_000.0, state=st, base_kwargs=base_kwargs,
+            basis_frac=1.0, regime=regime, filing_status="married_joint",
+            state_tax_fn=make_state_tax_fn(STATELESS),
+        )
+        extra_ca, _ = cover_deficit(
+            deficit=100_000.0, state=st, base_kwargs=base_kwargs,
+            basis_frac=1.0, regime=regime, filing_status="married_joint",
+            state_tax_fn=make_state_tax_fn(CA),
+        )
+        # CA total gross should exceed NV total gross because the
+        # solver had to cover an additional ~9% state-tax bite.
+        nv_total = extra_nv["pretax"]
+        ca_total = extra_ca["pretax"]
+        assert ca_total > nv_total + 3_000.0, (
+            f"CA cascade ${ca_total:,.0f} should exceed NV "
+            f"${nv_total:,.0f} by enough to cover ~9% CA tax on a "
+            f"$100k net target."
+        )
+
+
+# ---------------------------------------------------------------------------
+# F10 — pension annuity initialization with `>= start_age`
+# ---------------------------------------------------------------------------
+
+class TestPensionAnnuityInitWhenAlreadyAtNRD:
+    """If simulation starts at-or-past pension NRD, the annuity must
+    still initialize on year 0. Pre-v6.2 the strict `==` check left
+    `state.pension_annuity` at 0 forever."""
+
+    def test_simulation_starting_at_nrd_pays_pension(self) -> None:
+        from tax_optimizer.inputs import PensionInputs
+
+        cfg = Config(
+            horizon_age=70,
+            nominal_growth_rate=0.0,
+            taxable_equity_div_yield=0.0,
+            taxable_bond_interest_yield=0.0,
+            taxable_drag=0.0,
+            inflation=0.0,
+            spending=SpendingProfile.flat(base_spending=80_000.0, inflation=0.0),
+            annual_expenses_today=80_000.0,
+            aca_enabled=False,
+            mortality=Mortality(),
+        )
+        inputs = Inputs(
+            spouse_a_age_start=66,
+            spouse_b_age_start=66,
+            spouse_a_retire_age=66,
+            spouse_b_retire_age=66,
+            starting=StartingBalances(
+                spouse_a_pretax_401k=100_000.0,
+                spouse_b_pretax_401k=100_000.0,
+                spouse_a_roth_ira=0.0,
+                spouse_b_roth_ira=0.0,
+                taxable_brokerage=500_000.0,
+                hsa=0.0,
+            ),
+            income=CurrentIncome(),
+            ss=SocialSecurity(monthly_spouse_a=0.0, monthly_spouse_b=0.0, start_age=67),
+            # NRD (65) is BEFORE the simulation start age (66) — pre-v6.2
+            # the `a_age == start_age` check left the pension dormant.
+            pension=PensionInputs(
+                start_age=65,
+                monthly_at_nrd=2_000.0,
+                balance_today=400_000.0,
+            ),
+        )
+        df = simulate(cfg, inputs)
+        first_year_pension = df.iloc[0]["pension"]
+        assert first_year_pension > 20_000.0, (
+            f"Year-0 pension was ${first_year_pension:,.0f}; expected "
+            f"~$24k (12 × $2k monthly) since spouse A is at NRD when "
+            f"the simulation begins. The pre-v6.2 strict-equality "
+            f"check on `a_age == start_age` skipped the initialization."
+        )

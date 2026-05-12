@@ -351,8 +351,24 @@ def simulate(
         )
         fica_total = fica_combined["total"]
 
-        if a_age == inputs.pension.start_age and state.pension_annuity == 0.0 and alive_a:
+        # Initialize the pension annuity the first time we see spouse A
+        # at-or-above NRD. The guard used to be a strict `==`, which
+        # silently dropped the pension for households whose simulation
+        # starts *at* or *past* NRD (already-retired-with-pension
+        # scenarios — `state.pension_annuity` stayed 0 forever).
+        if (
+            a_age >= inputs.pension.start_age
+            and state.pension_annuity == 0.0
+            and alive_a
+            and inputs.pension.annual_at_nrd > 0
+        ):
             scale = state.pension_balance / max(test_balance, 1.0)
+            # If the simulation starts at-or-after NRD, the cash-balance
+            # accumulator hasn't run any credit years, so `scale` may be
+            # near zero. Honor the user's `monthly_at_nrd` input as the
+            # baseline by flooring the scale at 1.0 in that case.
+            if a_age >= inputs.pension.start_age and state.pension_balance == 0.0:
+                scale = 1.0
             state.pension_annuity = inputs.pension.annual_at_nrd * scale
         # Surviving spouse pension election applied if A has died.
         if a_age >= inputs.pension.start_age and alive_a:
@@ -537,6 +553,42 @@ def simulate(
             if state.taxable > 0 else 1.0
         )
 
+        # State-tax-aware solver closure (F2). Without this, the gross-up
+        # in `_solve_pretax_for_net` / `_solve_taxable_for_net` only
+        # covers federal tax, so high-state-tax households (CA/MA/OR)
+        # came up ~9-12% short on every cascade leg and quietly carried
+        # the gap as "unfunded" or post-hoc rebalanced. Closure captures
+        # this year's state regime / ages / HSA-contrib so the solver
+        # can compute marginal state tax incrementally.
+        _state_regime_local = state_regime
+        _filing_local = filing_status
+        _hsa_contrib_local = hsa_contrib
+        _age_a_local = a_age
+        _age_b_local = b_age
+        _alive_a_local = alive_a
+        _alive_b_local = alive_b
+
+        def _state_tax_fn(kw: dict, ss_taxable_federal: float) -> float:
+            return state_tax(
+                regime=_state_regime_local,
+                filing_status=_filing_local,
+                wages_box1=kw.get("wages", 0.0),
+                interest=kw.get("interest", 0.0),
+                ordinary_div=kw.get("ordinary_div", 0.0),
+                qualified_div=kw.get("qualified_div", 0.0),
+                ltcg=kw.get("ltcg", 0.0),
+                pension=kw.get("pension", 0.0),
+                pretax_withdrawal=kw.get("pretax_withdrawal", 0.0),
+                roth_conversion=kw.get("roth_conversion", 0.0),
+                social_security=kw.get("social_security", 0.0),
+                ss_taxable_federal=ss_taxable_federal,
+                hsa_contrib=_hsa_contrib_local,
+                age_a=_age_a_local,
+                age_b=_age_b_local,
+                alive_a=_alive_a_local,
+                alive_b=_alive_b_local,
+            )["state_tax"]
+
         if a_working or b_working:
             withdraws = {
                 "pretax_a": a_rmd,
@@ -550,6 +602,7 @@ def simulate(
                 net_need, state, cfg, base_kwargs, a_rmd, b_rmd,
                 cfg.withdrawal_strategy, current_basis_frac,
                 regime=regime, filing_status=filing_status,
+                state_tax_fn=_state_tax_fn,
             )
 
         # ---- Final tax kwargs ----
@@ -753,6 +806,7 @@ def simulate(
                 hsa_unlocked=hsa_unlocked,
                 regime=regime,
                 filing_status=filing_status,
+                state_tax_fn=_state_tax_fn,
             )
             if extra["taxable"] > 0:
                 state.taxable = max(0.0, state.taxable - extra["taxable"])
