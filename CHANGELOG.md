@@ -32,6 +32,36 @@ Categories used:
 
 ## [Unreleased]
 
+### Added — Scenario template + drift tests
+
+- **New `scenarios/template.json`** — canonical reference listing every
+  available `Config` / `Inputs` knob (and every field of the nested
+  `StartingBalances` / `CurrentIncome` / `CurrentContrib` /
+  `PensionInputs` / `SocialSecurity` / `Mortality` dataclasses) with
+  its default value. Copy as the starting point for a new scenario.
+  Includes the polymorphic `market` (lognormal) and `spending` (smile)
+  shapes populated with defaults, plus the per-bucket `asset_location`
+  form.
+- **New `scenarios/README.md`** — documents the directory's purpose,
+  the maintenance contract for new knobs, all polymorphic block
+  shapes (`market.kind`, `spending.kind`), and helpful CLI patterns.
+- **New `tests/test_scenario_template.py`** — 24 drift tests that
+  fail loudly when a dataclass field is added without also being
+  mirrored into `template.json`. Covers:
+  - structural sanity (file exists, valid JSON, parses through
+    `apply_scenario` without `ScenarioError`);
+  - field-coverage drift (`Config`, `Inputs`, each nested input
+    block, `Mortality`) with informative failure messages;
+  - default-value drift (every value in the template equals the
+    dataclass default);
+  - end-to-end smoke (template loads via the path API and simulates
+    cleanly).
+
+  Maintenance contract is documented in the test docstring and the
+  scenarios README — when you add a knob, also add it to
+  `template.json` (and to `example01.json` / `example02.json` if the
+  knob matters for those narrative scenarios).
+
 ### Fixed — v6.5 Roth-conversion liquidity guards
 
 - **HIGH — Roth conversion now sized by tax-paying capacity, not just

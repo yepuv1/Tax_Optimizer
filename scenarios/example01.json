@@ -16,6 +16,10 @@
     "roth_conversion_target_bracket": 0.0,
     "roth_conversion_amount": 0.0,
 
+    "cap_conversion_by_liquidity": true,
+    "conversion_taxable_use_ratio": 0.5,
+    "protect_roth_in_conversion_years": true,
+
     "rmd_start_age": 75,
 
     "cap_gains_basis_fraction": 0.5,
@@ -25,6 +29,7 @@
 
     "taxable_equity_div_yield": 0.016,
     "taxable_bond_interest_yield": 0.035,
+    "taxable_equity_qualified_fraction": 0.85,
 
     "tax_regime": "tcja",
     "regime_change_year_offset": 5,

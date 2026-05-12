@@ -355,6 +355,14 @@ See `scenarios/example01.json` (and `example02.json`) for full-featured
 examples, and run `--print-defaults` against any scenario to see the
 resolved values.
 
+**Starting from scratch?** Copy `scenarios/template.json` — it lists
+every available knob with its default value, and the
+`scenarios/README.md` file in the same directory documents the
+polymorphic options for `market` / `spending` / `state_regime` /
+`tax_regime` / `asset_location`. The template is enforced in sync
+with the dataclass surface by `tests/test_scenario_template.py`, so
+new knobs always make it into the reference file.
+
 ##### Allowed values for enum-style fields
 
 Anywhere a string name appears below, it is case-insensitive.
