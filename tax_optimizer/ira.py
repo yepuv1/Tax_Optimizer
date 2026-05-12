@@ -102,11 +102,22 @@ def allocate_ira_contributions(
 
     backdoor = remaining if backdoor_enabled else 0.0
 
-    # Pro-rata rule: the converted backdoor amount is taxable in
-    # proportion to how much of the spouse's pretax IRA basis is
-    # already "all earnings, no basis" (i.e. existing pretax). With
-    # zero existing pretax (the clean-backdoor case) the conversion
-    # is fully tax-free.
+    # Pro-rata rule (IRC §408(d)(2)): the converted backdoor amount
+    # is taxable in proportion to how much of the spouse's pretax IRA
+    # basis is already "all earnings, no basis" (i.e. existing
+    # pretax). With zero existing pretax (the clean-backdoor case)
+    # the conversion is fully tax-free.
+    #
+    # Modeling scope (F14): we treat *all* of `pretax_existing` as
+    # zero-basis (pre-tax) and *all* of the freshly-contributed
+    # nondeductible amount as basis. In real life a spouse may have
+    # pre-existing **after-tax basis** in their Traditional IRA
+    # (from prior nondeductible contributions filed on Form 8606),
+    # which would *reduce* the taxable conversion fraction. We don't
+    # track that historical basis. For typical users the pretax IRA
+    # is dominated by pre-tax 401(k) rollovers, so this simplification
+    # leans conservative (slightly overstates the backdoor tax cost
+    # when historical 8606 basis exists).
     backdoor_taxable = 0.0
     if backdoor > 0 and pretax_existing > 0:
         taxable_fraction = pretax_existing / (pretax_existing + backdoor)

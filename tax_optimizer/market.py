@@ -117,6 +117,19 @@ class DeterministicModel:
 class LognormalModel:
     """Independent yearly draws from a bivariate normal.
 
+    The class name "Lognormal" is a misnomer kept for backward compat
+    with older scenarios — `begin_path` actually samples **arithmetic
+    annual returns** from `Normal(mu, sigma)`, NOT log-returns from
+    a true lognormal. That means draws are theoretically unbounded
+    below (returns can be < -100%, which the simulator clips
+    implicitly via account-balance floors). For 30y/balanced
+    portfolios the practical difference vs a true lognormal is
+    small (<1% in terminal percentiles), but for highly leveraged or
+    short-horizon analyses use `BootstrapModel` /
+    `HistoricalSequenceModel` instead — both sample from empirical
+    returns and are bounded by definition. See README "What's not
+    modeled (yet)" for details.
+
     Defaults loosely match 1928-2023 trailing US data:
       equity_mu = 9.6%, equity_sigma = 19.5%   (~S&P 500 total return)
       bond_mu   = 4.6%, bond_sigma   = 7.7%   (10y Treasury total return)

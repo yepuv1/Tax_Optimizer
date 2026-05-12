@@ -32,6 +32,25 @@ Categories used:
 
 ## [Unreleased]
 
+### Docs — v6.2 functional review (batch 4: modeling-scope clarifications)
+
+- **`pension.py` module docstring** now explicitly calls out the
+  single-spouse-A modeling limitation (F11) and the recommended
+  combined-monthly-at-NRD workaround for dual-pension households.
+- **`ira.allocate_ira_contributions` pro-rata comment** now
+  documents that pre-existing Form-8606 (nondeductible Traditional)
+  basis is NOT tracked (F14), and that the simplification is
+  conservative (overstates backdoor-conversion tax).
+- **`LognormalModel` docstring** explicitly notes the name is a
+  misnomer for backward compat (F17) — the class actually samples
+  arithmetic-return draws from a bivariate normal, not log-returns
+  from a true lognormal. Pointers to `BootstrapModel` /
+  `HistoricalSequenceModel` for bounded-return analyses.
+- **README "What's not modeled (yet)"** expanded to include four
+  newly-documented scope items: the Roth 5-year clock (F15), Form-
+  8606 nondeductible IRA basis (F14), dual cash-balance pensions
+  (F11), and arithmetic-vs-true-lognormal return draws (F17).
+
 ### Fixed — v6.2 functional review (batch 3: defensive / API)
 
 - **LOW — `BootstrapModel` rejects invalid construction inputs at

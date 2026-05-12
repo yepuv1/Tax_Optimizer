@@ -597,6 +597,35 @@ Federal bracket numbers, IRS Uniform Lifetime divisors, pension-formula coeffici
 - Inherited IRA / 10-year-rule intra-period drawdown timing.
 - Multi-asset-class market models (TIPS / international / REIT as
   separate buckets).
+- **Roth 5-year clock** on conversions: Roth withdrawals are
+  modeled as fully tax-free. In real life, *converted* Roth dollars
+  must season for 5 years before they can be withdrawn penalty-free
+  if the account holder is under 59½, and the first contribution
+  itself must be 5+ years old before the Roth account satisfies the
+  qualified-distribution rule. For optimizer users **already 59½ or
+  older with an existing Roth >5 years old**, this is a no-op. For
+  optimizer users pre-59½ who plan to spend a recent conversion
+  early, the simulator's tax-free Roth treatment will overstate
+  their plan's net by the avoided 10% penalty. Workaround: ear-mark
+  pre-59½ liquidity as taxable / HSA spending instead of Roth.
+- **Pre-existing nondeductible IRA basis (Form 8606)**: backdoor-
+  Roth pro-rata math treats *all* existing pretax-IRA dollars as
+  zero-basis. If you have historical 8606 basis from prior
+  nondeductible Traditional contributions, your real backdoor tax
+  bill will be lower than the model's estimate. Conservative bias.
+- **Dual cash-balance pensions**: the `PensionInputs` / projector /
+  simulator pension column track spouse A only. Households where
+  both spouses have cash-balance pensions should enter the *combined*
+  monthly-at-NRD as a single spouse-A figure; the SS-taxability and
+  state-pension-exclusion paths key off spouse A's age.
+- **Arithmetic-vs-true-lognormal return draws**: `LognormalModel`
+  samples returns from a `Normal(mu, sigma)` distribution (returns
+  unbounded below). Real-world annual returns are bounded by -100%
+  and have fat left tails. For 30y/50% equity portfolios the
+  difference is small (<1% in terminal-NW percentiles); for highly
+  leveraged or short-horizon analyses it can matter. Workaround:
+  use `BootstrapModel` or `HistoricalSequenceModel` which sample
+  empirical returns and are bounded by definition.
 
 ## Acronyms
 

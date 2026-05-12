@@ -8,9 +8,18 @@ annuity scaled by realized vs expected balance.
 The kink (`PENSION_QTR_SSWB`) is anchored to the 2025 SS wage base
 ($184,500). In real life this base indexes with average annual
 wages (NAWI), so for multi-decade projections we should grow it
-along with assumed wage growth. `pension_annual_credit_at_year`
-exposes that path — call it with the offset from 2025 and your
-wage-growth assumption to keep the kink real-dollar-equivalent.
+along with assumed wage growth. `project_pension_balance` does this
+automatically by scaling `qtr_sswb` by `wage_growth` each year.
+
+Modeling scope (F11): the projector and the simulator's pension
+column track **spouse A only**. Multi-pension households (both
+spouses with cash-balance plans) are not modeled. The recommended
+workaround is to enter the *combined* monthly-at-NRD as a single
+spouse-A pension and accept the SS-taxability / state-pension-
+exclusion code paths will key off spouse A's age (which is correct
+when both spouses' pensions are aligned). True dual-pension support
+would require duplicating `PensionInputs` per-spouse, the
+projector, and the simulator's annuity-start / -death logic.
 """
 
 from __future__ import annotations
