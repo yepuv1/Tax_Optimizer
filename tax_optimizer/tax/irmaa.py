@@ -1,8 +1,13 @@
 """IRMAA Medicare-premium-surcharge engine.
 
-Lookback note: real IRMAA uses MAGI from 2 years prior. We approximate
-with current-year AGI to keep the simulator tractable; the error is small
-unless income changes sharply between consecutive years.
+The simulator drives this function with the right lookback AGI (typically
+MAGI from 2 years prior, per the SSA rule) via ``cfg.irmaa_lookback_years``
+(default 2). Pass any precomputed MAGI you like — this module just looks
+up the right tier and dollar amounts; it does NOT compute the lookback.
+
+Hold-harmless (Part B premium freeze for current beneficiaries when SS
+COLA is small) is not modeled; the population that hits IRMAA is well
+above the hold-harmless income line, so the error is negligible.
 """
 
 from __future__ import annotations

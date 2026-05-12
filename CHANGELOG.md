@@ -32,6 +32,82 @@ Categories used:
 
 ## [Unreleased]
 
+### Fixed — v6.4 Tax-module correctness sweep
+
+- **HIGH — Age-65+ additional standard deduction is now modeled**
+  ([`tax_optimizer/tax/regimes.py`](tax_optimizer/tax/regimes.py),
+  [`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)). The
+  base TCJA-extended std deduction ($32,200 MFJ) is now augmented
+  per §63(f): +$1,600/spouse 65+ for MFJ, +$2,000/filer 65+ for
+  single. The 2025 OBBBA "senior bonus" of +$6,000/filer 65+ also
+  layers on for tax years 2025–2028. Pre-fix, retirees lost up to
+  $15,200/yr of deduction headroom, which over-stated federal tax
+  and under-stated Roth-conversion bracket-fill room every
+  retirement year. `TaxRegime.effective_std_deduction()` is the
+  new public helper.
+- **MEDIUM — NY retirement-income exclusion is now per-spouse, not
+  pool-wide** ([`tax_optimizer/tax/state.py`](tax_optimizer/tax/state.py),
+  [`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)). NY's
+  §612(c)(3-a) grants each filer 59½+ a $20k exclusion against
+  their *own* pension / IRA / Roth-conv distributions. Pre-fix the
+  model pooled distributions and applied the combined cap, which
+  over-excluded by up to $20k in any year with lopsided spouse
+  distributions (e.g. only spouse A drawing from pretax). The
+  simulator now threads `pension_per_spouse` / `pretax_per_spouse`
+  / `roth_conv_per_spouse` tuples into `state_tax`.
+- **MEDIUM — Portfolio dividends split into qualified vs ordinary**
+  ([`tax_optimizer/config.py`](tax_optimizer/config.py),
+  [`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)). New
+  knob `cfg.taxable_equity_qualified_fraction` (default 0.85)
+  routes the non-qualified slice through `ordinary_div` so it's
+  taxed at ordinary rates per IRS §1(h). Pre-fix every portfolio
+  dividend was treated as qualified, under-stating tax by ~10 bp
+  of dividend yield on the ordinary-rate slice. Two new row
+  columns (`qualified_dividends`, `ordinary_dividends`) for reports.
+- **MEDIUM — AMT (Alternative Minimum Tax, §55) is now computed
+  in parallel** ([`tax_optimizer/tax/regimes.py`](tax_optimizer/tax/regimes.py),
+  [`tax_optimizer/tax/federal.py`](tax_optimizer/tax/federal.py)).
+  Adds `amt_exemption_*`, `amt_phaseout_*`, `amt_28pct_threshold_*`,
+  `amt_std_deduction_addback` to `TaxRegime`. AMT is effectively
+  dormant under TCJA-extended (high $137k MFJ exemption, $1.25M
+  phaseout) but can bite under SUNSET (pre-TCJA mechanics: lower
+  exemption + std-deduction add-back) during large Roth-conversion
+  years. `federal_tax` returns `amt` / `amti` / `tmt` for the
+  reports. LTCG/QDIV preserve their preferential rates inside AMT.
+- **MEDIUM — CA SDI (State Disability Insurance) modeled in payroll**
+  ([`tax_optimizer/payroll.py`](tax_optimizer/payroll.py),
+  [`tax_optimizer/tax/state.py`](tax_optimizer/tax/state.py),
+  [`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)). CA's
+  1.1% rate is **uncapped** since SB 951 (2024). New `state_sdi()`
+  helper + `StateTaxRegime.sdi_rate` / `sdi_wage_cap` fields. CA
+  presets get `sdi_rate=0.011, sdi_wage_cap=math.inf`; other
+  bundled states default to 0. Subtracted from cash inflow during
+  working years (cash-flow cost only — not a federal/state
+  taxable-income reducer).
+- **LOW — `_marginal_rate` boundary semantics**
+  ([`tax_optimizer/tax/federal.py`](tax_optimizer/tax/federal.py)).
+  Changed inner comparison from `>` to `>=` so the function reports
+  the higher bracket's rate at exact bracket boundaries (where the
+  next dollar actually goes). In practice rarely matters (real
+  taxable income doesn't land on cents), but was a latent
+  bracket-fill-conversion edge case.
+- **LOW — Stale IRMAA docstring updated**
+  ([`tax_optimizer/tax/irmaa.py`](tax_optimizer/tax/irmaa.py)). The
+  old doc claimed "we approximate with current-year AGI"; in
+  practice the simulator threads a proper 2-year-lookback MAGI
+  (default `cfg.irmaa_lookback_years = 2`).
+
+### Tests — v6.4
+
+- **`tests/test_tax_v64.py`**: 26 new regression tests covering all
+  v6.4 fixes — senior std deduction (OBBBA window + post-window
+  expiry), `_marginal_rate` boundary, dividend qualified/ordinary
+  split, NY per-spouse exclusion (lopsided vs balanced
+  distributions, back-compat for pool callers), AMT (TCJA-extended
+  dormant, SUNSET firing on large conversions, regime-disabled
+  short-circuit, std-deduction add-back), and CA SDI per-spouse +
+  cash-flow impact.
+
 ### Fixed — v6.3 BP RAP fidelity follow-ups (retire_age + bonus eligibility)
 
 - **HIGH — Annual incentive payments (bonus) now count as eligible

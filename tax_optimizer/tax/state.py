@@ -93,6 +93,14 @@ class StateTaxRegime:
     # Default `True` ⇒ HSA contribs reduce state taxable income too.
     hsa_deductible: bool = True
 
+    # State Disability Insurance (SDI / VPDI). Employee withholding;
+    # cash-flow cost only, doesn't affect state taxable income.
+    # CA: 1.1% uncapped (SB 951 removed the wage cap effective 2024).
+    # Other bundled states have no meaningful SDI. Set ``sdi_rate=0``
+    # to disable (default).
+    sdi_rate: float = 0.0
+    sdi_wage_cap: float = math.inf
+
     def ord_brackets(self, filing_status: str) -> Sequence[Bracket]:
         return (
             self.ord_brackets_mfj
@@ -181,6 +189,14 @@ def state_tax(
     age_b: int = 0,
     alive_a: bool = True,
     alive_b: bool = True,
+    # Optional per-spouse distribution breakdowns. When provided, the
+    # NY-style "per-filer" retirement exclusion is applied against each
+    # spouse's OWN distributions (the correct §612(c)(3-a) treatment)
+    # instead of being pooled. When omitted, falls back to the
+    # combined-pool approximation for back-compat.
+    pension_per_spouse: tuple[float, float] | None = None,
+    pretax_per_spouse: tuple[float, float] | None = None,
+    roth_conv_per_spouse: tuple[float, float] | None = None,
 ) -> dict:
     """Compute state income tax for one year.
 
@@ -199,7 +215,10 @@ def state_tax(
         the federal `ss_taxable` figure by `regime.ss_taxable_fraction`
         and rebate the rest from ordinary income.
       * **Retirement exclusion.** IL fully exempts pension + IRA +
-        Roth conversion + SS. NY exempts $20k per filer at 59½+.
+        Roth conversion + SS. NY exempts $20k per filer at 59½+ —
+        applied per-spouse against each spouse's own distributions
+        when ``pension_per_spouse`` / ``pretax_per_spouse`` /
+        ``roth_conv_per_spouse`` are provided.
       * **LTCG.** Most states tax LTCG as ordinary; if the regime
         provides explicit LTCG brackets, we honor them.
     """
@@ -225,19 +244,35 @@ def state_tax(
             pension + pretax_withdrawal + roth_conversion + state_ss_taxable
         )
     elif regime.retirement_exclusion_per_filer > 0:
-        # NY-style: $X per spouse at age min_age+, applied across
-        # pension + IRA + Roth-conv (NOT SS). Surviving spouses are
-        # 1 filer; both alive = 2 filers.
+        # NY-style: $X per spouse at age min_age+, applied per-spouse
+        # against each spouse's own pension + IRA + Roth-conv (NOT SS).
+        # Per §612(c)(3-a): the exclusion is granted to each filer
+        # against their own distributions — a spouse with $0 of
+        # qualifying distributions cannot pass their unused $20k to
+        # the higher-earner spouse.
+        #
+        # When per-spouse breakdowns are supplied, apply the cap
+        # per-recipient and sum. When omitted, fall back to the
+        # combined-pool approximation (used by older callers / tests).
         per = regime.retirement_exclusion_per_filer
-        n_filers = 0
-        if alive_a and age_a >= regime.retirement_exclusion_min_age:
-            n_filers += 1
-        if alive_b and age_b >= regime.retirement_exclusion_min_age:
-            n_filers += 1
-        max_excl = per * n_filers
-        # Apply to combined pension + pretax + roth-conv pool.
-        retirement_pool = pension + pretax_withdrawal + roth_conversion
-        retirement_excluded = min(max_excl, retirement_pool)
+        a_eligible = alive_a and age_a >= regime.retirement_exclusion_min_age
+        b_eligible = alive_b and age_b >= regime.retirement_exclusion_min_age
+        if (
+            pension_per_spouse is not None
+            or pretax_per_spouse is not None
+            or roth_conv_per_spouse is not None
+        ):
+            pa, pb = pension_per_spouse or (0.0, 0.0)
+            wa, wb = pretax_per_spouse or (0.0, 0.0)
+            ra, rb = roth_conv_per_spouse or (0.0, 0.0)
+            a_pool = pa + wa + ra if a_eligible else 0.0
+            b_pool = pb + wb + rb if b_eligible else 0.0
+            retirement_excluded = min(per, a_pool) + min(per, b_pool)
+        else:
+            n_filers = int(a_eligible) + int(b_eligible)
+            max_excl = per * n_filers
+            retirement_pool = pension + pretax_withdrawal + roth_conversion
+            retirement_excluded = min(max_excl, retirement_pool)
     else:
         retirement_excluded = 0.0
 
@@ -351,6 +386,9 @@ CA: StateTaxRegime = StateTaxRegime(
     # CA does NOT conform to federal HSA — HSA contribs aren't
     # deductible at the state level.
     hsa_deductible=False,
+    # CA SDI: 1.1% of all wages, uncapped since 2024 (SB 951).
+    sdi_rate=0.011,
+    sdi_wage_cap=math.inf,
 )
 
 

@@ -1,4 +1,4 @@
-"""Employee-side payroll tax (FICA) on W-2 wages.
+"""Employee-side payroll tax: FICA + state-level disability (CA SDI).
 
 FICA is computed on **gross** W-2 wages (Box 3, "Social Security wages"),
 which means it's NOT reduced by traditional 401(k) elective deferrals.
@@ -10,6 +10,12 @@ the contribution amount in real life.
 
 FICA is purely a cash-flow cost. It does NOT affect federal income tax
 (it's collected separately) and is NOT a Box-1 wage reducer.
+
+State SDI / VPDI (e.g. California's 1.1% State Disability Insurance,
+uncapped since 2024 per SB 951) is wired through ``state_sdi()`` and
+parameterized on the bundled ``StateTaxRegime`` (so non-CA states with
+zero or trivial SDI silently drop out). Like FICA, SDI is a cash-flow
+deduction — it doesn't change federal/state income tax brackets.
 
 Three components:
     OASDI       : 6.2% to a per-individual wage base ($176,100 in 2026,
@@ -35,6 +41,8 @@ practice), set `wage_base` directly when calling `fica_employee`.
 """
 
 from __future__ import annotations
+
+import math
 
 OASDI_WAGE_BASE_2026: float = 176_100.0
 OASDI_RATE: float = 0.062
@@ -116,3 +124,21 @@ def fica_household(
         "additional_medicare": addl_household,
         "total": oasdi + medicare + addl_household,
     }
+
+
+def state_sdi(
+    wages: float,
+    *,
+    rate: float = 0.0,
+    wage_cap: float = math.inf,
+) -> float:
+    """Per-W-2 state-level disability insurance withholding (e.g. CA SDI).
+
+    Stateless regimes / states with zero SDI return 0.0. California's
+    1.1% rate is uncapped since 2024 (SB 951 removed the SDI taxable
+    wage cap). Pass the per-spouse W-2 wages.
+    """
+    if wages <= 0 or rate <= 0:
+        return 0.0
+    base = wages if not math.isfinite(wage_cap) else min(wages, wage_cap)
+    return base * rate

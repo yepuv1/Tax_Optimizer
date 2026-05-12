@@ -13,6 +13,8 @@ Compared to the v1 simulator, this one threads:
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -21,7 +23,7 @@ from .conversion import planned_roth_conversion
 from .inputs import Inputs, claim_age_factor
 from .ira import allocate_ira_contributions
 from .limits import SECTION_415C_LIMIT, elective_deferral_cap, hsa_family_cap
-from .payroll import OASDI_WAGE_BASE_2026, fica_household
+from .payroll import OASDI_WAGE_BASE_2026, fica_household, state_sdi
 from .pension import (
     PENSION_INTEREST,
     PENSION_QTR_SSWB,
@@ -364,6 +366,23 @@ def simulate(
         )
         fica_total = fica_combined["total"]
 
+        # State disability insurance (CA SDI / NJ TDI / etc.). Per-spouse
+        # rate × wages, indexed to the active state regime. Inflation-
+        # indexed wage cap matches FICA's so CA's uncapped rule stays
+        # truly uncapped over the horizon.
+        sdi_wage_cap_y = (
+            state_regime.sdi_wage_cap
+            if not math.isfinite(state_regime.sdi_wage_cap)
+            else state_regime.sdi_wage_cap * (1 + cfg.inflation) ** year_offset
+        )
+        sdi_a = state_sdi(
+            a_w2_wages, rate=state_regime.sdi_rate, wage_cap=sdi_wage_cap_y
+        )
+        sdi_b = state_sdi(
+            b_w2_wages, rate=state_regime.sdi_rate, wage_cap=sdi_wage_cap_y
+        )
+        sdi_total = sdi_a + sdi_b
+
         # Initialize the pension annuity the first time we see spouse A
         # at-or-above NRD. The guard used to be a strict `==`, which
         # silently dropped the pension for households whose simulation
@@ -472,20 +491,46 @@ def simulate(
         # income / NIIT / IRMAA actually track post-retirement reality.
         taxable_eq_balance = max(0.0, state.taxable) * asset_loc.taxable.equity_pct
         taxable_bd_balance = max(0.0, state.taxable) * asset_loc.taxable.bond_pct
-        portfolio_qdiv = taxable_eq_balance * cfg.taxable_equity_div_yield
+        portfolio_div_total = taxable_eq_balance * cfg.taxable_equity_div_yield
+        # Split equity dividends into qualified (LTCG-rate) vs
+        # non-qualified (ordinary-rate) per `cfg.taxable_equity_qualified_fraction`.
+        # Defaults to 0.85 — closer to broad-market reality than
+        # treating 100% as qualified.
+        qfrac = min(1.0, max(0.0, cfg.taxable_equity_qualified_fraction))
+        portfolio_qdiv = portfolio_div_total * qfrac
+        portfolio_ord_div = portfolio_div_total * (1.0 - qfrac)
         portfolio_interest = taxable_bd_balance * cfg.taxable_bond_interest_yield
 
         interest_inc = extra_interest + portfolio_interest
         qdiv_inc = extra_qdiv + portfolio_qdiv
+        ord_div_inc = portfolio_ord_div
         ltcg_inc = extra_ltcg
+
+        # Age-aware effective standard deduction. Includes the §63(f)
+        # 65+ add-on per eligible spouse plus the 2025 OBBBA senior
+        # bonus during its 2025–2028 window. We compute it once per year
+        # and inject into `base_kwargs` so every downstream `federal_tax`
+        # call (cascade solvers, conversion sizer, post-cascade recompute)
+        # automatically uses the correct figure — no separate threading.
+        n_seniors_65plus = int(alive_a and a_age >= 65) + int(
+            alive_b and b_age >= 65
+        )
+        calendar_year_y = cfg.start_year + year_offset
+        deduction_y = regime.effective_std_deduction(
+            filing_status,
+            n_seniors_65plus=n_seniors_65plus,
+            calendar_year=calendar_year_y,
+        )
 
         base_kwargs = dict(
             wages=wages_box1,
             interest=interest_inc,
+            ordinary_div=ord_div_inc,
             qualified_div=qdiv_inc,
             ltcg=ltcg_inc,
             pension=pension_income,
             social_security=ssn_income,
+            deduction=deduction_y,
         )
         # Backdoor's taxable conversion (the pro-rata-taxable portion
         # of the same-year Roth conversion) lands as ordinary income.
@@ -653,6 +698,15 @@ def simulate(
         tax_result = federal_tax(regime=regime, filing_status=filing_status, **final_kwargs)
         federal = tax_result["tax"]
 
+        # ---- Per-spouse distribution breakdowns ----
+        # For NY-style per-filer retirement exclusion we need to know
+        # which spouse's pretax / Roth-conv income to apply the cap
+        # against. In our model the pension belongs to spouse A; pretax
+        # withdrawals and conversions are already tracked per-spouse.
+        pension_split = (pension_income, 0.0)
+        pretax_split = (withdraws["pretax_a"], withdraws["pretax_b"])
+        roth_split = (conv_a, conv_b)
+
         # ---- State income tax ----
         # Computed on the same income line as federal; differences are
         # handled inside `state_tax` (HSA add-back for CA, retirement
@@ -675,6 +729,9 @@ def simulate(
             age_b=b_age,
             alive_a=alive_a,
             alive_b=alive_b,
+            pension_per_spouse=pension_split,
+            pretax_per_spouse=pretax_split,
+            roth_conv_per_spouse=roth_split,
         )
         state_income_tax = state_result["state_tax"]
 
@@ -784,14 +841,15 @@ def simulate(
         # market returns, so they are *not* added to cash_inflow even
         # though they hit the tax line).
         if a_working or b_working:
-            # Working years: subtract employee-side FICA. FICA is NOT
-            # included in `federal` (it's a separate withholding line),
-            # so we deduct it explicitly from cash inflow here.
+            # Working years: subtract employee-side FICA and state SDI.
+            # Both are withholdings that don't show up in federal/state
+            # income tax, so we deduct them explicitly from cash inflow.
             cash_inflow = (
                 wages_box1
                 + extra_interest + extra_qdiv + extra_ltcg
                 + gross_cash_in
                 - fica_total
+                - sdi_total
             )
         else:
             cash_inflow = pension_income + ssn_income + gross_cash_in
@@ -901,6 +959,12 @@ def simulate(
                     age_b=b_age,
                     alive_a=alive_a,
                     alive_b=alive_b,
+                    pension_per_spouse=pension_split,
+                    pretax_per_spouse=(
+                        withdraws["pretax_a"],
+                        withdraws["pretax_b"],
+                    ),
+                    roth_conv_per_spouse=roth_split,
                 )
                 state_income_tax = state_result["state_tax"]
                 # IRMAA in year T is based on MAGI from year T-2 under
@@ -1044,6 +1108,10 @@ def simulate(
                 "fica_oasdi": fica_combined["oasdi"],
                 "fica_medicare": fica_combined["medicare"],
                 "fica_additional_medicare": fica_combined["additional_medicare"],
+                "state_sdi": sdi_total,
+                "qualified_dividends": qdiv_inc,
+                "ordinary_dividends": ord_div_inc,
+                "interest_income": interest_inc,
                 "equity_return": eq_r,
                 "bond_return": bd_r,
                 "pretax_balance": state.spouse_a_pretax + state.spouse_b_pretax,

@@ -203,6 +203,15 @@ class Config:
     taxable_equity_div_yield: float = 0.016
     taxable_bond_interest_yield: float = 0.035
 
+    # Fraction of taxable-equity dividends that are "qualified" (LTCG-
+    # rate-eligible). The remainder is non-qualified — REIT dividends,
+    # certain foreign-issuer payors, money-market sweeps inside an
+    # equity fund — and is taxed at ordinary rates. For a broad
+    # US-equity index, ~0.85–0.90 is typical; mixed funds with REIT
+    # exposure run lower. Set to 1.0 to recover the pre-v6.3 behavior
+    # of treating all dividends as qualified (slightly optimistic).
+    taxable_equity_qualified_fraction: float = 0.85
+
     # ------------------------------------------------------------------
     # New v2 modular types
     # ------------------------------------------------------------------
