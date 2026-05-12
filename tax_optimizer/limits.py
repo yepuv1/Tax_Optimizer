@@ -49,6 +49,7 @@ ROTH_IRA_PHASEOUT_HI_SINGLE: float = 165_000.0
 # catch-up if *either* spouse is 55+. Medicare enrollment (age 65+)
 # disqualifies further HSA contributions.
 HSA_FAMILY_LIMIT: float = 8_550.0
+HSA_SELF_LIMIT: float = 4_300.0  # 2025 self-only HDHP limit.
 HSA_CATCH_UP_55: float = 1_000.0
 HSA_CATCH_UP_AGE: int = 55
 HSA_INELIGIBLE_AGE: int = 65  # Medicare enrollment ends HSA contributions.
@@ -97,17 +98,44 @@ def roth_ira_phaseout_factor(magi: float, filing_status: str) -> float:
 
 
 def hsa_family_cap(age_a: int, age_b: int, *, either_working: bool) -> float:
-    """Annual HSA family-coverage cap given both spouses' ages.
+    """Annual HSA contribution cap given both spouses' ages and work status.
 
-    Returns 0 once both spouses have hit the Medicare-eligibility
-    cliff (no HDHP, no contributions) or no spouse is working.
-    Catch-up adds once when either spouse is 55+.
+    The returned cap models the IRS rules:
+
+      * **Family coverage (both spouses HDHP-eligible)** — full
+        family limit, plus a single $1k catch-up if either spouse
+        is 55+.
+      * **Self-only coverage (one spouse on Medicare, other still
+        working under HDHP)** — downshifts to the self-only limit
+        for the working spouse, because the Medicare-enrolled
+        spouse is no longer HDHP-eligible. The 55+ catch-up still
+        applies to the HSA-eligible spouse.
+      * **Both 65+** — zero (both on Medicare → no HDHP enrollment).
+      * **Nobody working** — zero (no earned income / no plan).
+
+    Pre-v6.2 the model kept the full family limit until BOTH
+    spouses hit 65, overstating capacity by ~$4.3k/year in staggered-
+    Medicare scenarios.
     """
     if not either_working:
         return 0.0
-    if age_a >= HSA_INELIGIBLE_AGE and age_b >= HSA_INELIGIBLE_AGE:
+    a_hsa_eligible = age_a < HSA_INELIGIBLE_AGE
+    b_hsa_eligible = age_b < HSA_INELIGIBLE_AGE
+    if not a_hsa_eligible and not b_hsa_eligible:
         return 0.0
-    cap = HSA_FAMILY_LIMIT
-    if age_a >= HSA_CATCH_UP_AGE or age_b >= HSA_CATCH_UP_AGE:
+    if a_hsa_eligible and b_hsa_eligible:
+        # Both HDHP-eligible — family coverage with one catch-up if
+        # either is 55+.
+        cap = HSA_FAMILY_LIMIT
+        if age_a >= HSA_CATCH_UP_AGE or age_b >= HSA_CATCH_UP_AGE:
+            cap += HSA_CATCH_UP_55
+        return cap
+    # Exactly one spouse is Medicare-eligible: downshift to self-only
+    # for the still-HSA-eligible spouse. The Medicare-enrolled spouse
+    # cannot be on HDHP, so family coverage no longer applies.
+    cap = HSA_SELF_LIMIT
+    # Catch-up only adds for the HSA-eligible spouse if they're 55+.
+    eligible_age = age_a if a_hsa_eligible else age_b
+    if eligible_age >= HSA_CATCH_UP_AGE:
         cap += HSA_CATCH_UP_55
     return cap

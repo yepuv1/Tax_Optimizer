@@ -19,7 +19,7 @@ is the most common LTC-modeling pattern in retirement planning software.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Optional
 
 
 @dataclass
@@ -130,15 +130,33 @@ class SpendingProfile:
         age_a: int,
         *,
         years_until_horizon: int,
+        years_until_death: Optional[int] = None,
     ) -> tuple[float, list[LumpEvent]]:
         """Return (recurring_spending_for_year, list_of_lump_events_firing_this_year).
 
-        `years_until_horizon` is used by the LTC shock to know whether
-        this year falls inside the "last N years" window.
+        LTC shock timing:
+
+          * If `years_until_death` is provided, it anchors the shock
+            to the household's actual end-of-life year — this is the
+            economically meaningful definition. The shock fires in
+            the last `ltc_shock.years` years before all spouses are
+            dead.
+          * If `years_until_death` is `None` (legacy callers), we fall
+            back to `years_until_horizon`. That works only when the
+            horizon and the life expectancy coincide; otherwise the
+            shock incorrectly fires at the *simulation* end instead of
+            at the *life* end.
+
+        The simulator now passes both arguments. The pre-v6.2 default
+        attached the shock to `horizon - years` which fired the shock
+        on still-alive spouses' last years when `horizon_age > life
+        expectancy` and skipped it entirely when `horizon_age < life
+        expectancy`.
         """
         mult = self._phase_multiplier(age_a)
         recurring = self.base_spending * mult * (1 + self.inflation) ** year_offset
-        if self.ltc_shock and years_until_horizon < self.ltc_shock.years:
+        ltc_anchor = years_until_death if years_until_death is not None else years_until_horizon
+        if self.ltc_shock and ltc_anchor >= 0 and ltc_anchor < self.ltc_shock.years:
             recurring += (
                 self.ltc_shock.annual_cost_today * (1 + self.inflation) ** year_offset
             )

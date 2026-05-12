@@ -32,6 +32,43 @@ Categories used:
 
 ## [Unreleased]
 
+### Fixed — v6.2 functional review (batch 2: MEDIUM-severity correctness)
+
+- **MED — HSA family cap downshifts to self-only when one spouse is on
+  Medicare** ([`tax_optimizer/limits.py`](tax_optimizer/limits.py)).
+  Previously the model kept the full HSA family limit ($8,550 + $1k
+  catch-up) until both spouses hit 65. In staggered-Medicare
+  households (one spouse 65+, other still working under HDHP) the
+  IRS rules actually downshift to self-only ($4,300 + applicable
+  catch-up) because the Medicare-enrolled spouse is no longer HDHP-
+  eligible. Pre-v6.2 overstated capacity by ~$4.3k/year in these
+  scenarios. Added `HSA_SELF_LIMIT` constant.
+- **MED — `_solve_taxable_for_net` clamps `basis_frac` to [0, 1]**
+  ([`tax_optimizer/withdrawals.py`](tax_optimizer/withdrawals.py)).
+  A `basis_frac > 1.0` (taxable account at an unrealized loss with
+  basis > FMV) used to flow through to `gain = mid * (1 - basis_frac)`
+  as a negative number, producing a phantom AGI reduction in
+  `federal_tax`. The simulator already clamps live ratios, but the
+  public solver entry point is now defensive too.
+- **MED — LTC shock anchors to end-of-life, not end-of-simulation**
+  ([`tax_optimizer/spending.py`](tax_optimizer/spending.py),
+  [`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)).
+  `SpendingProfile.amount_for` now takes an optional
+  `years_until_death` argument. When provided (the simulator always
+  passes it now, derived from `Mortality.year_of_death_a/b`), the
+  shock fires in the last `ltc_shock.years` years *of life*. Falls
+  back to `years_until_horizon` for legacy callers. Pre-v6.2 the
+  shock fired in the last N years of the *simulation*, which was
+  wrong whenever the horizon exceeded the mortality date.
+- **MED — `metrics.summarize.min_balance` and
+  `monte_carlo._ruin_year_offset` include HSA when at least one
+  spouse is 65+** ([`tax_optimizer/metrics.py`](tax_optimizer/metrics.py),
+  [`tax_optimizer/monte_carlo.py`](tax_optimizer/monte_carlo.py)).
+  After 65 the HSA becomes a stealth IRA (any-purpose withdrawals
+  at ordinary rate, no penalty); excluding it from the liquidity
+  metric was misleading for HSA-heavy plans. Before 65 the HSA is
+  restricted to qualified medical, so it's still excluded.
+
 ### Fixed — v6.2 functional review (batch 1: HIGH-severity math/state)
 
 - **HIGH — `pension.pension_annual_credit` no longer silently keeps the

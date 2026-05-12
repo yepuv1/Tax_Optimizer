@@ -77,6 +77,13 @@ def _solve_taxable_for_net(
 ) -> float:
     if net_target <= 0:
         return 0.0
+    # Clamp basis_frac into [0, 1] (F5). A `basis_frac` > 1.0 would
+    # imply the taxable account is sitting on an unrealized loss
+    # (basis > FMV); a < 0 value would imply negative basis. Neither
+    # should produce a negative `gain` (effectively a phantom AGI
+    # reduction). The simulator already clamps when it builds the live
+    # ratio, but the public solver entry point should be defensive.
+    basis_frac = min(1.0, max(0.0, basis_frac))
     base_fed = federal_tax(regime=regime, filing_status=filing_status, **base_kwargs)
     base_tax = base_fed["tax"]
     base_state = state_tax_fn(base_kwargs, base_fed["ss_taxable"]) if state_tax_fn else 0.0

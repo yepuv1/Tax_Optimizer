@@ -61,6 +61,30 @@ def lifetime_irmaa_npv(df: pd.DataFrame, *, discount: float = 0.025) -> float:
 def summarize(
     df: pd.DataFrame, *, heir_marginal_rate: float = 0.22
 ) -> dict:
+    # `min_balance` reflects the minimum spendable wealth across the
+    # plan. HSA was historically omitted, which understated risk for
+    # HSA-heavy plans where the HSA is the dominant liquid bucket
+    # post-65. HSA balance counts only once at least one spouse hits
+    # 65 (the IRS no-penalty age) — before that the HSA is restricted
+    # to qualified medical use.
+    HSA_PENALTY_FREE_AGE = 65
+    if "spouse_a_age" in df.columns and "spouse_b_age" in df.columns:
+        hsa_unlocked = (
+            (df["spouse_a_age"] >= HSA_PENALTY_FREE_AGE)
+            | (df["spouse_b_age"] >= HSA_PENALTY_FREE_AGE)
+        )
+        liquid = (
+            df["pretax_balance"]
+            + df["roth_balance"]
+            + df["taxable_balance"]
+            + df["hsa_balance"].where(hsa_unlocked, 0.0)
+        )
+    else:
+        # Defensive: legacy DataFrames missing the per-year ages —
+        # fall back to the pre-v6.2 behavior (HSA omitted).
+        liquid = (
+            df["pretax_balance"] + df["roth_balance"] + df["taxable_balance"]
+        )
     return {
         "lifetime_tax_npv": lifetime_tax_npv(df),
         "lifetime_irmaa_npv": lifetime_irmaa_npv(df),
@@ -70,7 +94,5 @@ def summarize(
         "peak_marginal": float(df["marginal"].max()),
         "years_irmaa": int((df["irmaa"] > 0).sum()),
         "peak_irmaa_tier": int(df["irmaa_tier"].max()),
-        "min_balance": float(
-            (df["pretax_balance"] + df["roth_balance"] + df["taxable_balance"]).min()
-        ),
+        "min_balance": float(liquid.min()),
     }

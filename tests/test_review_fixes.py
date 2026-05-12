@@ -520,3 +520,218 @@ class TestPensionAnnuityInitWhenAlreadyAtNRD:
             f"the simulation begins. The pre-v6.2 strict-equality "
             f"check on `a_age == start_age` skipped the initialization."
         )
+
+
+# ===========================================================================
+# v6.2 — batch 2 (MEDIUM-severity correctness fixes)
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# F4 — HSA cap downshifts to self-only when one spouse on Medicare
+# ---------------------------------------------------------------------------
+
+class TestHsaCapMedicareStagger:
+    def test_both_under_65_full_family_limit(self) -> None:
+        from tax_optimizer.limits import HSA_FAMILY_LIMIT, hsa_family_cap
+
+        cap = hsa_family_cap(50, 50, either_working=True)
+        assert cap == HSA_FAMILY_LIMIT
+
+    def test_both_under_65_with_catchup(self) -> None:
+        from tax_optimizer.limits import (
+            HSA_CATCH_UP_55,
+            HSA_FAMILY_LIMIT,
+            hsa_family_cap,
+        )
+
+        cap = hsa_family_cap(56, 50, either_working=True)
+        assert cap == HSA_FAMILY_LIMIT + HSA_CATCH_UP_55
+
+    def test_one_spouse_medicare_eligible_downshifts_to_self_only(self) -> None:
+        from tax_optimizer.limits import (
+            HSA_CATCH_UP_55,
+            HSA_FAMILY_LIMIT,
+            HSA_SELF_LIMIT,
+            hsa_family_cap,
+        )
+
+        # Spouse A is 66 (Medicare), Spouse B is 60 (HDHP-eligible).
+        cap = hsa_family_cap(66, 60, either_working=True)
+        # Self-only + 55+ catch-up for the working spouse.
+        assert cap == HSA_SELF_LIMIT + HSA_CATCH_UP_55
+        # Cap is materially smaller than the family limit.
+        assert cap < HSA_FAMILY_LIMIT
+
+    def test_both_medicare_zero(self) -> None:
+        from tax_optimizer.limits import hsa_family_cap
+
+        cap = hsa_family_cap(66, 66, either_working=True)
+        assert cap == 0.0
+
+
+# ---------------------------------------------------------------------------
+# F5 — basis_frac clamp prevents negative LTCG
+# ---------------------------------------------------------------------------
+
+class TestBasisFracClamp:
+    def test_basis_frac_above_one_does_not_fabricate_negative_gain(self) -> None:
+        """A `basis_frac=1.1` (loss position) used to flow through to
+        `gain = mid * (1 - 1.1) = -0.1*mid`, producing a "negative
+        LTCG" line in the federal_tax kwargs and pulling AGI down.
+        The solver now clamps to 1.0."""
+        from tax_optimizer.tax.regimes import TCJA_EXTENDED
+        from tax_optimizer.withdrawals import _solve_taxable_for_net
+
+        base_kwargs: dict = dict(
+            wages=0.0, interest=0.0, ordinary_div=0.0,
+            qualified_div=0.0, ltcg=0.0, pension=0.0,
+            pretax_withdrawal=0.0, roth_conversion=0.0,
+            social_security=0.0,
+        )
+        # basis_frac = 1.0 ⇒ tax-free taxable draw (no gain).
+        gross_at_one = _solve_taxable_for_net(
+            50_000.0, base_kwargs,
+            basis_frac=1.0,
+            regime=TCJA_EXTENDED, filing_status="married_joint",
+        )
+        # basis_frac = 1.5 (would imply a loss) should clamp to 1.0
+        # and produce the same gross — NOT a smaller gross from a
+        # phantom AGI reduction.
+        gross_at_high = _solve_taxable_for_net(
+            50_000.0, base_kwargs,
+            basis_frac=1.5,
+            regime=TCJA_EXTENDED, filing_status="married_joint",
+        )
+        assert gross_at_high == pytest.approx(gross_at_one, rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# F6 — LTC shock anchored to end of life, not horizon
+# ---------------------------------------------------------------------------
+
+class TestLtcShockAnchoredToLife:
+    def test_years_until_death_overrides_horizon(self) -> None:
+        from tax_optimizer.spending import (
+            LongTermCareShock,
+            SpendingPhase,
+            SpendingProfile,
+        )
+
+        profile = SpendingProfile(
+            base_spending=100_000.0,
+            inflation=0.0,
+            phases=[SpendingPhase(0, 200, 1.0, "flat")],
+            ltc_shock=LongTermCareShock(years=3, annual_cost_today=80_000.0),
+        )
+        # Far from horizon, far from death → no LTC.
+        rec_far, _ = profile.amount_for(
+            year_offset=10, age_a=70,
+            years_until_horizon=20, years_until_death=20,
+        )
+        assert rec_far == pytest.approx(100_000.0)
+        # 2 years before death (years_until_death=2 < ltc.years=3) →
+        # shock fires, REGARDLESS of years_until_horizon being large.
+        rec_dying, _ = profile.amount_for(
+            year_offset=28, age_a=88,
+            years_until_horizon=20, years_until_death=2,
+        )
+        assert rec_dying == pytest.approx(100_000.0 + 80_000.0)
+
+    def test_legacy_horizon_only_callers_still_work(self) -> None:
+        from tax_optimizer.spending import (
+            LongTermCareShock,
+            SpendingPhase,
+            SpendingProfile,
+        )
+
+        profile = SpendingProfile(
+            base_spending=100_000.0,
+            inflation=0.0,
+            phases=[SpendingPhase(0, 200, 1.0, "flat")],
+            ltc_shock=LongTermCareShock(years=2, annual_cost_today=60_000.0),
+        )
+        # No `years_until_death` argument → behaves like pre-v6.2 with
+        # `years_until_horizon` as the LTC anchor.
+        rec, _ = profile.amount_for(
+            year_offset=29, age_a=89, years_until_horizon=1,
+        )
+        assert rec == pytest.approx(160_000.0)
+
+
+# ---------------------------------------------------------------------------
+# F7 / F8 — min_balance and MC ruin both include HSA post-65
+# ---------------------------------------------------------------------------
+
+class TestMinBalanceIncludesHsaPost65:
+    def test_min_balance_counts_hsa_when_either_spouse_65_plus(self) -> None:
+        import pandas as pd
+
+        from tax_optimizer.metrics import summarize
+
+        # Build a tiny synthetic frame with one row pre-65 and one
+        # row post-65. Pre-65 HSA should NOT count; post-65 it should.
+        df = pd.DataFrame({
+            "federal_tax": [10_000.0, 10_000.0],
+            "irmaa": [0.0, 0.0],
+            "irmaa_tier": [0, 0],
+            "marginal": [0.22, 0.22],
+            "spouse_a_age": [60, 70],
+            "spouse_b_age": [60, 70],
+            "pretax_balance": [100_000.0, 0.0],
+            "roth_balance": [0.0, 0.0],
+            "taxable_balance": [0.0, 0.0],
+            "hsa_balance": [200_000.0, 200_000.0],
+            "agi": [0.0, 0.0],
+            "spending_need": [50_000.0, 50_000.0],
+        })
+        result = summarize(df)
+        # Pre-65 row liquid = 100k (HSA omitted). Post-65 = 200k.
+        # Minimum = 100k.
+        assert result["min_balance"] == pytest.approx(100_000.0)
+
+
+# F8 covered indirectly above — the same HSA-post-65 logic is in
+# monte_carlo._ruin_year_offset. Direct unit test:
+class TestMcRuinIncludesHsaPost65:
+    def test_no_ruin_when_hsa_covers_post_65(self) -> None:
+        import pandas as pd
+
+        from tax_optimizer.monte_carlo import _ruin_year_offset
+
+        df = pd.DataFrame({
+            "spouse_a_age": [70],
+            "spouse_b_age": [70],
+            "pretax_balance": [0.0],
+            "roth_balance": [0.0],
+            "taxable_balance": [0.0],
+            "hsa_balance": [500_000.0],
+            "spending_need": [100_000.0],
+            "unfunded": [0.0],
+        })
+        offset = _ruin_year_offset(df)
+        assert offset == -1, (
+            "Post-65 household with $500k in HSA and $100k need should "
+            "NOT count as ruined — HSA is a stealth IRA after 65."
+        )
+
+    def test_ruin_when_only_hsa_pre_65(self) -> None:
+        import pandas as pd
+
+        from tax_optimizer.monte_carlo import _ruin_year_offset
+
+        df = pd.DataFrame({
+            "spouse_a_age": [60],
+            "spouse_b_age": [60],
+            "pretax_balance": [0.0],
+            "roth_balance": [0.0],
+            "taxable_balance": [0.0],
+            "hsa_balance": [500_000.0],
+            "spending_need": [100_000.0],
+            "unfunded": [0.0],
+        })
+        offset = _ruin_year_offset(df)
+        assert offset == 0, (
+            "Pre-65 household with only HSA can't tap it for general "
+            "spending — should register as ruined."
+        )

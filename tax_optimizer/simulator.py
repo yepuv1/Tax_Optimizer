@@ -522,8 +522,30 @@ def simulate(
         # the cash comes from. (Future enhancement: honor
         # `preferred_source` inside the strategy solvers.)
         years_until_horizon = (n_years - 1) - year_offset
+        # F6: anchor the LTC shock to the household's actual end-of-
+        # life (latest spouse-death year) rather than to the simulation
+        # horizon. Falls back to horizon when neither spouse has a
+        # mortality date set.
+        death_a = cfg.mortality.year_of_death_a
+        death_b = cfg.mortality.year_of_death_b
+        end_of_life_offset: int | None
+        if death_a is not None and death_b is not None:
+            end_of_life_offset = max(death_a, death_b) - 1  # last year alive
+        elif death_a is not None:
+            end_of_life_offset = death_a - 1
+        elif death_b is not None:
+            end_of_life_offset = death_b - 1
+        else:
+            end_of_life_offset = None
+        years_until_death = (
+            end_of_life_offset - year_offset
+            if end_of_life_offset is not None
+            else None
+        )
         net_need, lump_events = spending.amount_for(
-            year_offset, a_age, years_until_horizon=years_until_horizon
+            year_offset, a_age,
+            years_until_horizon=years_until_horizon,
+            years_until_death=years_until_death,
         )
         lump_total = 0.0
         for event in lump_events:

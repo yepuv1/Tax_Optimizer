@@ -100,7 +100,24 @@ def _ruin_year_offset(df: pd.DataFrame) -> int:
         bad_unfunded = (df["unfunded"] > 0).to_numpy()
     else:  # pragma: no cover - back-compat for frames without the column
         bad_unfunded = np.zeros(len(df), dtype=bool)
-    liquid = df["pretax_balance"] + df["roth_balance"] + df["taxable_balance"]
+    # F8: include HSA balance once at least one spouse is 65+ (post-
+    # Medicare HSA acts as a stealth IRA — withdrawable for any
+    # purpose at ordinary rates). Before 65 HSA is restricted to
+    # qualified medical, so excluding it is correct.
+    HSA_PENALTY_FREE_AGE = 65
+    if "spouse_a_age" in df.columns and "spouse_b_age" in df.columns:
+        hsa_unlocked = (
+            (df["spouse_a_age"] >= HSA_PENALTY_FREE_AGE)
+            | (df["spouse_b_age"] >= HSA_PENALTY_FREE_AGE)
+        )
+        liquid = (
+            df["pretax_balance"]
+            + df["roth_balance"]
+            + df["taxable_balance"]
+            + df["hsa_balance"].where(hsa_unlocked, 0.0)
+        )
+    else:
+        liquid = df["pretax_balance"] + df["roth_balance"] + df["taxable_balance"]
     bad_liquid = (liquid < df["spending_need"]).to_numpy()
     bad = bad_unfunded | bad_liquid
     if not bad.any():

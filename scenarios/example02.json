@@ -1,0 +1,148 @@
+{
+  "config": {
+    "start_year": 2026,
+    "horizon_age": 85,
+
+    "nominal_growth_rate": 0.04,
+    "inflation": 0.03,
+    "wage_growth": 0.01,
+    "taxable_drag": 0.005,
+
+    "ss_cola_rate": null,
+    "bracket_indexing_rate": null,
+
+    "withdrawal_strategy": "conventional",
+    "bracket_fill_target": 0.22,
+    "roth_conversion_target_bracket": 0.0,
+    "roth_conversion_amount": 0.0,
+
+    "rmd_start_age": 75,
+
+    "cap_gains_basis_fraction": 0.5,
+    "annual_expenses_today": 100000.0,
+
+    "heir_marginal_rate": 0.32,
+
+    "taxable_equity_div_yield": 0.016,
+    "taxable_bond_interest_yield": 0.035,
+
+    "tax_regime": "tcja",
+    "regime_change_year_offset": 5,
+    "regime_change_target": "sunset",
+
+    "state_regime": "stateless",
+    "state_regime_change_year_offset": null,
+    "state_regime_change_target": null,
+
+    "medicare_base_b_d_premium": 2500,
+    "health_pre65_today": 0,
+    "irmaa_lookback_years": 2,
+
+    "aca_enabled": false,
+    "aca_benchmark_premium_per_adult": 14000,
+    "aca_max_contrib_pct": 0.085,
+
+    "stepup_at_first_death": false,
+
+    "optimize_ss_claim_age": false,
+
+    "market": {
+      "kind": "lognormal",
+      "equity_mu": 0.07,
+      "equity_sigma": 0.18,
+      "bond_mu": 0.045,
+      "bond_sigma": 0.07,
+      "equity_bond_corr": 0.10,
+      "cape_today": null,
+      "cape_long_run": 16.5
+    },
+    "spending": {
+      "kind": "smile",
+      "base_spending": 100000.0,
+      "inflation": 0.03,
+      "ltc_years": 4,
+      "ltc_annual_today": 150000.0
+    },
+    "mortality": {
+      "year_of_death_a": 30,
+      "year_of_death_b": 30,
+      "pension_survivor_pct": 1.0,
+      "ss_survivor_keeps_higher": true
+    },
+    "asset_location": {
+      "pretax_equity_pct": 0.7,
+      "roth_equity_pct": 0.7,
+      "taxable_equity_pct": 0.7,
+      "hsa_equity_pct": 0.7
+    }
+  },
+  "inputs": {
+    "spouse_a_age_start": 54,
+    "spouse_b_age_start": 53,
+    "spouse_a_retire_age": 65,
+    "spouse_b_retire_age": 64,
+
+    "spouse_a_total_contrib_pct": 0.15,
+    "spouse_b_total_contrib_pct": 0.15,
+    "spouse_a_roth_401k_pct": 1.0,
+    "spouse_b_roth_401k_pct": 1.0,
+
+    "spouse_a_employer_match_rate": 1.00,
+    "spouse_a_employer_match_max_pct": 0.07,
+    "spouse_b_employer_match_rate": 1.00,
+    "spouse_b_employer_match_max_pct": 0.045,
+
+    "spouse_a_roth_ira_contrib": 0,
+    "spouse_b_roth_ira_contrib": 0,
+    "spouse_a_traditional_ira_contrib": 0,
+    "spouse_b_traditional_ira_contrib": 0,
+    "spouse_a_backdoor_roth": true,
+    "spouse_b_backdoor_roth": true,
+
+    "spouse_a_mega_backdoor_enabled": true,
+    "spouse_b_mega_backdoor_enabled": true,
+    "spouse_a_after_tax_401k_pct": 0.135,
+    "spouse_b_after_tax_401k_pct": 0.1,
+
+    "starting": {
+      "spouse_a_pretax_401k": 800000.0,
+      "spouse_b_pretax_401k": 150000.0,
+      "spouse_a_pretax_ira": 0,
+      "spouse_b_pretax_ira": 50000.0,
+      "spouse_a_roth_ira": 40000.0,
+      "spouse_b_roth_ira": 0,
+      "hsa": 50000.0,
+      "taxable_brokerage": 300000.0,
+      "pension_balance": 200000.0
+    },
+    "income": {
+      "spouse_a_gross": 150000.0,
+      "spouse_b_gross": 80000.0,
+      "spouse_a_bonus": 20000.0,
+      "interest": 0,
+      "capital_gains": 0,
+      "dividends": 0
+    },
+    "contrib": {
+      "hsa_family": 8550
+    },
+    "ss": {
+      "monthly_spouse_a": 2800,
+      "monthly_spouse_b": 1800,
+      "start_age": 67,
+      "start_age_a": 70,
+      "start_age_b": 65,
+      "fra_a": 67,
+      "fra_b": 67
+    },
+    "pension": {
+      "balance_today": 200000.0,
+      "monthly_at_nrd": 2500.0,
+      "start_age": 67,
+      "years_of_service_today": 20,
+      "pre_2016_participant": true,
+      "interest_rate": null,
+      "irs_comp_limit_today": 350000.0
+    }
+  }
+}
