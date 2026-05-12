@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+.example*.json
+
+# Personal / sensitive scenario data — keep real numbers off-repo
+scenarios/*.local.json
+scenarios/private/
+*.private.json
+
+# Plan documents that contain personal info (SPDs, benefit statements, etc.)
+*.pdf
