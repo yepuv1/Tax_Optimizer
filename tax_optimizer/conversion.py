@@ -19,15 +19,64 @@ The RMD-first ordering is critical: at age ≥ ``rmd_start_age`` the IRS
 requires the RMD before any conversion. The simulator computes RMD
 ahead of this call and passes ``rmd_total`` so we size the conversion
 on the *post-RMD* taxable-income line.
+
+Liquidity guard (v6.5)
+----------------------
+When `cfg.cap_conversion_by_liquidity=True` (default), the caller passes
+a `tax_paying_capacity` estimate — household cash available to pay the
+conversion's marginal federal + state tax, derived from earned-income
+surplus + pension + SS + RMD net of FICA/SDI/spending/healthcare/
+contributions, plus a configurable slice of the taxable brokerage.
+The sizer then bisects the conversion down so its marginal tax fits
+inside capacity. Without this guard, an aggressive
+`roth_conversion_target_bracket` (or any fixed amount > liquid cash on
+hand) silently triggered the deficit cascade, which withdrew tax cash
+from the *just-funded* Roth — defeating the strategy and (under IRS
+rules) potentially incurring the 10% conversion-principal penalty when
+the 5-year clock hadn't matured.
 """
 
 from __future__ import annotations
+
+from typing import Callable, NamedTuple, Optional
 
 from .config import Config
 from .inputs import Inputs
 from .state import State
 from .tax.federal import amount_to_fill_bracket, federal_tax
 from .tax.regimes import TaxRegime
+
+
+StateTaxFn = Callable[[dict, float], float]
+"""Signature: `state_tax_fn(kwargs, ss_taxable_federal) -> state_tax_dollars`.
+
+Same shape the cascade solvers use (see `withdrawals.StateTaxFn`).
+Captures the year's state regime / filing status / ages so the
+liquidity bisection can compute the marginal *state* tax delta
+incrementally on top of the federal delta.
+"""
+
+
+class ConversionPlan(NamedTuple):
+    """Result of `planned_roth_conversion`.
+
+    Attributes:
+        conv_a:                Spouse-A pretax → Roth conversion, $.
+        conv_b:                Spouse-B pretax → Roth conversion, $.
+        capped_by_liquidity:   True iff the liquidity guard bisected
+                               the conversion below the bracket /
+                               fixed-amount target. Surfaced in the
+                               year-row so reports can flag it.
+        bracket_target_total:  The conversion total the bracket-fill
+                               (or fixed-amount) mode *would* have
+                               picked absent the liquidity guard.
+                               Useful for diagnostics.
+    """
+
+    conv_a: float
+    conv_b: float
+    capped_by_liquidity: bool = False
+    bracket_target_total: float = 0.0
 
 
 def planned_roth_conversion(
@@ -41,8 +90,10 @@ def planned_roth_conversion(
     rmd_total: float = 0.0,
     rmd_a: float = 0.0,
     rmd_b: float = 0.0,
-) -> tuple[float, float]:
-    """Return (conv_a, conv_b): per-spouse pretax→Roth conversion.
+    tax_paying_capacity: Optional[float] = None,
+    state_tax_fn: Optional[StateTaxFn] = None,
+) -> ConversionPlan:
+    """Plan this year's pretax → Roth conversion.
 
     `rmd_total` is the year's total RMD across both spouses (already
     computed by the caller, not yet folded into `base_kwargs`). The
@@ -59,6 +110,13 @@ def planned_roth_conversion(
 
     Pro-rata split: if both spouses have eligible pretax balances, the
     total is split in proportion to each spouse's balance.
+
+    If `tax_paying_capacity` is not None AND
+    `cfg.cap_conversion_by_liquidity` is True, the conversion is
+    bisected down so that the marginal federal + state tax on the
+    conversion fits inside capacity. `state_tax_fn` (optional) lets
+    the bisection account for state tax; without it the cap is
+    federal-only (slightly under-tightens for high-tax states).
     """
     fixed_mode = cfg.roth_conversion_amount > 0
 
@@ -90,7 +148,7 @@ def planned_roth_conversion(
     b_avail = max(0.0, state.spouse_b_pretax - rmd_b) if b_eligible else 0.0
     cap = a_avail + b_avail
     if cap <= 0:
-        return 0.0, 0.0
+        return ConversionPlan(0.0, 0.0, capped_by_liquidity=False, bracket_target_total=0.0)
 
     if fixed_mode:
         total = min(cfg.roth_conversion_amount, cap)
@@ -114,11 +172,78 @@ def planned_roth_conversion(
         )
         total = min(headroom, cap)
     else:
-        return 0.0, 0.0
+        return ConversionPlan(0.0, 0.0, capped_by_liquidity=False, bracket_target_total=0.0)
 
     if total <= 0:
-        return 0.0, 0.0
+        return ConversionPlan(0.0, 0.0, capped_by_liquidity=False, bracket_target_total=0.0)
+
+    bracket_target_total = total
+    capped = False
+
+    # ---- Liquidity guard (v6.5) ----
+    # Bisect `total` down so the marginal federal + state tax delta on
+    # adding the conversion to (base_kwargs + RMD) stays at or under
+    # `tax_paying_capacity`. Anything bigger would have to be funded by
+    # the deficit cascade — which (when `cfg.protect_roth_in_conversion_years`
+    # is on) refuses to touch the Roth bucket, so it surfaces as
+    # `unfunded` instead of silently raiding the just-converted dollars.
+    if (
+        cfg.cap_conversion_by_liquidity
+        and tax_paying_capacity is not None
+        and tax_paying_capacity >= 0.0
+    ):
+        kwargs_with_rmd_no_conv = dict(base_kwargs)
+        if rmd_total > 0:
+            kwargs_with_rmd_no_conv["pretax_withdrawal"] = (
+                kwargs_with_rmd_no_conv.get("pretax_withdrawal", 0.0) + rmd_total
+            )
+        base_fed = federal_tax(
+            regime=regime, filing_status=filing_status, **kwargs_with_rmd_no_conv
+        )
+        base_fed_tax = base_fed["tax"]
+        base_state_tax = (
+            state_tax_fn(kwargs_with_rmd_no_conv, base_fed["ss_taxable"])
+            if state_tax_fn is not None else 0.0
+        )
+
+        def _marginal_tax_on(conv_amount: float) -> float:
+            kw = dict(kwargs_with_rmd_no_conv)
+            kw["roth_conversion"] = kw.get("roth_conversion", 0.0) + conv_amount
+            fed = federal_tax(regime=regime, filing_status=filing_status, **kw)
+            fed_delta = max(0.0, fed["tax"] - base_fed_tax)
+            state_delta = 0.0
+            if state_tax_fn is not None:
+                state_delta = max(
+                    0.0, state_tax_fn(kw, fed["ss_taxable"]) - base_state_tax
+                )
+            return fed_delta + state_delta
+
+        marginal_at_total = _marginal_tax_on(total)
+        if marginal_at_total > tax_paying_capacity:
+            # Bisect on the conversion amount. Monotone in `total`.
+            lo, hi = 0.0, total
+            for _ in range(40):
+                mid = 0.5 * (lo + hi)
+                if _marginal_tax_on(mid) <= tax_paying_capacity:
+                    lo = mid
+                else:
+                    hi = mid
+                if hi - lo < 100.0:
+                    break
+            total = lo
+            capped = True
+
+    if total <= 0:
+        return ConversionPlan(
+            0.0, 0.0,
+            capped_by_liquidity=capped,
+            bracket_target_total=bracket_target_total,
+        )
     a_share = a_avail / cap
     conv_a = total * a_share
     conv_b = total - conv_a
-    return conv_a, conv_b
+    return ConversionPlan(
+        conv_a, conv_b,
+        capped_by_liquidity=capped,
+        bracket_target_total=bracket_target_total,
+    )

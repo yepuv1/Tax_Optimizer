@@ -85,6 +85,43 @@ class Config:
     roth_conversion_amount: float = 0.0
 
     # ------------------------------------------------------------------
+    # Roth-conversion liquidity guards (v6.5)
+    # ------------------------------------------------------------------
+    # When True, size each year's Roth conversion so its marginal
+    # federal + state tax fits within the household's *non-Roth*
+    # tax-paying capacity (earned cash + pension + SS + RMD net of
+    # FICA/SDI/spending/healthcare/contributions, plus an allowed
+    # slice of the taxable brokerage). Prevents the simulator from
+    # converting more than the household could realistically pay tax
+    # on, which previously would silently trigger the deficit
+    # cascade and raid the just-funded Roth bucket. Defaults True.
+    # Set False to recover pre-v6.5 behavior (sizes to bracket
+    # headroom regardless of cash on hand) — useful for sensitivity
+    # analysis on the "what if I could find tax cash from elsewhere"
+    # boundary.
+    cap_conversion_by_liquidity: bool = True
+
+    # Fraction of the taxable-brokerage balance the conversion sizer
+    # is willing to earmark for paying the conversion's marginal tax.
+    # Combined with the earned/retirement-income surplus to form
+    # `tax_paying_capacity`. Default 0.5 leaves half the taxable
+    # account as runway for spending shocks. Set 1.0 to allow the
+    # full taxable balance, 0.0 to require the conversion tax come
+    # entirely from earned-income surplus / pension / SS / RMD.
+    conversion_taxable_use_ratio: float = 0.5
+
+    # When True, the deficit cascade excludes the Roth bucket in any
+    # year a Roth conversion fires. Otherwise an under-sized
+    # liquidity check (or a fixed-dollar conversion that overshoots
+    # capacity) silently withdraws from the just-converted Roth to
+    # pay the conversion tax — which under IRS rules can trigger
+    # a 10% penalty on conversion principal if the holder is < 59½
+    # or the 5-year clock hasn't matured (neither tracked by the
+    # model). Default True. Set False to allow Roth in the cascade
+    # (recovers pre-v6.5 behavior).
+    protect_roth_in_conversion_years: bool = True
+
+    # ------------------------------------------------------------------
     # Age-gated income events
     # ------------------------------------------------------------------
     # SS claim age and pension NRD now live on the nested Inputs blocks

@@ -608,6 +608,12 @@ Federal bracket numbers, IRS Uniform Lifetime divisors, pension-formula coeffici
   early, the simulator's tax-free Roth treatment will overstate
   their plan's net by the avoided 10% penalty. Workaround: ear-mark
   pre-59½ liquidity as taxable / HSA spending instead of Roth.
+  **v6.5 partial mitigation**: with
+  `cfg.protect_roth_in_conversion_years=True` (default), the
+  deficit cascade refuses to withdraw from Roth in any year a
+  conversion fires, so the simulator no longer silently raids the
+  just-converted bucket to pay the conversion's own tax bill.
+  Liquidity overshoot now surfaces as `unfunded` instead.
 - **Pre-existing nondeductible IRA basis (Form 8606)**: backdoor-
   Roth pro-rata math treats *all* existing pretax-IRA dollars as
   zero-basis. If you have historical 8606 basis from prior

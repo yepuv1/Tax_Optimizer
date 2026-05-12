@@ -551,31 +551,52 @@ def simulate(
         b_rmd = rmd_amount(state.spouse_b_pretax, b_age, cfg.rmd_start_age) if alive_b else 0.0
         rmd_total = a_rmd + b_rmd
 
-        # ---- Roth conversion (RMD-aware, regime-aware) ----
-        conv_a, conv_b = planned_roth_conversion(
-            cfg, inputs, state, base_kwargs,
-            regime=regime, filing_status=filing_status,
-            rmd_total=rmd_total,
-            rmd_a=a_rmd,
-            rmd_b=b_rmd,
+        # ---- Live cost-basis fraction (hoisted v6.5) ----
+        current_basis_frac = (
+            min(1.0, max(0.0, state.cumulative_basis / state.taxable))
+            if state.taxable > 0 else 1.0
         )
-        # If a spouse is dead, zero out their conversion.
-        if not alive_a:
-            conv_a = 0.0
-        if not alive_b:
-            conv_b = 0.0
-        conv = conv_a + conv_b
-        if conv > 0:
-            base_kwargs["roth_conversion"] = conv
-            pre_a = state.spouse_a_pretax
-            pre_b = state.spouse_b_pretax
-            state.spouse_a_pretax = max(0.0, pre_a - conv_a)
-            state.spouse_b_pretax = max(0.0, pre_b - conv_b)
-            _drain_pretax_ira("a", pre_a, conv_a)
-            _drain_pretax_ira("b", pre_b, conv_b)
-            state.roth += conv
 
-        # ---- Spending need (smile + lump events + LTC) ----
+        # State-tax-aware solver closure (F2). Without this, the gross-up
+        # in `_solve_pretax_for_net` / `_solve_taxable_for_net` only
+        # covers federal tax, so high-state-tax households (CA/MA/OR)
+        # came up ~9-12% short on every cascade leg and quietly carried
+        # the gap as "unfunded" or post-hoc rebalanced. Closure captures
+        # this year's state regime / ages / HSA-contrib so the solver
+        # can compute marginal state tax incrementally.
+        # Hoisted in v6.5 so the conversion-liquidity sizer can use it
+        # too (a CA conversion's 9.3% marginal state bite shouldn't
+        # silently slip past the capacity check).
+        _state_regime_local = state_regime
+        _filing_local = filing_status
+        _hsa_contrib_local = hsa_contrib
+        _age_a_local = a_age
+        _age_b_local = b_age
+        _alive_a_local = alive_a
+        _alive_b_local = alive_b
+
+        def _state_tax_fn(kw: dict, ss_taxable_federal: float) -> float:
+            return state_tax(
+                regime=_state_regime_local,
+                filing_status=_filing_local,
+                wages_box1=kw.get("wages", 0.0),
+                interest=kw.get("interest", 0.0),
+                ordinary_div=kw.get("ordinary_div", 0.0),
+                qualified_div=kw.get("qualified_div", 0.0),
+                ltcg=kw.get("ltcg", 0.0),
+                pension=kw.get("pension", 0.0),
+                pretax_withdrawal=kw.get("pretax_withdrawal", 0.0),
+                roth_conversion=kw.get("roth_conversion", 0.0),
+                social_security=kw.get("social_security", 0.0),
+                ss_taxable_federal=ss_taxable_federal,
+                hsa_contrib=_hsa_contrib_local,
+                age_a=_age_a_local,
+                age_b=_age_b_local,
+                alive_a=_alive_a_local,
+                alive_b=_alive_b_local,
+            )["state_tax"]
+
+        # ---- Spending need + HSA pay-down (hoisted v6.5) ----
         # Lump events always add to net_need; the strategy picks where
         # the cash comes from. (Future enhancement: honor
         # `preferred_source` inside the strategy solvers.)
@@ -611,7 +632,7 @@ def simulate(
             net_need += inflated
             lump_total += inflated
 
-        # ---- HSA tax-free pay-down of qualified medical expense ----
+        # HSA tax-free pay-down of qualified medical expense.
         # The LTC shock is the only explicit medical-expense line in
         # the model; HSA dollars are spent against it first (the whole
         # point of the triple-tax-advantaged shelter). Net_need drops
@@ -627,47 +648,145 @@ def simulate(
             state.hsa = max(0.0, state.hsa - hsa_withdrawal)
             net_need = max(0.0, net_need - hsa_withdrawal)
 
-        # ---- Live cost-basis fraction ----
-        current_basis_frac = (
-            min(1.0, max(0.0, state.cumulative_basis / state.taxable))
-            if state.taxable > 0 else 1.0
+        # ---- Healthcare costs (hoisted v6.5) ----
+        # Three pieces, all separate from federal/state income tax:
+        #   * Pre-Medicare: `health_pre65` (anyone alive AND <65)
+        #   * Medicare base: B+D premium per Medicare-enrolled spouse
+        #   * IRMAA surcharge: looked up on AGI from year T-2 (TC-11)
+        # Hoisted ahead of the conversion sizer so the liquidity guard
+        # can subtract these obligations from non-conversion cash flow
+        # to derive `tax_paying_capacity`. IRMAA uses lagged AGI so it
+        # doesn't depend on this year's conversion; pre-65 / Medicare
+        # premiums are statutory + age-driven, also conversion-free.
+        n_pre_medicare = (
+            int(alive_a and a_age < MEDICARE_ELIGIBLE_AGE)
+            + int(alive_b and b_age < MEDICARE_ELIGIBLE_AGE)
+        )
+        health_pre65_today = cfg.health_pre65_today
+        health_pre65 = (
+            health_pre65_today
+            * (n_pre_medicare / 2)
+            * (1 + cfg.inflation) ** year_offset
         )
 
-        # State-tax-aware solver closure (F2). Without this, the gross-up
-        # in `_solve_pretax_for_net` / `_solve_taxable_for_net` only
-        # covers federal tax, so high-state-tax households (CA/MA/OR)
-        # came up ~9-12% short on every cascade leg and quietly carried
-        # the gap as "unfunded" or post-hoc rebalanced. Closure captures
-        # this year's state regime / ages / HSA-contrib so the solver
-        # can compute marginal state tax incrementally.
-        _state_regime_local = state_regime
-        _filing_local = filing_status
-        _hsa_contrib_local = hsa_contrib
-        _age_a_local = a_age
-        _age_b_local = b_age
-        _alive_a_local = alive_a
-        _alive_b_local = alive_b
+        n_medicare = (
+            int(alive_a and a_age >= MEDICARE_ELIGIBLE_AGE)
+            + int(alive_b and b_age >= MEDICARE_ELIGIBLE_AGE)
+        )
+        medicare_base_premium = (
+            n_medicare
+            * cfg.medicare_base_b_d_premium
+            * (1 + cfg.inflation) ** year_offset
+        )
 
-        def _state_tax_fn(kw: dict, ss_taxable_federal: float) -> float:
-            return state_tax(
-                regime=_state_regime_local,
-                filing_status=_filing_local,
-                wages_box1=kw.get("wages", 0.0),
-                interest=kw.get("interest", 0.0),
-                ordinary_div=kw.get("ordinary_div", 0.0),
-                qualified_div=kw.get("qualified_div", 0.0),
-                ltcg=kw.get("ltcg", 0.0),
-                pension=kw.get("pension", 0.0),
-                pretax_withdrawal=kw.get("pretax_withdrawal", 0.0),
-                roth_conversion=kw.get("roth_conversion", 0.0),
-                social_security=kw.get("social_security", 0.0),
-                ss_taxable_federal=ss_taxable_federal,
-                hsa_contrib=_hsa_contrib_local,
-                age_a=_age_a_local,
-                age_b=_age_b_local,
-                alive_a=_alive_a_local,
-                alive_b=_alive_b_local,
-            )["state_tax"]
+        # IRMAA AGI lookback: year T uses year T-2 AGI under SSA.
+        # For irmaa_lookback_years == 0 we fall back to current-year
+        # AGI -- but the conversion adds to current-year AGI, so we
+        # can't fully resolve IRMAA until after the conversion. Use
+        # the *pre-conversion* AGI estimate here (federal_tax on
+        # base_kwargs + RMD); for lookback>0 it doesn't matter
+        # because IRMAA references lagged AGI which is fixed.
+        if cfg.irmaa_lookback_years <= 0:
+            preconv_kw = dict(base_kwargs)
+            if rmd_total > 0:
+                preconv_kw["pretax_withdrawal"] = (
+                    preconv_kw.get("pretax_withdrawal", 0.0) + rmd_total
+                )
+            preconv_fed = federal_tax(
+                regime=regime, filing_status=filing_status, **preconv_kw
+            )
+            irmaa_agi = float(preconv_fed["agi"])
+        elif cfg.irmaa_lookback_years == 1:
+            irmaa_agi = state.prior_agi
+        else:
+            irmaa_agi = state.agi_lag_2
+        irmaa = irmaa_annual_surcharge(
+            irmaa_agi, n_medicare, regime=regime, filing_status=filing_status
+        )
+        irmaa_cost = irmaa["total"]
+        irmaa_tier = irmaa["tier"]
+
+        # ---- Tax-paying capacity for Roth conversion (v6.5) ----
+        # Estimate the household's non-Roth cash available to pay the
+        # marginal federal + state tax on this year's conversion.
+        # Used to bisect the conversion size down so the simulator
+        # never converts more than the household could realistically
+        # pay tax on. Before v6.5 an aggressive bracket-fill target
+        # (or any fixed amount > liquid cash on hand) silently
+        # triggered the deficit cascade and raided the just-funded
+        # Roth bucket — defeating the strategy.
+        if a_working or b_working:
+            # Working years: wages (Box 1) + extras, net of FICA + SDI.
+            # Portfolio dividends/interest hit the tax line but are
+            # notional (reinvested into `state.taxable`), so they
+            # aren't real cash this year.
+            earned_cash = (
+                wages_box1 + extra_interest + extra_qdiv + extra_ltcg
+                - fica_total - sdi_total
+            )
+        else:
+            earned_cash = 0.0
+        guaranteed_cash_no_conv = (
+            earned_cash + pension_income + ssn_income + rmd_total
+        )
+        # Tax on (income line + RMD) but BEFORE any conversion. This is
+        # the "background" tax the household owes regardless of the
+        # conversion; subtracting it leaves the cash that can be
+        # earmarked specifically for conversion-marginal tax.
+        capacity_kw = dict(base_kwargs)
+        if rmd_total > 0:
+            capacity_kw["pretax_withdrawal"] = (
+                capacity_kw.get("pretax_withdrawal", 0.0) + rmd_total
+            )
+        capacity_fed = federal_tax(
+            regime=regime, filing_status=filing_status, **capacity_kw
+        )
+        base_tax_no_conv = (
+            capacity_fed["tax"]
+            + _state_tax_fn(capacity_kw, capacity_fed["ss_taxable"])
+        )
+        committed_obligations = (
+            base_tax_no_conv
+            + net_need
+            + medicare_base_premium + health_pre65 + irmaa_cost
+            + ira_total_outflow + mega_backdoor_total
+        )
+        cash_surplus = max(0.0, guaranteed_cash_no_conv - committed_obligations)
+        # Plus the share of taxable brokerage the user is willing to
+        # spend on conversion tax (default 50% leaves a runway).
+        ratio = min(1.0, max(0.0, cfg.conversion_taxable_use_ratio))
+        taxable_slice = max(0.0, state.taxable) * ratio
+        tax_paying_capacity = cash_surplus + taxable_slice
+
+        # ---- Roth conversion (RMD-aware, regime-aware, liquidity-capped) ----
+        conversion_plan = planned_roth_conversion(
+            cfg, inputs, state, base_kwargs,
+            regime=regime, filing_status=filing_status,
+            rmd_total=rmd_total,
+            rmd_a=a_rmd,
+            rmd_b=b_rmd,
+            tax_paying_capacity=tax_paying_capacity,
+            state_tax_fn=_state_tax_fn,
+        )
+        conv_a = conversion_plan.conv_a
+        conv_b = conversion_plan.conv_b
+        conv_capped_by_liquidity = conversion_plan.capped_by_liquidity
+        conv_bracket_target = conversion_plan.bracket_target_total
+        # If a spouse is dead, zero out their conversion.
+        if not alive_a:
+            conv_a = 0.0
+        if not alive_b:
+            conv_b = 0.0
+        conv = conv_a + conv_b
+        if conv > 0:
+            base_kwargs["roth_conversion"] = conv
+            pre_a = state.spouse_a_pretax
+            pre_b = state.spouse_b_pretax
+            state.spouse_a_pretax = max(0.0, pre_a - conv_a)
+            state.spouse_b_pretax = max(0.0, pre_b - conv_b)
+            _drain_pretax_ira("a", pre_a, conv_a)
+            _drain_pretax_ira("b", pre_b, conv_b)
+            state.roth += conv
 
         if a_working or b_working:
             withdraws = {
@@ -735,53 +854,19 @@ def simulate(
         )
         state_income_tax = state_result["state_tax"]
 
-        # ---- Healthcare costs ----
-        # Three pieces, all separate from federal/state income tax:
-        #   * Pre-Medicare: `health_pre65` (anyone alive AND <65)
-        #   * Medicare base: B+D premium per Medicare-enrolled spouse
-        #   * IRMAA surcharge: looked up on AGI from year T-2 (TC-11)
-        n_pre_medicare = (
-            int(alive_a and a_age < MEDICARE_ELIGIBLE_AGE)
-            + int(alive_b and b_age < MEDICARE_ELIGIBLE_AGE)
-        )
-        health_pre65_today = cfg.health_pre65_today
-        health_pre65 = (
-            health_pre65_today
-            * (n_pre_medicare / 2)
-            * (1 + cfg.inflation) ** year_offset
-        )
-
-        n_medicare = (
-            int(alive_a and a_age >= MEDICARE_ELIGIBLE_AGE)
-            + int(alive_b and b_age >= MEDICARE_ELIGIBLE_AGE)
-        )
-        medicare_base_premium = (
-            n_medicare
-            * cfg.medicare_base_b_d_premium
-            * (1 + cfg.inflation) ** year_offset
-        )
-
-        # IRMAA AGI lookback: year T uses year T-2 AGI (the SSA rule).
-        # `state.agi_lag_*` are the 1- and 2-year lagged AGIs maintained
-        # at the bottom of each loop iteration. For early years the
-        # lag is 0, which means no IRMAA hit until prior years have
-        # accumulated (the same way SSA defaults a new Medicare
-        # enrollee's IRMAA to the lowest tier in their first year).
+        # Healthcare costs (n_pre_medicare, n_medicare, health_pre65,
+        # medicare_base_premium, irmaa_*) were hoisted in v6.5 to
+        # before the conversion sizer so the liquidity guard could
+        # see them. When `cfg.irmaa_lookback_years <= 0` the hoisted
+        # irmaa_agi used the pre-conversion AGI estimate; refresh it
+        # here now that we have the post-conversion final tax_result.
         if cfg.irmaa_lookback_years <= 0:
             irmaa_agi = float(tax_result["agi"])
-        elif cfg.irmaa_lookback_years == 1:
-            irmaa_agi = state.prior_agi
-        else:
-            # 2-year lookback (the SSA-published rule). `agi_lag_2`
-            # holds AGI[T-2] at the start of year T per the State
-            # convention. Anything > 2 falls back to T-2 (the lag chain
-            # is only kept depth-2 to avoid slow-rolling out memory).
-            irmaa_agi = state.agi_lag_2
-        irmaa = irmaa_annual_surcharge(
-            irmaa_agi, n_medicare, regime=regime, filing_status=filing_status
-        )
-        irmaa_cost = irmaa["total"]
-        irmaa_tier = irmaa["tier"]
+            irmaa = irmaa_annual_surcharge(
+                irmaa_agi, n_medicare, regime=regime, filing_status=filing_status
+            )
+            irmaa_cost = irmaa["total"]
+            irmaa_tier = irmaa["tier"]
 
         # ---- ACA premium tax credit (TC-13) ----
         # Post-IRA-2022 enhanced subsidies: if the household includes
@@ -886,6 +971,17 @@ def simulate(
             # conversions — i.e. the `final_kwargs` line. Passing
             # `base_kwargs` understated the marginal bracket on every
             # cascade leg in any year with an RMD or planned conversion.
+            # v6.5: In any year a Roth conversion fires, exclude the
+            # Roth bucket from the cascade. Otherwise an under-sized
+            # liquidity check (or a fixed-dollar conversion that
+            # overshoots capacity) silently withdraws from the just-
+            # converted Roth — which under IRS rules can trigger a
+            # 10% penalty on conversion principal if the holder is
+            # < 59½ or the 5-year clock hasn't matured (neither
+            # tracked by the model). The leftover shows as `unfunded`.
+            roth_cascade_ok = not (
+                conv > 0 and cfg.protect_roth_in_conversion_years
+            )
             extra, unfunded = cover_deficit(
                 deficit=-delta,
                 state=state,
@@ -897,6 +993,7 @@ def simulate(
                 roth_already=withdraws["roth"],
                 hsa_already=hsa_withdrawal,
                 hsa_unlocked=hsa_unlocked,
+                roth_available=roth_cascade_ok,
                 regime=regime,
                 filing_status=filing_status,
                 state_tax_fn=_state_tax_fn,
@@ -1068,6 +1165,9 @@ def simulate(
                 "roth_conversion": conv,
                 "roth_conversion_a": conv_a,
                 "roth_conversion_b": conv_b,
+                "roth_conv_capped_by_liquidity": conv_capped_by_liquidity,
+                "roth_conv_bracket_target": conv_bracket_target,
+                "roth_conv_tax_capacity": tax_paying_capacity,
                 "pretax_withdrawal": withdraws["pretax"],
                 "pretax_withdrawal_a": withdraws["pretax_a"],
                 "pretax_withdrawal_b": withdraws["pretax_b"],

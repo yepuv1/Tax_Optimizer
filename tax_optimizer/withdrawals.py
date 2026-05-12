@@ -281,6 +281,7 @@ def cover_deficit(
     roth_already: float = 0.0,
     hsa_already: float = 0.0,
     hsa_unlocked: bool = False,
+    roth_available: bool = True,
     regime: TaxRegime,
     filing_status: str,
     state_tax_fn: Optional[StateTaxFn] = None,
@@ -299,6 +300,17 @@ def cover_deficit(
     HSA *before* pretax because the HSA has no RMD obligation, no
     state-tax friction in some regimes, and no widow's-penalty
     risk on a pretax balance the survivor inherits.
+
+    `roth_available=False` removes the Roth from the cascade entirely.
+    The simulator sets this in any year a Roth conversion fires, so
+    a too-aggressive conversion doesn't get its tax bill paid out of
+    the freshly-converted dollars (which would defeat the strategy
+    and — under IRS rules — potentially trigger a 10% penalty on the
+    conversion principal if the holder is < 59½ or the 5-year clock
+    hasn't matured). The leftover deficit then surfaces as `unfunded`
+    so the planner can see the liquidity miss instead of silently
+    raiding Roth. Defaults True so non-conversion years keep the
+    pre-v6.5 behavior.
 
     `*_already` is the gross already withdrawn from each bucket this
     year (so room calculations stay correct). `base_kwargs` already
@@ -360,7 +372,9 @@ def cover_deficit(
             deficit = max(0.0, deficit - max(0.0, net_produced))
 
     # 2. Roth: tax-free (blind spot: 5-year rule on conversions ignored).
-    roth_room = max(0.0, state.roth - roth_already)
+    # In conversion years the simulator passes `roth_available=False`
+    # to prevent paying conversion tax from the just-converted bucket.
+    roth_room = max(0.0, state.roth - roth_already) if roth_available else 0.0
     if deficit > 0 and roth_room > 0:
         rw = min(deficit, roth_room)
         if rw > 0:

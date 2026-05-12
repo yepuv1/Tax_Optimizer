@@ -32,6 +32,75 @@ Categories used:
 
 ## [Unreleased]
 
+### Fixed — v6.5 Roth-conversion liquidity guards
+
+- **HIGH — Roth conversion now sized by tax-paying capacity, not just
+  bracket headroom**
+  ([`tax_optimizer/conversion.py`](tax_optimizer/conversion.py),
+  [`tax_optimizer/simulator.py`](tax_optimizer/simulator.py),
+  [`tax_optimizer/config.py`](tax_optimizer/config.py)). Pre-v6.5,
+  `planned_roth_conversion` capped only at `pretax_balance - rmd`
+  and never checked whether the household had cash to pay the
+  conversion's marginal tax. An aggressive
+  `roth_conversion_target_bracket` (or any fixed conversion >
+  liquid cash) silently triggered the deficit cascade and pulled
+  tax dollars out of the **just-funded Roth bucket** — defeating
+  the strategy and, under IRS rules, potentially incurring the
+  10% penalty on Roth-conversion principal when the holder is < 59½
+  or the 5-year clock hasn't matured (neither tracked by the model).
+  New knob `cfg.cap_conversion_by_liquidity` (default True) feeds
+  the sizer a per-year `tax_paying_capacity` estimate (earned cash
+  + pension + SS + RMD net of FICA/SDI/spending/healthcare/IRA &
+  MBR contributions, plus `cfg.conversion_taxable_use_ratio` × the
+  taxable-brokerage balance — default 50%). The sizer bisects the
+  conversion total down so its federal + state marginal tax delta
+  fits inside capacity. New row columns
+  `roth_conv_capped_by_liquidity` /
+  `roth_conv_bracket_target` / `roth_conv_tax_capacity` surface the
+  bind so reports can flag it. `planned_roth_conversion` now returns
+  a `ConversionPlan` NamedTuple instead of a `(conv_a, conv_b)`
+  tuple to carry the diagnostic flags.
+- **HIGH — Deficit cascade excludes Roth in conversion years**
+  ([`tax_optimizer/withdrawals.py`](tax_optimizer/withdrawals.py),
+  [`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)).
+  `cover_deficit` accepts a new `roth_available: bool = True`
+  parameter; the simulator passes `False` whenever a conversion
+  fires AND `cfg.protect_roth_in_conversion_years=True` (the new
+  default). Any shortfall left after taxable / HSA-after-65 /
+  pretax legs now surfaces as `unfunded` instead of silently
+  raiding the Roth. Pre-v6.5 a conversion-tax shortfall in a
+  gap year would withdraw from the *same* Roth bucket the
+  conversion just funded — leaving the user with $0 of new Roth
+  after paying tax with Roth dollars.
+- **MEDIUM — Spending need + healthcare costs hoisted ahead of
+  conversion sizer** ([`tax_optimizer/simulator.py`](tax_optimizer/simulator.py)).
+  `years_until_horizon`, `net_need`, the HSA LTC pay-down,
+  `health_pre65`, `medicare_base_premium`, and lagged-AGI IRMAA
+  all compute *before* the conversion now, so the liquidity guard
+  sees the household's full obligation stack. The `_state_tax_fn`
+  closure used by the cascade solvers also hoists up so the
+  bisection captures CA / NY / MA state-tax marginal bite. When
+  `cfg.irmaa_lookback_years <= 0` the hoisted estimate uses
+  pre-conversion AGI and the simulator refreshes IRMAA after
+  final tax — minor numerical refinement for users on the
+  zero-lookback setting.
+- **Knobs added** (all on `Config`):
+  - `cap_conversion_by_liquidity: bool = True`
+  - `protect_roth_in_conversion_years: bool = True`
+  - `conversion_taxable_use_ratio: float = 0.5`
+
+### Tests — v6.5 (new file)
+
+- `tests/test_conversion_liquidity_v65.py` — 11 new regression tests
+  covering: liquidity-cap binds when aggressive bracket-fill meets
+  small taxable balance; capped conversion doesn't raid Roth;
+  `conversion_taxable_use_ratio` knob varies the cap monotonically;
+  Roth protection surfaces unfunded vs raiding when enabled;
+  both knobs off reproduces pre-v6.5 behavior;
+  `planned_roth_conversion` direct unit tests for bisection
+  monotonicity, CA-vs-NV state-tax tightening, and marginal-tax
+  vs capacity invariant.
+
 ### Fixed — v6.4 Tax-module correctness sweep
 
 - **HIGH — Age-65+ additional standard deduction is now modeled**
