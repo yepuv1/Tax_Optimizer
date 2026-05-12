@@ -44,6 +44,8 @@ def winning_cfg(results: dict[str, StrategyResult], default_cfg: Config) -> tupl
 # nested path into the displayed param name.
 _NESTED_INPUTS_FIELDS: dict[str, tuple[str, str]] = {
     "ss_start_age": ("ss", "start_age"),
+    "ss_start_age_a": ("ss", "start_age_a"),
+    "ss_start_age_b": ("ss", "start_age_b"),
     "pension_start_age": ("pension", "start_age"),
 }
 
@@ -115,9 +117,14 @@ def tornado_sensitivity(
         ("spouse_b_retire_age",
             int_clamp(inputs.spouse_b_retire_age - 2, 50, 75),
             int_clamp(inputs.spouse_b_retire_age + 2, 50, 75)),
-        ("ss_start_age",
-            int_clamp(inputs.ss.start_age - 3, 62, 70),
-            int_clamp(inputs.ss.start_age + 3, 62, 70)),
+        # Perturb per-spouse SS claim ages using the effective age (honors
+        # start_age_a/b when set, falls back to the legacy start_age).
+        ("ss_start_age_a",
+            int_clamp(inputs.ss.effective_start_age_a - 3, 62, 70),
+            int_clamp(inputs.ss.effective_start_age_a + 3, 62, 70)),
+        ("ss_start_age_b",
+            int_clamp(inputs.ss.effective_start_age_b - 3, 62, 70),
+            int_clamp(inputs.ss.effective_start_age_b + 3, 62, 70)),
         ("nominal_growth_rate",
             max(0.0, base_cfg.nominal_growth_rate - 0.01),
             base_cfg.nominal_growth_rate + 0.01),
@@ -194,9 +201,12 @@ def _action_for_param(
             f"{verb.capitalize()} {spouse}'s retirement to age {int(target)} "
             f"(currently {int(base_val)})."
         )
-    if param == "ss_start_age":
+    if param in ("ss_start_age", "ss_start_age_a", "ss_start_age_b"):
+        spouse_label = " (Spouse A)" if param == "ss_start_age_a" else (
+            " (Spouse B)" if param == "ss_start_age_b" else ""
+        )
         target = int(hi if direction == "higher" else lo)
-        return f"Begin Social Security at age {target} (currently {int(base_val)})."
+        return f"Begin Social Security{spouse_label} at age {target} (currently {int(base_val)})."
     if param == "annual_expenses_today":
         target = hi if direction == "higher" else lo
         verb = "trim" if target < base_val else "budget"
@@ -273,9 +283,10 @@ def render_actions(
         better_dir = "higher" if d_hi > d_lo else "lower"
         better_delta = max(d_hi, d_lo)
         action = _action_for_param(param, better_dir, lo, hi, base_cfg, base_inputs)
+        delta_verb = "adds" if better_delta >= 0 else "costs"
         lines.append(
             f"   - {param} - swing ${row['swing']:,.0f}; pushing it {better_dir} "
-            f"adds ~${better_delta:,.0f}. {action}"
+            f"{delta_verb} ~${abs(better_delta):,.0f}. {action}"
         )
 
     lines.append("")

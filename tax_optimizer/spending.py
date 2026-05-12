@@ -112,7 +112,7 @@ class SpendingProfile:
             phases=[
                 SpendingPhase(0, 64, 1.00, "working"),
                 SpendingPhase(65, 74, 1.15, "go-go"),
-                SpendingPhase(75, 84, 0.95, "slow-go"),
+                SpendingPhase(75, 84, 0.90, "slow-go"),
                 SpendingPhase(85, 200, 1.00, "no-go"),
             ],
             ltc_shock=LongTermCareShock(years=ltc_years, annual_cost_today=ltc_annual_today),

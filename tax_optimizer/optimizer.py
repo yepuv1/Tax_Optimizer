@@ -159,7 +159,7 @@ def _terminal_objective(
 ) -> float:
     cfg, inputs = x_to_overrides(x, base_cfg, base_inputs)
     df = simulate(cfg, inputs)
-    liquid = df["pretax_balance"] + df["roth_balance"] + df["taxable_balance"]
+    liquid = df["pretax_balance"] + df["roth_balance"] + df["taxable_balance"] + df["hsa_balance"]
     floor = df["spending_need"]
     deficit = float((floor - liquid).clip(lower=0).sum())
     irmaa_total = float(df["irmaa"].sum())

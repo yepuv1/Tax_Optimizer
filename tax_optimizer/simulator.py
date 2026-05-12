@@ -22,7 +22,7 @@ from .config import Config
 from .conversion import planned_roth_conversion
 from .inputs import Inputs, claim_age_factor
 from .ira import allocate_ira_contributions
-from .limits import SECTION_415C_LIMIT, elective_deferral_cap, hsa_family_cap
+from .limits import ELECTIVE_DEFERRAL_LIMIT, SECTION_415C_LIMIT, elective_deferral_cap, hsa_family_cap
 from .payroll import OASDI_WAGE_BASE_2026, fica_household, state_sdi
 from .pension import (
     PENSION_INTEREST,
@@ -246,13 +246,17 @@ def simulate(
             if (b_working and inputs.spouse_b_mega_backdoor_enabled)
             else 0.0
         )
+        # §415(c) room: catch-up is excluded from the §415(c) limit per
+        # IRS rules, so subtract only the base elective deferral here.
+        a_base_deferral = min(a_target, ELECTIVE_DEFERRAL_LIMIT) if a_working else 0.0
+        b_base_deferral = min(b_target, ELECTIVE_DEFERRAL_LIMIT) if b_working else 0.0
         a_after_tax_room = max(
             0.0,
-            SECTION_415C_LIMIT - a_total_contrib - a_employer_match,
+            SECTION_415C_LIMIT - a_base_deferral - a_employer_match,
         )
         b_after_tax_room = max(
             0.0,
-            SECTION_415C_LIMIT - b_total_contrib - b_employer_match,
+            SECTION_415C_LIMIT - b_base_deferral - b_employer_match,
         )
         a_after_tax = (
             min(spouse_a_salary * a_after_tax_pct, a_after_tax_room)
@@ -358,7 +362,7 @@ def simulate(
         # not $200k per W-2. `fica_household` handles that; per-W-2
         # OASDI and base Medicare still come out of `fica_employee`
         # internally.
-        wage_base_y = OASDI_WAGE_BASE_2026 * (1 + cfg.inflation) ** year_offset
+        wage_base_y = OASDI_WAGE_BASE_2026 * (1 + cfg.wage_growth) ** year_offset
         fica_combined = fica_household(
             a_w2_wages, b_w2_wages,
             filing_status=filing_status,
@@ -638,7 +642,8 @@ def simulate(
         # point of the triple-tax-advantaged shelter). Net_need drops
         # by the HSA draw, taxes on it stay zero (no AGI hit).
         ltc_today = 0.0
-        if spending.ltc_shock and years_until_horizon < spending.ltc_shock.years:
+        ltc_anchor = years_until_death if years_until_death is not None else years_until_horizon
+        if spending.ltc_shock and ltc_anchor >= 0 and ltc_anchor < spending.ltc_shock.years:
             ltc_today = (
                 spending.ltc_shock.annual_cost_today
                 * (1 + spending.inflation) ** year_offset
@@ -779,7 +784,7 @@ def simulate(
             conv_b = 0.0
         conv = conv_a + conv_b
         if conv > 0:
-            base_kwargs["roth_conversion"] = conv
+            base_kwargs["roth_conversion"] = base_kwargs.get("roth_conversion", 0.0) + conv
             pre_a = state.spouse_a_pretax
             pre_b = state.spouse_b_pretax
             state.spouse_a_pretax = max(0.0, pre_a - conv_a)
@@ -1084,8 +1089,11 @@ def simulate(
 
         # ---- Growth via MarketModel + AssetLocation ----
         eq_r, bd_r = market.returns(year_offset)
-        state.spouse_a_pretax *= 1 + asset_loc.pretax.annual_return(eq_r, bd_r)
-        state.spouse_b_pretax *= 1 + asset_loc.pretax.annual_return(eq_r, bd_r)
+        pretax_return = 1 + asset_loc.pretax.annual_return(eq_r, bd_r)
+        state.spouse_a_pretax *= pretax_return
+        state.spouse_b_pretax *= pretax_return
+        state.spouse_a_pretax_ira *= pretax_return
+        state.spouse_b_pretax_ira *= pretax_return
         state.roth *= 1 + asset_loc.roth.annual_return(eq_r, bd_r)
         state.taxable *= 1 + asset_loc.taxable.annual_return(eq_r, bd_r) - cfg.taxable_drag
         state.hsa *= 1 + asset_loc.hsa.annual_return(eq_r, bd_r)

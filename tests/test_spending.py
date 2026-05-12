@@ -41,9 +41,9 @@ class TestSmileProfile:
         # Go-go: age 65 → 1.15
         rec, _ = profile.amount_for(year_offset=15, age_a=65, years_until_horizon=25)
         assert rec == pytest.approx(115_000.0)
-        # Slow-go: age 75 → 0.95
+        # Slow-go: age 75 → 0.90 (10% below base, per Blanchett model)
         rec, _ = profile.amount_for(year_offset=25, age_a=75, years_until_horizon=15)
-        assert rec == pytest.approx(95_000.0)
+        assert rec == pytest.approx(90_000.0)
         # No-go: age 85 → 1.00
         rec, _ = profile.amount_for(year_offset=35, age_a=85, years_until_horizon=5)
         assert rec == pytest.approx(100_000.0)

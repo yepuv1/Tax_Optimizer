@@ -346,9 +346,9 @@ def state_tax(
 STATELESS: StateTaxRegime = StateTaxRegime(name="stateless")
 
 
-# California 2024 MFJ brackets (FTB published; high earner rates
-# include the 1% mental-health surcharge above $1M — folded into the
-# top bracket here to keep the table simple).
+# California 2024 MFJ brackets (FTB published). The 1% Mental Health
+# Services Tax (Prop 63) applies on income above $1M, raising the
+# effective rate by 1% in those brackets.
 _CA_MFJ: Sequence[Bracket] = [
     (0,           20_824,    0.0100),
     (20_824,      49_368,    0.0200),
@@ -357,8 +357,9 @@ _CA_MFJ: Sequence[Bracket] = [
     (108_162,    136_700,    0.0800),
     (136_700,    698_274,    0.0930),
     (698_274,    837_922,    0.1030),
-    (837_922,  1_396_542,    0.1130),
-    (1_396_542, math.inf,    0.1230),
+    (837_922,  1_000_000,    0.1130),
+    (1_000_000, 1_396_542,   0.1230),  # 11.3% + 1% MH surcharge
+    (1_396_542, math.inf,    0.1330),  # 12.3% + 1% MH surcharge
 ]
 _CA_SINGLE: Sequence[Bracket] = [
     (0,           10_412,    0.0100),
@@ -369,7 +370,8 @@ _CA_SINGLE: Sequence[Bracket] = [
     (68_350,     349_137,    0.0930),
     (349_137,    418_961,    0.1030),
     (418_961,    698_271,    0.1130),
-    (698_271,  math.inf,     0.1230),
+    (698_271,  1_000_000,    0.1230),  # 12.3% base top rate
+    (1_000_000, math.inf,    0.1330),  # 12.3% + 1% MH surcharge
 ]
 
 CA: StateTaxRegime = StateTaxRegime(
@@ -426,8 +428,11 @@ NY: StateTaxRegime = StateTaxRegime(
     ltcg_brackets_single=None,
     ss_taxable_fraction=0.0,
     # NY exempts up to $20k/filer of pension + IRA + Roth-conv at 59½+.
+    # Integer age 60 is the conservative approximation: someone who is 59
+    # at year-start is only 59.5 mid-year, so they don't qualify for the
+    # full year. Using 60 avoids granting the exclusion a year early.
     retirement_exclusion_per_filer=20_000.0,
-    retirement_exclusion_min_age=59,
+    retirement_exclusion_min_age=60,
 )
 
 

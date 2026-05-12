@@ -136,9 +136,15 @@ def withdraw_for_need(
     ctx = dict(base_kwargs)
     ctx["pretax_withdrawal"] = ctx.get("pretax_withdrawal", 0.0) + rmd_total
 
-    base_tax = federal_tax(regime=regime, filing_status=filing_status, **base_kwargs)["tax"]
-    rmd_tax = federal_tax(regime=regime, filing_status=filing_status, **ctx)["tax"] - base_tax
-    rmd_net = rmd_total - max(0.0, rmd_tax)
+    base_fed = federal_tax(regime=regime, filing_status=filing_status, **base_kwargs)
+    base_tax = base_fed["tax"]
+    rmd_fed = federal_tax(regime=regime, filing_status=filing_status, **ctx)
+    rmd_tax = rmd_fed["tax"] - base_tax
+    state_rmd_delta = (
+        state_tax_fn(ctx, rmd_fed["ss_taxable"])
+        - state_tax_fn(base_kwargs, base_fed["ss_taxable"])
+    ) if state_tax_fn else 0.0
+    rmd_net = rmd_total - max(0.0, rmd_tax + state_rmd_delta)
     remaining = max(0.0, net_need - rmd_net)
 
     pretax_a_w = a_rmd
@@ -169,10 +175,13 @@ def withdraw_for_need(
             )
             ctx_after = dict(ctx)
             ctx_after["ltcg"] = ctx_after.get("ltcg", 0.0) + tw * (1 - basis_frac)
-            net_from_t = tw - (
-                federal_tax(regime=regime, filing_status=filing_status, **ctx_after)["tax"]
-                - federal_tax(regime=regime, filing_status=filing_status, **ctx)["tax"]
-            )
+            fed_ctx = federal_tax(regime=regime, filing_status=filing_status, **ctx)
+            fed_ctx_after = federal_tax(regime=regime, filing_status=filing_status, **ctx_after)
+            state_delta = (
+                state_tax_fn(ctx_after, fed_ctx_after["ss_taxable"])
+                - state_tax_fn(ctx, fed_ctx["ss_taxable"])
+            ) if state_tax_fn else 0.0
+            net_from_t = tw - (fed_ctx_after["tax"] - fed_ctx["tax"]) - state_delta
             taxable_w += tw
             ctx = ctx_after
             remaining = max(0.0, remaining - max(0.0, net_from_t))
@@ -198,7 +207,6 @@ def withdraw_for_need(
         if avail > 0 and remaining > 0:
             w_t = remaining * (state.taxable / avail)
             w_p = remaining * (max(pretax_room, 0) / avail)
-            w_r = remaining * (state.roth / avail)
             tw = min(
                 _solve_taxable_for_net(
                     w_t, ctx, basis_frac,
@@ -207,8 +215,17 @@ def withdraw_for_need(
                 ),
                 state.taxable,
             )
+            ctx_before_tw = dict(ctx)
             ctx["ltcg"] = ctx.get("ltcg", 0.0) + tw * (1 - basis_frac)
             taxable_w += tw
+            fed_tw_before = federal_tax(regime=regime, filing_status=filing_status, **ctx_before_tw)
+            fed_tw_after = federal_tax(regime=regime, filing_status=filing_status, **ctx)
+            state_delta_tw = (
+                state_tax_fn(ctx, fed_tw_after["ss_taxable"])
+                - state_tax_fn(ctx_before_tw, fed_tw_before["ss_taxable"])
+            ) if state_tax_fn else 0.0
+            net_tw = tw - (fed_tw_after["tax"] - fed_tw_before["tax"]) - state_delta_tw
+            remaining = max(0.0, remaining - max(0.0, net_tw))
             pw = min(
                 _solve_pretax_for_net(
                     w_p, ctx,
@@ -220,8 +237,18 @@ def withdraw_for_need(
             ax, bx = split_extra(pw)
             pretax_a_w += ax
             pretax_b_w += bx
+            ctx_before_pw = dict(ctx)
             ctx["pretax_withdrawal"] += pw
-            roth_w += min(w_r, state.roth)
+            fed_pw_before = federal_tax(regime=regime, filing_status=filing_status, **ctx_before_pw)
+            fed_pw_after = federal_tax(regime=regime, filing_status=filing_status, **ctx)
+            state_delta_pw = (
+                state_tax_fn(ctx, fed_pw_after["ss_taxable"])
+                - state_tax_fn(ctx_before_pw, fed_pw_before["ss_taxable"])
+            ) if state_tax_fn else 0.0
+            net_pw = pw - (fed_pw_after["tax"] - fed_pw_before["tax"]) - state_delta_pw
+            remaining = max(0.0, remaining - max(0.0, net_pw))
+            # Roth absorbs its proportional share plus any cap-induced shortfall.
+            roth_w += min(remaining, state.roth)
 
     elif strategy == "bracket_fill":
         ti_now = federal_tax(regime=regime, filing_status=filing_status, **ctx)["taxable_income"]
@@ -232,7 +259,7 @@ def withdraw_for_need(
             cap = min(headroom, pretax_room)
             extra = min(
                 _solve_pretax_for_net(
-                    min(remaining, cap * 0.85), ctx,
+                    remaining, ctx,
                     regime=regime, filing_status=filing_status,
                     state_tax_fn=state_tax_fn,
                 ),
@@ -241,8 +268,16 @@ def withdraw_for_need(
             ax, bx = split_extra(extra)
             pretax_a_w += ax
             pretax_b_w += bx
+            ctx_before_extra = dict(ctx)
             ctx["pretax_withdrawal"] += extra
-            remaining = max(0.0, remaining - extra * 0.78)
+            fed_before_p = federal_tax(regime=regime, filing_status=filing_status, **ctx_before_extra)
+            fed_after_p = federal_tax(regime=regime, filing_status=filing_status, **ctx)
+            state_delta_p = (
+                state_tax_fn(ctx, fed_after_p["ss_taxable"])
+                - state_tax_fn(ctx_before_extra, fed_before_p["ss_taxable"])
+            ) if state_tax_fn else 0.0
+            net_extra = extra - (fed_after_p["tax"] - fed_before_p["tax"]) - state_delta_p
+            remaining = max(0.0, remaining - max(0.0, net_extra))
         if remaining > 0 and state.taxable > 0:
             tw = min(
                 _solve_taxable_for_net(
@@ -252,9 +287,17 @@ def withdraw_for_need(
                 ),
                 state.taxable,
             )
+            ctx_before_taxable = dict(ctx)
             ctx["ltcg"] = ctx.get("ltcg", 0.0) + tw * (1 - basis_frac)
             taxable_w += tw
-            remaining = max(0.0, remaining - tw * 0.97)
+            fed_before_t = federal_tax(regime=regime, filing_status=filing_status, **ctx_before_taxable)
+            fed_after_t = federal_tax(regime=regime, filing_status=filing_status, **ctx)
+            state_delta_t = (
+                state_tax_fn(ctx, fed_after_t["ss_taxable"])
+                - state_tax_fn(ctx_before_taxable, fed_before_t["ss_taxable"])
+            ) if state_tax_fn else 0.0
+            net_tw = tw - (fed_after_t["tax"] - fed_before_t["tax"]) - state_delta_t
+            remaining = max(0.0, remaining - max(0.0, net_tw))
         if remaining > 0 and state.roth > 0:
             roth_w += min(remaining, state.roth)
     else:
