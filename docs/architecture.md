@@ -511,7 +511,7 @@ sequenceDiagram
     L->>Med: Medicare base + IRMAA (2-yr lookback)
     L->>L: tax_paying_capacity = earned_cash - committed - taxable_slice
     L->>Cv: planned_roth_conversion(... tax_paying_capacity ...)
-    L->>S: roth += conv; pretax -= conv
+    L->>S: roth += conv, pretax -= conv
     L->>T: federal_tax + state_tax on full income line
     L->>L: delta = cash_inflow - taxes - mega_backdoor - need
     alt delta < 0
