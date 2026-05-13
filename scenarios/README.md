@@ -110,6 +110,13 @@ A focused reference for the two most-tuned strategy axes. All defaults
 below match `template.json`; file references point at the canonical
 definition.
 
+> **Mechanism reference:** [`docs/roth_conversion.md`](../docs/roth_conversion.md)
+> walks through *how* the simulator sizes conversions year-by-year
+> (sizing modes, `tax_paying_capacity` derivation, liquidity-guard
+> bisection, Roth protection in the cascade) with a worked numerical
+> example. This section here is the JSON / Config knob *reference* —
+> read both together when tuning a scenario.
+
 ### A. Roth-conversion sizing (`Config`)
 
 #### A1. Pick a mode (exactly one)

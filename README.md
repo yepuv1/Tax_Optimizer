@@ -42,6 +42,7 @@ The deterministic engine models federal brackets, LTCG, NIIT, IRMAA, Social-Secu
 │   └── plots.py                      # matplotlib helpers
 ├── docs/
 │   ├── architecture.md               # per-module reference + cross-cutting diagrams
+│   ├── roth_conversion.md            # how Roth conversion sizing + liquidity guards work
 │   ├── scenario_guide.md             # reference for every scenario JSON field
 │   └── market_models.md              # market-model landscape & design rationale
 ├── CHANGELOG.md                      # feature / fix log (update on every change)
@@ -591,6 +592,7 @@ Federal bracket numbers, IRS Uniform Lifetime divisors, pension-formula coeffici
 |---|---|
 | [`CHANGELOG.md`](CHANGELOG.md) | Every feature, behavior change, and bug fix shipped (and the rules for adding new entries). The first stop when "what's new?" or "when did we add X?" comes up. The `v6` block documents the action-report polish covered in [What the action report contains](#what-the-action-report-contains) above. |
 | [`docs/architecture.md`](docs/architecture.md) | Per-module deep dive: what each `tax_optimizer/*.py` file does, how the modules layer together, and Mermaid diagrams for the cross-cutting flows (year-loop sequence, contribution cascade, withdrawal cascade, tax pipeline, Roth-conversion liquidity guard, optimizer/MC relationship). Start here when extending or auditing the package. |
+| [`docs/roth_conversion.md`](docs/roth_conversion.md) | Mechanism-focused walkthrough of Roth conversion sizing (fixed vs bracket-fill), the v6.5 liquidity guard (`tax_paying_capacity` formula + bisection), Roth protection in the deficit cascade, and the seven knobs that control it all. Includes a numerical worked example and audit recipes for the diagnostic columns. |
 | [`docs/scenario_guide.md`](docs/scenario_guide.md) | Reference for every field in a scenario JSON — `config.*`, `inputs.*`, all knobs and their defensible ranges. |
 | [`docs/market_models.md`](docs/market_models.md) | Landscape of retirement Monte Carlo market models, the industry segments that use each one, and the design rationale behind which models we ship (vs. deliberately skip). Includes the v6 `cross_model_check` API for surfacing model-choice risk in the action report. |
 

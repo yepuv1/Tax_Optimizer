@@ -387,6 +387,11 @@ whose marginal federal+state tax stays within the household's
 `ConversionPlan(conv_a, conv_b, capped_by_liquidity, bracket_target_total)`
 NamedTuple.
 
+> **See [`docs/roth_conversion.md`](roth_conversion.md)** for the full
+> mechanism walkthrough — `tax_paying_capacity` derivation, bisection
+> mechanics, Roth-protection rationale, worked numerical example, and
+> the seven knobs that control all of it.
+
 ```mermaid
 flowchart TD
     A[Bracket-fill or fixed amount sizing] --> B{tax_paying_capacity supplied?}
@@ -590,13 +595,14 @@ Returns a `MonteCarloResult` with:
 ### `tax_optimizer/optimizer.py` — `optimize_household`
 
 Wraps `scipy.optimize.differential_evolution` around a **dynamically-
-sized decision vector**:
+sized decision vector** (see `_build_decision_vector_meta`):
 
-- Always present: `total_contrib_pct_a`, `total_contrib_pct_b`,
-  `roth_401k_pct_a`, `roth_401k_pct_b`, `bracket_fill_target`
-- Conditionally present (gated by `inputs` flags):
-  - mega-backdoor `after_tax_401k_pct` per spouse if enabled
-  - SS claim age per spouse if `cfg.optimize_ss_claim_age = True`
+- Always present: `roth_401k_pct_a`, `roth_401k_pct_b`,
+  `conv_bracket_idx` (discrete index into `BRACKET_CHOICES`, writes
+  through to `cfg.roth_conversion_target_bracket`)
+- Conditionally present (gated by `inputs` / `cfg` flags):
+  - `mega_backdoor_pct_a/b` if `inputs.spouse_*_mega_backdoor_enabled`
+  - `ss_claim_age_a/b` if `cfg.optimize_ss_claim_age = True`
 
 Three objective functions selectable via `ObjectiveType`:
 
@@ -896,6 +902,9 @@ optimizer caches partial work where possible and exposes a
 
 ## 11. Further reading
 
+- [`docs/roth_conversion.md`](roth_conversion.md) — mechanism-focused
+  deep dive on Roth conversion sizing, the v6.5 liquidity guard, and
+  every knob that shapes the year-by-year conversion plan
 - [`docs/scenario_guide.md`](scenario_guide.md) — exhaustive JSON
   scenario reference (all knobs, every nested block, polymorphic
   forms)
