@@ -20,6 +20,7 @@ from .config import Config
 from .inputs import (
     CurrentContrib,
     CurrentIncome,
+    HealthPremiums,
     Inputs,
     PensionInputs,
     SocialSecurity,
@@ -73,6 +74,7 @@ __all__ = [
     "StartingBalances",
     "CurrentIncome",
     "CurrentContrib",
+    "HealthPremiums",
     "PensionInputs",
     "SocialSecurity",
     "MarketModel",

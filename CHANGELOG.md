@@ -32,6 +32,153 @@ Categories used:
 
 ## [Unreleased]
 
+### Added — v6.6 mega-backdoor auto-spillover
+
+**Why it matters:** Pre-v6.6, setting `spouse_*_total_contrib_pct *
+salary > §402(g) cap` silently dropped the excess from the 401(k)
+buckets and left it as taxable paycheck cash. Users frequently set
+"target" percentages thinking the simulator would do the right thing
+with the overflow; instead, every dollar above the cap got taxed at
+ordinary rates and parked in the brokerage. v6.6 changes this when
+the plan supports a mega-backdoor: the excess auto-routes into the
+after-tax 401(k) bucket up to the §415(c) ceiling, then immediately
+converts to Roth (existing same-day in-plan conversion path). Result:
+no more silent leakage to taxable for households whose plans support
+"Spillover After-Tax" (Vanguard) or equivalent (Fidelity / Schwab).
+
+- **New behavior gated by existing knob** — when
+  `spouse_*_mega_backdoor_enabled = True`, the simulator computes
+  `excess = max(0, target - §402(g) cap)` per spouse and routes
+  `min(excess, §415(c) room)` into the after-tax bucket. The
+  explicit `spouse_*_after_tax_401k_pct` then stacks on top, capped
+  at whatever §415(c) room remains.
+- **Crowd-out is fully auditable** — if the auto-spillover consumes
+  all the §415(c) room, the user's explicit pct gets clamped and
+  the uncovered dollars stay as taxable cash (same fate as excess
+  beyond the §415(c) ceiling — no silent re-routing).
+- **No new Config knobs** — gating is purely on the existing
+  per-spouse `mega_backdoor_enabled` flag. The §415(c) and §402(g)
+  constants in `tax_optimizer/limits.py` are unchanged.
+
+#### New diagnostic columns on the simulation DataFrame
+
+- `excess_deferral_a` / `excess_deferral_b` — raw `target − §402(g) cap`.
+  Always emitted (even when mega-backdoor is off), so users can see
+  today's silent-cap behavior for the first time.
+- `mega_backdoor_spillover_a` / `mega_backdoor_spillover_b` — the
+  auto-routed portion only. Subset of `mega_backdoor_{a,b}`.
+- `after_tax_target_uncovered_a` / `after_tax_target_uncovered_b` —
+  explicit-pct target dollars that didn't fit into the remaining
+  §415(c) room. Non-zero when the auto-spillover crowded out the
+  user's explicit `after_tax_401k_pct`.
+- (Existing `mega_backdoor_a` / `mega_backdoor_b` keeps its meaning:
+  total after-tax routed to Roth = auto + explicit.)
+
+#### Tests — `tests/test_mega_backdoor_spillover_v66.py` (15 new)
+
+- Disabled gate: `mega_backdoor_enabled=False` with excess → excess
+  surfaces in diagnostic column, no spillover (pre-v6.6 behavior).
+- Basic spillover when excess < §415(c) room.
+- Spillover clipped at §415(c) room when excess > room.
+- Explicit pct stacks on top when room allows.
+- Explicit crowded out when auto consumes all room; uncovered
+  diagnostic shows the gap.
+- Age-50+ catch-up correctly excluded from §415(c) room.
+- Employer match consumes §415(c) room proportionally.
+- Cash conservation: Roth grows by spillover, taxable falls by the
+  same dollars; federal tax unchanged (Box 1 uses capped deferral
+  in both paths).
+- Per-spouse independence: only the enabled spouse spills.
+- Parametrized invariant: total mega_backdoor ≤ §415(c) ceiling for
+  a sweep of contribution percentages.
+
+#### Behavior change to watch
+
+- Scenarios with `mega_backdoor_enabled=True` AND
+  `total_contrib_pct × salary > §402(g) cap` will see incremental
+  Roth contributions where pre-v6.6 there was silent cash leakage.
+  None of the bundled scenarios (template / example01 / example02)
+  trigger this — their `total_contrib_pct × salary` values are all
+  below the §402(g) cap. To recover legacy silent-drop behavior on
+  a per-spouse basis, set `spouse_*_mega_backdoor_enabled = False`
+  (which also disables the explicit `after_tax_401k_pct` knob).
+
+---
+
+### Added — v6.6 Section 125 cafeteria-plan health premiums
+
+**Why it matters:** Medical / dental / vision insurance premiums paid
+under a §125 cafeteria plan are pre-tax for federal income tax, FICA
+(OASDI + Medicare), and state income tax. Pre-v6.6 the model had no
+way to express the M/D/V employee share, so households with $10k–$20k
+of annual premium were over-stating both Box 1 wages and FICA wages,
+which propagated to over-stated taxes and Social Security earnings
+records throughout the working-year horizon. v6.6 closes the gap.
+
+- **New `inputs.health_premiums`** — `HealthPremiums` dataclass with
+  six annual-dollar fields:
+  `spouse_a_medical`, `spouse_a_dental`, `spouse_a_vision`,
+  `spouse_b_medical`, `spouse_b_dental`, `spouse_b_vision`.
+  All default to `0.0` (no behavior change for unset scenarios).
+  Includes `total_a`, `total_b`, `total` convenience properties.
+  Exported from the top-level `tax_optimizer` package.
+- **New `Config.section125_reduces_fica_wages`** (default `True`) —
+  controls whether §125 cafeteria deductions (M/D/V premiums **and**
+  the HSA contribution) also reduce FICA wages and CA SDI wages.
+  When `True` the simulator computes FICA on post-§125 wages
+  (matching real Box 3 / Box 5 payroll); when `False` it falls back
+  to the pre-v6.6 approximation of FICA-on-gross. The Box 1 / federal
+  / state tax reductions are always on (those have never been
+  approximated).
+- **Per-spouse gating** — a spouse's premium is dropped when that
+  spouse isn't working (no W-2 to deduct from). Combined per-spouse
+  premium is clamped at that spouse's gross wages so Box 1 never
+  goes negative.
+- **HSA also benefits** — the v6.6 §125 path also fixes the
+  long-standing FICA-on-gross-HSA approximation documented in
+  `payroll.py`. Households with an HSA contribution now correctly
+  save 7.65% × HSA on FICA in addition to the federal/state savings.
+
+#### New diagnostic columns on the simulation DataFrame
+
+- `health_premium_a` — annual §125 deduction for spouse A
+- `health_premium_b` — annual §125 deduction for spouse B
+- `health_premium_total` — sum of both (for quick visibility)
+
+#### Tests — `tests/test_health_premiums_v66.py` (10 new)
+
+- Federal tax reduction ≈ marginal × premium (within ±$200 across
+  brackets).
+- FICA reduction = 7.65% × premium when flag on; **no** FICA delta
+  when flag off (back-compat path).
+- CA state tax + SDI reductions when state regime is CA.
+- Per-spouse gating: premium zeroes out the year a spouse retires;
+  non-working spouse's premium is ignored even if set.
+- Clamp at gross wages (you can't §125-deduct more than you earn).
+- Cash-flow consistency: end-of-year taxable balance drops by
+  ~(premium − tax savings), proving the cash actually leaves the
+  household.
+
+#### Behavior change to watch
+
+- The CA-SDI baseline test in `tests/test_tax_v64.py` was updated to
+  explicitly zero `inputs.contrib.hsa_family` (the default HSA family
+  contribution would otherwise reduce CA SDI base by ~$94/yr under
+  the new default-on §125 treatment). The fix is real-world correct
+  (HSA dollars come out of post-§125 wages); existing scenarios with
+  HSA contributions will see a small (single-digit-dollar) FICA + SDI
+  reduction. Set `cfg.section125_reduces_fica_wages = False` to
+  reproduce pre-v6.6 numbers exactly.
+
+#### Template / scenarios
+
+- `scenarios/template.json` gains the `inputs.health_premiums` block
+  (all six fields zeroed) and the new `cfg.section125_reduces_fica_wages`
+  knob. Drift tests in `tests/test_scenario_template.py` extended to
+  cover `HealthPremiums`.
+
+---
+
 ### Added — Scenario template + drift tests
 
 - **New `scenarios/template.json`** — canonical reference listing every

@@ -96,6 +96,65 @@ class CurrentContrib:
 
 
 @dataclass
+class HealthPremiums:
+    """Employer-sponsored health-insurance premiums — employee share.
+
+    Quote **annual dollars** (NOT monthly) of the employee-paid
+    portion of medical, dental, and vision insurance premiums per
+    spouse. The employer-paid share is irrelevant for tax purposes
+    (it's already excluded from W-2 income).
+
+    Tax treatment under IRC §125 (cafeteria plan / "premium-only
+    plan"):
+
+      * Reduces **federal Box 1 wages** (like a traditional 401(k)).
+      * Reduces **FICA wages** — OASDI (Social Security) and the
+        full Medicare base. This is the key difference from 401(k):
+        a traditional 401(k) does NOT reduce FICA, but §125 cafeteria
+        deductions do. (Controlled by `cfg.section125_reduces_fica_wages`,
+        default True; setting False recovers the pre-v6.6 approximation.)
+      * Reduces **state wages** in every conforming state (essentially
+        all states with an income tax — flows through automatically
+        because state tax keys off `wages_box1`).
+
+    Gating:
+
+      * A spouse must be working (`age < retire_age` AND alive) for
+        their premium to apply. Once retired, the simulator zeros
+        the spouse's premium — retiree healthcare costs belong on
+        `cfg.health_pre65_today` (post-retirement pre-Medicare) or
+        `cfg.medicare_base_b_d_premium` (Medicare-eligible).
+      * The combined per-spouse deduction is clamped at that
+        spouse's gross W-2 wages (you can't §125-deduct more than
+        you earn).
+
+    Quote what shows up on each spouse's paystub as
+    "MEDICAL / DENTAL / VISION (pre-tax)" deductions, summed over
+    the year. For an HSA you do NOT add the HSA contribution here;
+    that's already on `inputs.contrib.hsa_family`.
+    """
+
+    spouse_a_medical: float = 0.0
+    spouse_a_dental: float = 0.0
+    spouse_a_vision: float = 0.0
+    spouse_b_medical: float = 0.0
+    spouse_b_dental: float = 0.0
+    spouse_b_vision: float = 0.0
+
+    @property
+    def total_a(self) -> float:
+        return self.spouse_a_medical + self.spouse_a_dental + self.spouse_a_vision
+
+    @property
+    def total_b(self) -> float:
+        return self.spouse_b_medical + self.spouse_b_dental + self.spouse_b_vision
+
+    @property
+    def total(self) -> float:
+        return self.total_a + self.total_b
+
+
+@dataclass
 class PensionInputs:
     """Cash-balance pension inputs (BP-RAP-calibrated).
 
@@ -299,6 +358,7 @@ class Inputs:
     contrib: CurrentContrib = field(default_factory=CurrentContrib)
     pension: PensionInputs = field(default_factory=PensionInputs)
     ss: SocialSecurity = field(default_factory=SocialSecurity)
+    health_premiums: HealthPremiums = field(default_factory=HealthPremiums)
 
     # DEPRECATED (v7): kept as a dataclass field for backward compatibility,
     # but the simulator does NOT read it. The simulator's spending base

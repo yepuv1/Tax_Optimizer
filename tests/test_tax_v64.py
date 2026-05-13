@@ -363,6 +363,12 @@ class TestCAStateSDI:
         # Run two identical simulations, one CA one stateless. CA's
         # cash flow should be lower by ~1.1% of combined wages, and
         # the row should carry a non-zero state_sdi column.
+        # NOTE: HSA family contribution is zeroed because under v6.6
+        # §125 cafeteria-plan treatment the HSA reduces CA's SDI base
+        # (HSA dollars come out of post-§125 wages). This test is
+        # about the SDI calculation, not about §125 — zero out HSA to
+        # keep the gross-wages-times-rate math clean and unambiguous.
+        from tax_optimizer.inputs import CurrentContrib
         inp = Inputs(
             spouse_a_age_start=54,
             spouse_b_age_start=53,
@@ -373,6 +379,7 @@ class TestCAStateSDI:
                 spouse_b_gross=80_000.0,
                 spouse_a_bonus=0.0,  # keep SDI math clean
             ),
+            contrib=CurrentContrib(hsa_family=0.0),
             ss=SocialSecurity(
                 monthly_spouse_a=2_500,
                 monthly_spouse_b=1_800,

@@ -20,6 +20,8 @@
     "conversion_taxable_use_ratio": 0.5,
     "protect_roth_in_conversion_years": true,
 
+    "section125_reduces_fica_wages": true,
+
     "rmd_start_age": 75,
 
     "medicare_base_b_d_premium": 2500.0,
@@ -156,6 +158,15 @@
       "start_age_b": null,
       "fra_a": 67,
       "fra_b": 67
+    },
+
+    "health_premiums": {
+      "spouse_a_medical": 0.0,
+      "spouse_a_dental": 0.0,
+      "spouse_a_vision": 0.0,
+      "spouse_b_medical": 0.0,
+      "spouse_b_dental": 0.0,
+      "spouse_b_vision": 0.0
     }
   }
 }

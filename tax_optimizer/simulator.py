@@ -236,15 +236,20 @@ def simulate(
         # raw deferral total (not deferral + catch-up) here. After-tax
         # dollars come from after-tax paycheck cash → Roth balance,
         # with no income-tax impact.
-        a_after_tax_pct = (
-            inputs.spouse_a_after_tax_401k_pct
-            if (a_working and inputs.spouse_a_mega_backdoor_enabled)
-            else 0.0
+        #
+        # v6.6 auto-spillover: when `*_mega_backdoor_enabled` is True,
+        # any **excess elective-deferral target** (target above the
+        # §402(g) cap that pre-v6.6 silently leaked to taxable cash)
+        # is auto-routed into the after-tax bucket first, up to the
+        # §415(c) ceiling. The explicit `*_after_tax_401k_pct` then
+        # stacks on top, capped at whatever §415(c) room remains.
+        # Real-world analog: Vanguard "Spillover After-Tax" and
+        # similar Fidelity / Schwab record-keeper features.
+        a_excess_deferral = (
+            max(0.0, a_target - elective_deferral_cap(a_age)) if a_working else 0.0
         )
-        b_after_tax_pct = (
-            inputs.spouse_b_after_tax_401k_pct
-            if (b_working and inputs.spouse_b_mega_backdoor_enabled)
-            else 0.0
+        b_excess_deferral = (
+            max(0.0, b_target - elective_deferral_cap(b_age)) if b_working else 0.0
         )
         # §415(c) room: catch-up is excluded from the §415(c) limit per
         # IRS rules, so subtract only the base elective deferral here.
@@ -258,14 +263,49 @@ def simulate(
             0.0,
             SECTION_415C_LIMIT - b_base_deferral - b_employer_match,
         )
-        a_after_tax = (
-            min(spouse_a_salary * a_after_tax_pct, a_after_tax_room)
-            if a_working else 0.0
+        # Auto-spillover (consumes §415(c) room first).
+        a_after_tax_auto = (
+            min(a_excess_deferral, a_after_tax_room)
+            if (a_working and inputs.spouse_a_mega_backdoor_enabled)
+            else 0.0
         )
-        b_after_tax = (
-            min(spouse_b_salary * b_after_tax_pct, b_after_tax_room)
-            if b_working else 0.0
+        b_after_tax_auto = (
+            min(b_excess_deferral, b_after_tax_room)
+            if (b_working and inputs.spouse_b_mega_backdoor_enabled)
+            else 0.0
         )
+        a_room_left = max(0.0, a_after_tax_room - a_after_tax_auto)
+        b_room_left = max(0.0, b_after_tax_room - b_after_tax_auto)
+        # Explicit after-tax pct (existing knob), capped at the room
+        # REMAINING after the auto-spillover. Any uncovered target
+        # dollars stay as taxable cash (same fate as elective-deferral
+        # excess above the §415(c) ceiling).
+        a_after_tax_pct = (
+            inputs.spouse_a_after_tax_401k_pct
+            if (a_working and inputs.spouse_a_mega_backdoor_enabled)
+            else 0.0
+        )
+        b_after_tax_pct = (
+            inputs.spouse_b_after_tax_401k_pct
+            if (b_working and inputs.spouse_b_mega_backdoor_enabled)
+            else 0.0
+        )
+        a_after_tax_explicit_target = (
+            spouse_a_salary * a_after_tax_pct if a_working else 0.0
+        )
+        b_after_tax_explicit_target = (
+            spouse_b_salary * b_after_tax_pct if b_working else 0.0
+        )
+        a_after_tax_explicit = min(a_after_tax_explicit_target, a_room_left)
+        b_after_tax_explicit = min(b_after_tax_explicit_target, b_room_left)
+        a_after_tax_target_uncovered = max(
+            0.0, a_after_tax_explicit_target - a_after_tax_explicit
+        )
+        b_after_tax_target_uncovered = max(
+            0.0, b_after_tax_explicit_target - b_after_tax_explicit
+        )
+        a_after_tax = a_after_tax_auto + a_after_tax_explicit
+        b_after_tax = b_after_tax_auto + b_after_tax_explicit
         state.roth += a_after_tax + b_after_tax
         mega_backdoor_total = a_after_tax + b_after_tax
 
@@ -339,23 +379,59 @@ def simulate(
         a_w2_wages = (spouse_a_salary + spouse_a_bonus) if a_working else 0.0
         b_w2_wages = spouse_b_salary if b_working else 0.0
         wages = a_w2_wages + b_w2_wages
-        # HSA contributions are pre-tax (Box 1 wage reducer alongside
-        # traditional 401(k) deferrals). Deductible Traditional IRA
-        # contributions reduce AGI via Schedule 1 (not Box 1 directly,
-        # but mathematically equivalent for our wages-driven AGI).
-        wages_box1 = (
+
+        # ---- §125 cafeteria-plan deductions (v6.6) ----
+        # Medical / dental / vision premiums are paid through a §125
+        # cafeteria plan: they reduce Box 1 federal wages, Box 3/5
+        # FICA wages, and state wages. HSA (already accounted for
+        # in wages_box1 below) is also §125; we fold it into the
+        # FICA reduction here when `section125_reduces_fica_wages`
+        # is on. Per-spouse premiums are gated on each spouse's own
+        # working status (no W-2 → no §125 deduction) and clamped
+        # at that spouse's gross wages.
+        hp = inputs.health_premiums
+        hp_a = min(max(0.0, hp.total_a), a_w2_wages) if a_working else 0.0
+        hp_b = min(max(0.0, hp.total_b), b_w2_wages) if b_working else 0.0
+        hp_total = hp_a + hp_b
+
+        # HSA is family-coverage in our model. Allocate it across
+        # spouses for FICA-base purposes by wage-share so OASDI's
+        # per-spouse wage cap is handled correctly when one spouse
+        # is near the cap. The total FICA reduction is invariant to
+        # the allocation when both spouses are well under the cap.
+        #
+        # When `section125_reduces_fica_wages` is False (the pre-v6.6
+        # back-compat path), FICA uses GROSS W-2 wages — premiums and
+        # HSA both ignored for FICA purposes (still reduce Box 1).
+        if cfg.section125_reduces_fica_wages and wages > 0:
+            hsa_a_share = hsa_contrib * (a_w2_wages / wages)
+            hsa_b_share = hsa_contrib - hsa_a_share
+            a_w2_fica = max(0.0, a_w2_wages - hp_a - hsa_a_share)
+            b_w2_fica = max(0.0, b_w2_wages - hp_b - hsa_b_share)
+        else:
+            a_w2_fica = a_w2_wages
+            b_w2_fica = b_w2_wages
+
+        # Traditional 401(k) and deductible Traditional IRA reduce
+        # Box 1 but NOT FICA. HSA and M/D/V (§125) reduce both —
+        # already netted out of Box 1 here. Clamp at 0 to handle
+        # edge cases where total pre-tax deductions exceed wages.
+        wages_box1 = max(0.0, (
             wages
             - a_pretax_contrib - b_pretax_contrib
             - hsa_contrib
+            - hp_total
             - ira_traditional_deduction
-        )
+        ))
 
         # FICA on per-spouse W-2 wages. Applies to GROSS wages (Box 3) —
-        # traditional 401(k) does NOT reduce FICA wages. Each spouse has
-        # their own OASDI wage base; the wage base is indexed forward
-        # annually so real FICA stays roughly constant. FICA does not
-        # touch federal income tax — it just removes cash from the
-        # household's working-year inflow.
+        # traditional 401(k) does NOT reduce FICA wages, but §125
+        # cafeteria deductions (HSA + M/D/V) DO when
+        # `cfg.section125_reduces_fica_wages` is on (default since
+        # v6.6). Each spouse has their own OASDI wage base; the wage
+        # base is indexed forward annually so real FICA stays roughly
+        # constant. FICA does not touch federal income tax — it just
+        # removes cash from the household's working-year inflow.
         #
         # Additional Medicare 0.9% is reconciled at the **household**
         # level (Form 8959): MFJ threshold is $250k on combined wages,
@@ -364,7 +440,7 @@ def simulate(
         # internally.
         wage_base_y = OASDI_WAGE_BASE_2026 * (1 + cfg.wage_growth) ** year_offset
         fica_combined = fica_household(
-            a_w2_wages, b_w2_wages,
+            a_w2_fica, b_w2_fica,
             filing_status=filing_status,
             wage_base=wage_base_y,
         )
@@ -373,17 +449,19 @@ def simulate(
         # State disability insurance (CA SDI / NJ TDI / etc.). Per-spouse
         # rate × wages, indexed to the active state regime. Inflation-
         # indexed wage cap matches FICA's so CA's uncapped rule stays
-        # truly uncapped over the horizon.
+        # truly uncapped over the horizon. §125 cafeteria deductions
+        # reduce SDI wages in CA (FTB conforms); we use the same
+        # post-§125 base as FICA.
         sdi_wage_cap_y = (
             state_regime.sdi_wage_cap
             if not math.isfinite(state_regime.sdi_wage_cap)
             else state_regime.sdi_wage_cap * (1 + cfg.inflation) ** year_offset
         )
         sdi_a = state_sdi(
-            a_w2_wages, rate=state_regime.sdi_rate, wage_cap=sdi_wage_cap_y
+            a_w2_fica, rate=state_regime.sdi_rate, wage_cap=sdi_wage_cap_y
         )
         sdi_b = state_sdi(
-            b_w2_wages, rate=state_regime.sdi_rate, wage_cap=sdi_wage_cap_y
+            b_w2_fica, rate=state_regime.sdi_rate, wage_cap=sdi_wage_cap_y
         )
         sdi_total = sdi_a + sdi_b
 
@@ -1210,6 +1288,12 @@ def simulate(
                 "ira_backdoor_taxable_conv": ira_backdoor_taxable_conv,
                 "mega_backdoor_a": a_after_tax,
                 "mega_backdoor_b": b_after_tax,
+                "excess_deferral_a": a_excess_deferral,
+                "excess_deferral_b": b_excess_deferral,
+                "mega_backdoor_spillover_a": a_after_tax_auto,
+                "mega_backdoor_spillover_b": b_after_tax_auto,
+                "after_tax_target_uncovered_a": a_after_tax_target_uncovered,
+                "after_tax_target_uncovered_b": b_after_tax_target_uncovered,
                 "employer_match_a": a_employer_match,
                 "employer_match_b": b_employer_match,
                 "fica": fica_total,
@@ -1217,6 +1301,9 @@ def simulate(
                 "fica_medicare": fica_combined["medicare"],
                 "fica_additional_medicare": fica_combined["additional_medicare"],
                 "state_sdi": sdi_total,
+                "health_premium_a": hp_a,
+                "health_premium_b": hp_b,
+                "health_premium_total": hp_total,
                 "qualified_dividends": qdiv_inc,
                 "ordinary_dividends": ord_div_inc,
                 "interest_income": interest_inc,

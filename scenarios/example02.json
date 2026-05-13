@@ -148,6 +148,14 @@
       "pre_2016_participant": true,
       "interest_rate": null,
       "irs_comp_limit_today": 350000.0
+    },
+    "health_premiums": {
+      "spouse_a_medical": 7200,
+      "spouse_a_dental": 420,
+      "spouse_a_vision": 180,
+      "spouse_b_medical": 0,
+      "spouse_b_dental": 0,
+      "spouse_b_vision": 0
     }
   }
 }

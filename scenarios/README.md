@@ -229,6 +229,193 @@ See `tax_optimizer/withdrawals.py` (`cover_deficit`).
 }
 ```
 
+## Health insurance premiums (§125 cafeteria plan)
+
+Employer-sponsored medical / dental / vision premiums paid through a
+§125 cafeteria plan ("premium-only plan") are pre-tax in three ways
+that the simulator now models explicitly (v6.6+):
+
+  * **Reduce federal Box 1 wages** → lower federal income tax
+  * **Reduce FICA wages** (OASDI + Medicare) → lower payroll tax
+  * **Reduce state wages** in every conforming state → lower state
+    tax (CA, NY, IL, MA, etc. — flow-through automatic)
+
+This is the key difference from a traditional 401(k): a 401(k)
+deferral reduces Box 1 but **not** FICA wages. §125 premiums reduce
+**both**. The same treatment also retroactively fixes the
+long-standing HSA-FICA approximation (pre-v6.6 the simulator
+documented but didn't model HSA's FICA exemption).
+
+### `inputs.health_premiums` — per-spouse annual employee share
+
+Quote **annual** dollars (NOT monthly) of the employee-paid portion.
+The employer share is irrelevant for tax purposes (already excluded
+from W-2 income).
+
+```jsonc
+{
+  "inputs": {
+    "health_premiums": {
+      "spouse_a_medical": 6500.0,
+      "spouse_a_dental":   450.0,
+      "spouse_a_vision":   180.0,
+      "spouse_b_medical": 1200.0,
+      "spouse_b_dental":   240.0,
+      "spouse_b_vision":   120.0
+    }
+  }
+}
+```
+
+For a typical paystub: open the year-end summary, find lines marked
+something like `MEDICAL (pre-tax)`, `DENTAL (pre-tax)`,
+`VISION (pre-tax)` — sum each over 12 months (or grab the annual
+"YTD" column). Do NOT include the HSA contribution here; that's
+already on `inputs.contrib.hsa_family`.
+
+### `cfg.section125_reduces_fica_wages` — default-on FICA treatment
+
+```jsonc
+{
+  "config": {
+    "section125_reduces_fica_wages": true
+  }
+}
+```
+
+  * `true` (default) → FICA + CA SDI are computed on **post-§125**
+    wages: premiums and HSA both reduce the FICA base. This matches
+    real Box 3 / Box 5 payroll. A household with $10k of M/D/V +
+    $8,550 HSA saves an extra ~$1,420 of FICA per year.
+  * `false` → FICA + SDI are computed on **gross** wages (pre-v6.6
+    behavior). Box 1 / federal tax / state tax reductions are
+    unchanged. Useful for reproducing pre-v6.6 numbers or for
+    sensitivity analysis.
+
+### Gating and clamps
+
+  * A spouse's premium only applies during their working years
+    (`age < retire_age` AND alive). Once retired, the simulator
+    zeroes the premium — retiree healthcare belongs on
+    `cfg.health_pre65_today` (post-retirement pre-Medicare) or
+    `cfg.medicare_base_b_d_premium` (Medicare-eligible).
+  * A non-working spouse's premium is **ignored** even if set
+    (no W-2 to deduct from). Common scenario: spouse B retires
+    early; the working spouse A carries both on their plan —
+    quote the full combined family premium on `spouse_a_medical`.
+  * Per-spouse combined deduction (M + D + V) is clamped at that
+    spouse's gross W-2 wages. You can't §125-deduct more than you
+    earn; the simulator silently caps rather than allowing
+    negative Box 1.
+
+### Diagnostic columns (every row of the simulation DataFrame)
+
+  * `health_premium_a` — §125 deduction for spouse A in this year
+  * `health_premium_b` — §125 deduction for spouse B in this year
+  * `health_premium_total` — sum (matches the household §125
+    Box 1 / FICA / state reduction)
+
+## Mega-backdoor Roth (auto-spillover)
+
+For high-earner households whose 401(k) plan supports after-tax
+contributions plus in-plan Roth conversions ("mega-backdoor"), the
+simulator can route any **excess elective-deferral target** —
+dollars that pre-v6.6 silently leaked into taxable cash — into the
+after-tax bucket up to the §415(c) ceiling. Real-world analog:
+Vanguard's "Spillover After-Tax" feature and similar Fidelity /
+Schwab record-keeper offerings.
+
+### Two per-spouse knobs
+
+```jsonc
+{
+  "inputs": {
+    "spouse_a_mega_backdoor_enabled": true,
+    "spouse_a_after_tax_401k_pct": 0.10
+  }
+}
+```
+
+  * **`spouse_*_mega_backdoor_enabled`** (default `false`) — gate.
+    Whether your 401(k) plan supports after-tax contributions and
+    same-day in-plan Roth conversions. Most plans don't; check
+    your Summary Plan Description.
+  * **`spouse_*_after_tax_401k_pct`** (default `0.0`) — explicit
+    fraction of salary you'd LIKE routed to the after-tax bucket
+    on top of any auto-spillover. Capped at the §415(c) room that
+    remains after the auto-spillover has fired.
+
+### How the auto-spillover works
+
+Each working year, per spouse:
+
+  1. Target deferral  =  `salary × total_contrib_pct`
+  2. Actual elective deferral  =  `min(target, §402(g) cap)`
+     (split into pretax / Roth via `roth_401k_pct`)
+  3. Excess  =  `max(0, target − §402(g) cap)`
+  4. §415(c) room  =  `§415(c) limit − base deferral − employer match`
+     (catch-up is excluded — sits outside §415(c))
+  5. **Auto-spillover**  =  `min(excess, §415(c) room)` ← new in v6.6
+  6. Remaining room  =  §415(c) room − auto-spillover
+  7. Explicit  =  `min(salary × after_tax_401k_pct, remaining room)`
+  8. Total mega-backdoor  =  auto-spillover + explicit  →  Roth
+
+Excess beyond what fits in §415(c) stays as taxable cash (same as
+the pre-v6.6 silent-cap behavior). When the auto-spillover crowds
+out the explicit pct, those uncovered dollars also stay as cash.
+
+### Worked example
+
+Spouse A, age 45, salary $300k:
+
+| Setting | Value |
+|---|---|
+| `total_contrib_pct` | 0.30  (target $90,000) |
+| `roth_401k_pct`     | 0.5 |
+| `mega_backdoor_enabled` | true |
+| `after_tax_401k_pct` | 0.10  (target $30,000) |
+| Employer match | 100% match up to 7% of pay |
+
+Numbers per year:
+
+  * §402(g) cap (age <50, no catch-up) = $23,500
+  * Elective deferral = $23,500 (split → $11,750 pretax + $11,750 Roth)
+  * Excess = $90,000 − $23,500 = **$66,500**
+  * Employer match: effective deferral pct $23.5k/$300k = 7.83%,
+    capped at 7% → match = $300k × 7% × 1.0 = $21,000
+  * §415(c) room = $70,000 − $23,500 − $21,000 = **$25,500**
+  * Auto-spillover = min($66,500, $25,500) = **$25,500**  (fills room)
+  * Remaining room = $0
+  * Explicit target $30,000, fits into $0 of remaining room → **$0**
+  * `after_tax_target_uncovered_a` = **$30,000** (crowded out)
+  * Excess beyond §415(c) = $66,500 − $25,500 = $41,000 → taxable cash
+
+End result: $25,500/yr more Roth than pre-v6.6 silently delivered.
+
+### Diagnostic columns (every row of the simulation DataFrame)
+
+  * `excess_deferral_a` / `excess_deferral_b` — raw target − §402(g)
+    cap. Always emitted, even when mega-backdoor is off — surfaces
+    today's silent-cap behavior for the first time.
+  * `mega_backdoor_spillover_a` / `mega_backdoor_spillover_b` —
+    auto-routed portion of after-tax. Subset of `mega_backdoor_{a,b}`.
+  * `after_tax_target_uncovered_a` / `after_tax_target_uncovered_b` —
+    explicit-pct dollars that didn't fit in remaining §415(c) room.
+    Non-zero means the auto-spillover crowded the explicit pct out.
+  * `mega_backdoor_a` / `mega_backdoor_b` — total after-tax routed
+    to Roth (auto + explicit). Existing column, unchanged semantics.
+
+### How to disable
+
+  * Plan doesn't support after-tax + in-plan Roth conversions:
+    set `spouse_*_mega_backdoor_enabled = false`. Disables BOTH the
+    explicit pct and the auto-spillover in one knob flip; excess
+    falls back to taxable cash exactly as in pre-v6.6.
+  * Plan supports it but you're choosing not to contribute beyond
+    the elective limit: keep the gate on, set
+    `total_contrib_pct ≤ §402(g) cap / salary` so there's no excess,
+    and `after_tax_401k_pct = 0`.
+
 ## Useful CLI patterns
 
 Generate a fresh defaults dump (newer than `template.json` if you've

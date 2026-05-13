@@ -41,6 +41,7 @@ from tax_optimizer.config import Config
 from tax_optimizer.inputs import (
     CurrentContrib,
     CurrentIncome,
+    HealthPremiums,
     Inputs,
     PensionInputs,
     SocialSecurity,
@@ -182,6 +183,7 @@ class TestInputsCoverage:
             ("contrib", CurrentContrib),
             ("pension", PensionInputs),
             ("ss", SocialSecurity),
+            ("health_premiums", HealthPremiums),
         ],
     )
     def test_nested_inputs_block_is_complete(
@@ -281,6 +283,7 @@ class TestTemplateValuesMatchDefaults:
         for f in fields(Inputs):
             if f.name in {
                 "starting", "income", "contrib", "pension", "ss",
+                "health_premiums",
                 "annual_expenses",  # deliberately omitted (deprecated)
             }:
                 continue
@@ -300,6 +303,7 @@ class TestTemplateValuesMatchDefaults:
             ("contrib", CurrentContrib),
             ("pension", PensionInputs),
             ("ss", SocialSecurity),
+            ("health_premiums", HealthPremiums),
         ],
     )
     def test_nested_block_defaults_match(

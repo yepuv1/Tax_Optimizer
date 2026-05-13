@@ -141,6 +141,14 @@
       "balance_today": 0,
       "monthly_at_nrd": 0,
       "start_age": 65
+    },
+    "health_premiums": {
+      "spouse_a_medical": 6500,
+      "spouse_a_dental": 450,
+      "spouse_a_vision": 180,
+      "spouse_b_medical": 1200,
+      "spouse_b_dental": 240,
+      "spouse_b_vision": 120
     }
   }
 }

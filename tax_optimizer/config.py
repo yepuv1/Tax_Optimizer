@@ -122,6 +122,26 @@ class Config:
     protect_roth_in_conversion_years: bool = True
 
     # ------------------------------------------------------------------
+    # Payroll: §125 cafeteria-plan treatment (v6.6)
+    # ------------------------------------------------------------------
+    # When True (default), IRC §125 cafeteria-plan deductions —
+    # medical / dental / vision premiums on `inputs.health_premiums`
+    # plus the HSA contribution on `inputs.contrib.hsa_family` —
+    # reduce FICA wages (OASDI + Medicare) in addition to Box 1
+    # federal wages. This matches real payroll: a paystub's Box 3
+    # (Social Security wages) and Box 5 (Medicare wages) are
+    # post-§125. Saves the household 7.65% × premium each year
+    # (and the employer the matching 7.65%, but that's not in scope).
+    #
+    # Pre-v6.6 the simulator computed FICA on gross W-2 wages
+    # (documented approximation in `payroll.py`). Setting this to
+    # False reproduces that behavior — useful for back-compat
+    # sensitivity checks. The Box 1 / federal-tax / state-tax
+    # reductions always apply regardless of this flag (those have
+    # never been approximated).
+    section125_reduces_fica_wages: bool = True
+
+    # ------------------------------------------------------------------
     # Age-gated income events
     # ------------------------------------------------------------------
     # SS claim age and pension NRD now live on the nested Inputs blocks

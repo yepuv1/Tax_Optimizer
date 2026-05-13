@@ -567,11 +567,13 @@ Federal bracket numbers, IRS Uniform Lifetime divisors, pension-formula coeffici
 - **Federal income tax** — ordinary brackets, qualified-dividend / LTCG brackets, NIIT, standard deduction.
 - **State income tax** — CA / NY / IL / MA presets (progressive or flat, with retirement-income carve-outs and SS exemptions); easily extensible via `StateTaxRegime(...)`.
 - **Social-Security taxation** — IRC §86 provisional-income calculation with the right thresholds for filing status, plus year-of-death MFJ handling and survivor benefits from age 60.
-- **FICA** — per-W-2 SS + Medicare withholding plus the Form-8959 household reconciliation for the Additional Medicare 0.9% surcharge at the MFJ threshold.
+- **FICA** — per-W-2 SS + Medicare withholding plus the Form-8959 household reconciliation for the Additional Medicare 0.9% surcharge at the MFJ threshold. §125 cafeteria-plan deductions (HSA + medical/dental/vision premiums) reduce FICA wages when `cfg.section125_reduces_fica_wages = True` (v6.6 default, matches real Box 3 / Box 5 payroll).
+- **§125 health-insurance premiums** — `inputs.health_premiums` quotes the employee share of medical, dental, and vision premiums per spouse. Reduces federal Box 1, FICA, and state wages (per-spouse gating + gross-wage clamp). See `scenarios/README.md` for setup.
 - **IRMAA** — current 2026 tier table for both MFJ and single filers; auto-switches when filing status changes; two-year MAGI lookback.
 - **Medicare premiums** — base Part B + Part D, pre-Medicare ACA premium with the IRA-2022 8.5%-of-MAGI premium-tax-credit cap.
 - **RMDs** — IRS Uniform Lifetime divisors for ages 72-110, computed per spouse on their own pretax balances.
 - **Roth conversions** — RMD-aware, per-spouse capped, bracket-target driven; mega-backdoor support via dedicated decision-vector axis.
+- **Mega-backdoor auto-spillover** *(v6.6)* — when `spouse_*_mega_backdoor_enabled = True`, any elective-deferral target above the §402(g) cap auto-routes into the after-tax 401(k) bucket up to the §415(c) ceiling (Vanguard "Spillover After-Tax" analog). Surfaces via `excess_deferral_*` / `mega_backdoor_spillover_*` / `after_tax_target_uncovered_*` diagnostic columns.
 - **IRA contribution paths** — Traditional / direct Roth / backdoor Roth (pro-rata aware on IRA-only sub-balance).
 - **Employer 401(k) match** — match-rate × match-cap per spouse, layered on top of employee deferrals.
 - **Cost-basis tracking** — taxable brokerage basis fraction is dynamic, not constant; full step-up to FMV on first spouse's death (community-property model).
