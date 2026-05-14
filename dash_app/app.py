@@ -255,6 +255,7 @@ def make_app() -> dash.Dash:
     @app.callback(
         Output("report-download", "data"),
         Output("run-status", "children", allow_duplicate=True),
+        Output("report-iframe", "srcDoc"),
         Input("report-download-btn", "n_clicks"),
         State("run-result", "data"),
         prevent_initial_call=True,
@@ -264,24 +265,24 @@ def make_app() -> dash.Dash:
             return no_update, html.Span(
                 "Run a scenario first - the report needs simulation results.",
                 className="text-warning",
-            )
+            ), no_update
         run_id = run_data.get("run_id")
         cached = get_cached(run_id)
         if cached is None:
             return no_update, html.Span(
                 "Run results have expired from the cache. Click 'Run' again.",
                 className="text-warning",
-            )
+            ), no_update
         cfg, inputs, rr = cached
         try:
             payload = build_html_payload(cfg, inputs, rr)
         except Exception as e:  # noqa: BLE001 - surface any render error
             return no_update, html.Span(
                 f"Report build failed: {e}", className="text-danger"
-            )
+            ), no_update
         return payload, html.Span(
             f"Report ready: {payload['filename']}.", className="text-success"
-        )
+        ), payload["content"]
 
     # ---- Overview tab -----------------------------------------------
 

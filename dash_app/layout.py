@@ -176,7 +176,7 @@ def top_bar() -> dbc.Card:
                                     },
                                 ),
                             ],
-                            md=6,
+                            md=8,
                         ),
                         dbc.Col(
                             [
@@ -190,36 +190,11 @@ def top_bar() -> dbc.Card:
                                 ),
                                 dcc.Download(id="scenario-download"),
                             ],
-                            md=3,
-                        ),
-                        dbc.Col(
-                            [
-                                html.Label(
-                                    "Action-plan report",
-                                    className="form-label small",
-                                ),
-                                dbc.Button(
-                                    "Download HTML",
-                                    id="report-download-btn",
-                                    color="primary",
-                                    outline=True,
-                                    size="sm",
-                                    className="w-100",
-                                    title=(
-                                        "Build the optimizer's action-plan report "
-                                        "(TL;DR, recommended levers, expected "
-                                        "outcomes, top sensitivities, year-by-year "
-                                        "withdrawal & conversion table) as a "
-                                        "self-contained HTML file. Print to PDF "
-                                        "from the browser if you want PDF."
-                                    ),
-                                ),
-                                dcc.Download(id="report-download"),
-                            ],
-                            md=3,
+                            md=4,
+                            className="d-flex flex-column justify-content-end",
                         ),
                     ],
-                    className="g-2",
+                    className="g-2 align-items-end",
                 ),
                 html.Hr(className="my-2"),
                 dbc.Row(
@@ -398,11 +373,50 @@ def yearly_tab() -> dbc.Tab:
     )
 
 
+def report_tab() -> dbc.Tab:
+    return dbc.Tab(
+        [
+            html.Div(
+                [
+                    dbc.Button(
+                        "Download HTML",
+                        id="report-download-btn",
+                        color="primary",
+                        outline=True,
+                        size="sm",
+                        title=(
+                            "Build the optimizer's action-plan report as a "
+                            "self-contained HTML file and display it below. "
+                            "Print to PDF from the browser if you want PDF."
+                        ),
+                    ),
+                    dcc.Download(id="report-download"),
+                ],
+                className="my-3",
+            ),
+            html.Iframe(
+                id="report-iframe",
+                srcDoc=(
+                    "<div style='font-family:sans-serif;padding:20px;color:#6c757d'>"
+                    "Run a scenario, then click <strong>Download HTML</strong> "
+                    "to generate and display the action-plan report."
+                    "</div>"
+                ),
+                style={"width": "100%", "height": "900px", "border": "none"},
+            ),
+        ],
+        label="Report", tab_id="tab-report",
+    )
+
+
 def results_panel() -> dbc.Card:
     return dbc.Card(
         dbc.CardBody(
             dbc.Tabs(
-                [overview_tab(), taxes_tab(), strategies_tab(), mc_tab(), yearly_tab()],
+                [
+                    overview_tab(), taxes_tab(), strategies_tab(),
+                    mc_tab(), yearly_tab(), report_tab(),
+                ],
                 id="results-tabs",
                 active_tab="tab-overview",
             )
