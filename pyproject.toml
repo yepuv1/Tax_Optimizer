@@ -46,6 +46,11 @@ pdf = [
     # See https://doc.courtbouillon.org/weasyprint/stable/first_steps.html
     "weasyprint>=60",
 ]
+dash = [
+    "dash>=2.16",
+    "dash-bootstrap-components>=1.6",
+    "plotly>=5.18",
+]
 dev = [
     "ruff>=0.4",
     "black>=24.3",
@@ -59,10 +64,11 @@ dev = [
 Repository = "https://github.com/vijayyepuri/Tax_Optimizer"
 
 [tool.setuptools.packages.find]
-include = ["tax_optimizer*"]
+include = ["tax_optimizer*", "dash_app*"]
 
 [project.scripts]
 tax-optimizer = "tax_optimizer.__main__:main"
+tax-optimizer-app = "dash_app.__main__:main"
 
 [tool.ruff]
 line-length = 100

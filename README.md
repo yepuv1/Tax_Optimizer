@@ -40,6 +40,14 @@ The deterministic engine models federal brackets, LTCG, NIIT, IRMAA, Social-Secu
 │   ├── sensitivity.py                # tornado + plain-English actions / takeaways
 │   ├── report.py                     # build_action_report + compare_scenarios + cross_model_check
 │   └── plots.py                      # matplotlib helpers
+├── dash_app/                         # Plotly Dash web UI (see "Web app" below)
+│   ├── __main__.py                   # python -m dash_app entry point
+│   ├── app.py                        # Dash instance + callbacks
+│   ├── layout.py                     # sidebar + results panel
+│   ├── forms.py                      # FIELD_SCHEMA driving Simple/Advanced tabs
+│   ├── state.py                      # form values <-> scenario JSON round-trip
+│   ├── runner.py                     # single / four / four+MC dispatcher
+│   └── figures.py                    # pure Plotly figure builders
 ├── docs/
 │   ├── architecture.md               # per-module reference + cross-cutting diagrams
 │   ├── roth_conversion.md            # how Roth conversion sizing + liquidity guards work
@@ -78,6 +86,26 @@ uv pip install -e ".[notebook]"
 ```
 
 ## Usage
+
+### Web app (Plotly Dash)
+
+For an interactive dashboard with a Simple/Advanced scenario form, a
+run-mode selector (single sim / four strategies / four + Monte Carlo),
+and live Plotly charts for balances, taxes, conversions, strategy
+comparison, and Monte Carlo distributions:
+
+```bash
+pip install -e ".[dash]"
+python -m dash_app                    # http://127.0.0.1:8050
+# or, after install:
+tax-optimizer-app --host 0.0.0.0 --port 8050 --debug
+```
+
+The form covers every field of the scenario JSON. Use the **Load
+scenario JSON** drop zone (drag & drop or click to browse) to pull in
+any scenario file from your machine, or **Download JSON** to save the
+current form state as a scenario file the CLI can run with `python -m
+tax_optimizer --scenario PATH.json`.
 
 ### CLI
 

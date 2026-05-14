@@ -1,0 +1,415 @@
+"""Top-level Dash layout.
+
+The page is a two-column dashboard:
+
+  * Left: a sidebar with the scenario form (Simple / Advanced sub-tabs)
+    and a top bar of Load/Save/Run controls.
+  * Right: the results panel (Overview / Taxes / Strategies / Monte
+    Carlo / Year-by-year).
+
+The form is rendered from `dash_app.forms.FIELD_SCHEMA`, so adding a
+new scenario field is a one-line schema entry.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import dash_bootstrap_components as dbc
+from dash import dash_table, dcc, html
+
+from .forms import FormField, fields_by_group, fields_by_tier
+
+
+# ---------------------------------------------------------------------
+# Form rendering
+# ---------------------------------------------------------------------
+
+
+def _input_for(fld: FormField, value: Any) -> Any:
+    """Render the right control for a field's `kind`."""
+    base_id = fld.component_id
+
+    if fld.kind == "select":
+        options = [
+            {"label": label, "value": "" if v is None else v}
+            for v, label in fld.options
+        ]
+        return dcc.Dropdown(
+            id=base_id,
+            options=options,
+            value="" if value is None else value,
+            clearable=False,
+            style={"fontSize": "0.85rem"},
+        )
+
+    if fld.kind == "bool":
+        return dbc.Switch(id=base_id, value=bool(value), persistence=False)
+
+    if fld.kind == "percent":
+        # Percent stays a float in storage; we just hint the unit on the
+        # label rather than rescaling on input. That keeps round-trips
+        # exact (0.07 in JSON, 0.07 in the box) and avoids a "did the
+        # user enter 7 or 0.07?" guessing game.
+        return dcc.Input(
+            id=base_id,
+            type="number",
+            value=value,
+            step=fld.step or 0.005,
+            min=fld.min,
+            max=fld.max,
+            debounce=True,
+            className="form-control form-control-sm",
+        )
+
+    if fld.kind == "int":
+        return dcc.Input(
+            id=base_id,
+            type="number",
+            value=value,
+            step=fld.step or 1,
+            min=fld.min,
+            max=fld.max,
+            debounce=True,
+            className="form-control form-control-sm",
+        )
+
+    return dcc.Input(
+        id=base_id,
+        type="number" if fld.kind == "number" else "text",
+        value=value,
+        step=fld.step,
+        min=fld.min,
+        max=fld.max,
+        debounce=True,
+        className="form-control form-control-sm",
+    )
+
+
+def _label_text(fld: FormField) -> str:
+    if fld.kind == "percent":
+        return f"{fld.label} (decimal, e.g. 0.07)"
+    return fld.label
+
+
+def _field_row(fld: FormField, value: Any) -> dbc.Row:
+    label_kwargs: dict[str, Any] = {}
+    if fld.help:
+        label_kwargs["title"] = fld.help
+    return dbc.Row(
+        [
+            dbc.Col(
+                html.Label(
+                    _label_text(fld),
+                    className="text-end small text-muted py-1 d-block w-100",
+                    **label_kwargs,
+                ),
+                width=7,
+            ),
+            dbc.Col(_input_for(fld, value), width=5, className="py-1"),
+        ],
+        className="g-1",
+    )
+
+
+def _section(group: str, fields: list[FormField], values: dict[str, Any]) -> dbc.AccordionItem:
+    rows = [_field_row(f, values.get(f.path)) for f in fields]
+    return dbc.AccordionItem(rows, title=group)
+
+
+def render_form(values: dict[str, Any], tier: str) -> dbc.Accordion:
+    flds = list(fields_by_tier(tier))
+    grouped = fields_by_group(flds)
+    items = [_section(g, fs, values) for g, fs in grouped.items()]
+    return dbc.Accordion(
+        items,
+        always_open=False,
+        start_collapsed=(tier == "advanced"),
+        className="scenario-form",
+    )
+
+
+# ---------------------------------------------------------------------
+# Sidebar (form + top bar)
+# ---------------------------------------------------------------------
+
+
+def top_bar() -> dbc.Card:
+    return dbc.Card(
+        dbc.CardBody(
+            [
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                html.Label(
+                                    "Load scenario JSON",
+                                    className="form-label small",
+                                ),
+                                dcc.Upload(
+                                    id="scenario-upload",
+                                    children=html.Div(
+                                        [
+                                            html.I(
+                                                className="me-2",
+                                                style={"fontSize": "1.1rem"},
+                                                children="\U0001F4C1",  # folder
+                                            ),
+                                            "Drag & drop a scenario file or ",
+                                            html.A(
+                                                "browse...",
+                                                className="text-primary",
+                                                style={"cursor": "pointer"},
+                                            ),
+                                        ],
+                                        className="text-muted small text-center",
+                                    ),
+                                    multiple=False,
+                                    accept=".json,application/json",
+                                    className="upload-box",
+                                    style={
+                                        "border": "1px dashed #94a3b8",
+                                        "borderRadius": "6px",
+                                        "padding": "10px",
+                                        "minHeight": "44px",
+                                        "cursor": "pointer",
+                                    },
+                                ),
+                            ],
+                            md=8,
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label("Save scenario", className="form-label small"),
+                                dbc.Button(
+                                    "Download JSON",
+                                    id="scenario-save-btn",
+                                    color="secondary",
+                                    size="sm",
+                                    className="w-100",
+                                ),
+                                dcc.Download(id="scenario-download"),
+                            ],
+                            md=4,
+                        ),
+                    ],
+                    className="g-2",
+                ),
+                html.Hr(className="my-2"),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                html.Label("Run mode", className="form-label small"),
+                                dcc.RadioItems(
+                                    id="run-mode",
+                                    options=[
+                                        {"label": " Single sim (~1s)", "value": "single"},
+                                        {"label": " Four strategies (~5-10s)",
+                                         "value": "four_strategies"},
+                                        {"label": " Four + Monte Carlo (~10-30s)",
+                                         "value": "four_plus_mc"},
+                                    ],
+                                    value="four_strategies",
+                                    labelStyle={"display": "block", "fontSize": "0.85rem"},
+                                    inputStyle={"marginRight": "6px"},
+                                ),
+                            ],
+                            md=5,
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label("MC paths", className="form-label small"),
+                                dcc.Input(
+                                    id="mc-paths",
+                                    type="number",
+                                    value=200,
+                                    min=10,
+                                    max=2000,
+                                    step=10,
+                                    className="form-control form-control-sm",
+                                ),
+                            ],
+                            md=3,
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label("Seed", className="form-label small"),
+                                dcc.Input(
+                                    id="mc-seed",
+                                    type="number",
+                                    value=0,
+                                    step=1,
+                                    className="form-control form-control-sm",
+                                ),
+                            ],
+                            md=2,
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label(html.Span("\u00a0"), className="form-label small"),
+                                dbc.Button(
+                                    "Run",
+                                    id="run-btn",
+                                    color="primary",
+                                    size="sm",
+                                    className="w-100",
+                                ),
+                            ],
+                            md=2,
+                        ),
+                    ],
+                    className="g-2 align-items-end",
+                ),
+                html.Div(id="run-status", className="small text-muted mt-2"),
+            ]
+        ),
+        className="mb-3",
+    )
+
+
+def sidebar(values: dict[str, Any]) -> dbc.Card:
+    return dbc.Card(
+        dbc.CardBody(
+            [
+                html.H5("Scenario", className="card-title"),
+                dbc.Tabs(
+                    [
+                        dbc.Tab(
+                            render_form(values, "simple"),
+                            label="Simple",
+                            tab_id="form-tab-simple",
+                        ),
+                        dbc.Tab(
+                            render_form(values, "advanced"),
+                            label="Advanced",
+                            tab_id="form-tab-advanced",
+                        ),
+                    ],
+                    id="form-tabs",
+                    active_tab="form-tab-simple",
+                ),
+            ]
+        ),
+        className="sidebar-card",
+    )
+
+
+# ---------------------------------------------------------------------
+# Results panel
+# ---------------------------------------------------------------------
+
+
+def kpi_row_placeholder() -> html.Div:
+    return html.Div(id="overview-kpis", className="kpi-row")
+
+
+def overview_tab() -> dbc.Tab:
+    return dbc.Tab(
+        [
+            html.Div(id="overview-kpis", className="d-flex flex-wrap gap-2 my-3"),
+            dcc.Graph(id="fig-balance-stack", config={"displaylogo": False}),
+        ],
+        label="Overview", tab_id="tab-overview",
+    )
+
+
+def taxes_tab() -> dbc.Tab:
+    return dbc.Tab(
+        [
+            dcc.Graph(id="fig-taxes-panel", config={"displaylogo": False}),
+            dcc.Graph(id="fig-conversion-panel", config={"displaylogo": False}),
+        ],
+        label="Taxes", tab_id="tab-taxes",
+    )
+
+
+def strategies_tab() -> dbc.Tab:
+    return dbc.Tab(
+        [
+            html.Div(id="strategies-callout", className="my-3"),
+            dcc.Graph(id="fig-strategy-compare", config={"displaylogo": False}),
+        ],
+        label="Strategies", tab_id="tab-strategies",
+    )
+
+
+def mc_tab() -> dbc.Tab:
+    return dbc.Tab(
+        [
+            dcc.Graph(id="fig-mc-histogram", config={"displaylogo": False}),
+            dcc.Graph(id="fig-mc-fan", config={"displaylogo": False}),
+        ],
+        label="Monte Carlo", tab_id="tab-mc",
+    )
+
+
+def yearly_tab() -> dbc.Tab:
+    return dbc.Tab(
+        [
+            html.Div(
+                [
+                    html.Label("Strategy", className="form-label small"),
+                    dcc.Dropdown(
+                        id="yearly-strategy",
+                        clearable=False,
+                        style={"width": "260px", "fontSize": "0.85rem"},
+                    ),
+                ],
+                className="mb-2",
+            ),
+            dash_table.DataTable(
+                id="yearly-table",
+                page_size=20,
+                style_table={"overflowX": "auto"},
+                style_cell={"fontSize": "0.85rem", "padding": "4px"},
+                style_header={"backgroundColor": "#f1f5f9", "fontWeight": "600"},
+                sort_action="native",
+                filter_action="native",
+            ),
+        ],
+        label="Year-by-year", tab_id="tab-yearly",
+    )
+
+
+def results_panel() -> dbc.Card:
+    return dbc.Card(
+        dbc.CardBody(
+            dbc.Tabs(
+                [overview_tab(), taxes_tab(), strategies_tab(), mc_tab(), yearly_tab()],
+                id="results-tabs",
+                active_tab="tab-overview",
+            )
+        ),
+        className="results-card",
+    )
+
+
+# ---------------------------------------------------------------------
+# Page assembly
+# ---------------------------------------------------------------------
+
+
+def build_layout(default_values: dict[str, Any]) -> html.Div:
+    return dbc.Container(
+        [
+            dcc.Store(id="form-values", data=default_values),
+            dcc.Store(id="run-result", storage_type="memory"),
+            html.H3("Tax Optimizer - Interactive Planner", className="my-3"),
+            dbc.Row(
+                [
+                    dbc.Col(
+                        [top_bar(), sidebar(default_values)],
+                        lg=4, md=12,
+                    ),
+                    dbc.Col(
+                        dcc.Loading(results_panel(), type="default"),
+                        lg=8, md=12,
+                    ),
+                ],
+                className="g-3",
+            ),
+        ],
+        fluid=True,
+        className="pb-5",
+    )
