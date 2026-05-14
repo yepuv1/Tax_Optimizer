@@ -1,0 +1,173 @@
+"""On-demand HTML action-plan builder for the Dash app.
+
+The Dash app stores Monte-Carlo aggregates and per-strategy
+`DataFrame`s in a browser-side `dcc.Store` so the figure callbacks have
+local data, but the canonical `tax_optimizer.report.build_action_report`
+needs the *full* `Config` / `Inputs` / `StrategyResult` Python objects
+plus a tornado-sensitivity sweep — none of which serialize cleanly to
+JSON. We solve that with a small module-level LRU cache keyed by a
+fresh UUID per run; the Dash run-result Store carries only the UUID,
+and the report-download callback re-hydrates the run from the cache.
+
+Public API:
+
+* :func:`cache_run`        — register a `(cfg, inputs, RunResult)` triple
+  and return its run-id. Bounded by ``_MAX_CACHED_RUNS`` to avoid
+  unbounded growth in long-running app sessions.
+* :func:`get_cached`       — fetch the triple by run-id (touches LRU
+  ordering).
+* :func:`build_html_payload` — re-runs the tornado sweep against the
+  base ``(cfg, inputs)``, calls
+  :func:`tax_optimizer.report.build_action_report` to get the markdown,
+  and wraps it via :func:`tax_optimizer.render.render_html` into a
+  self-contained HTML document. The return value is the dict shape
+  expected by ``dcc.Download``.
+
+The HTML produced is the same Letter-paged document the CLI emits for
+``python -m tax_optimizer --report report.html``, so the user can open
+it in any browser or print it to PDF via the browser's "Save as PDF"
+dialog. We deliberately do not depend on WeasyPrint here so that the
+"Download report" button works on plain ``pip install
+tax-optimizer[dash]`` installs without dragging in the pango/cairo
+system libraries.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections import OrderedDict
+from datetime import datetime
+from typing import Optional
+
+from tax_optimizer.config import Config
+from tax_optimizer.inputs import Inputs
+from tax_optimizer.render import render_html
+from tax_optimizer.report import build_action_report
+from tax_optimizer.sensitivity import tornado_sensitivity
+
+from .runner import RunResult
+
+
+# ---------------------------------------------------------------------
+# LRU cache of full RunResult objects, keyed by a UUID per Run.
+# ---------------------------------------------------------------------
+
+_MAX_CACHED_RUNS = 5
+
+# Keys are UUID hex strings; values are (cfg, inputs, RunResult). We use
+# `OrderedDict` so we can evict the oldest entry on overflow.
+_RUN_CACHE: "OrderedDict[str, tuple[Config, Inputs, RunResult]]" = OrderedDict()
+
+
+def cache_run(cfg: Config, inputs: Inputs, rr: RunResult) -> str:
+    """Register a finished run and return a fresh ``run_id`` for it.
+
+    The Dash run-result ``dcc.Store`` carries this id alongside the
+    JSON-serialized strategy frames. The download callback uses the id
+    to recover the original Python objects so the report renderer can
+    walk them.
+
+    LRU bound: when the cache exceeds :data:`_MAX_CACHED_RUNS`, the
+    oldest entry is evicted. That keeps memory bounded in long-lived
+    app sessions while still letting the user jump back to a few
+    recent runs (e.g. tweak inputs, hit Run, decide they preferred the
+    previous result, hit Download for the previous run via that
+    Store's id — works as long as that earlier run is still in the
+    last 5).
+    """
+    run_id = uuid.uuid4().hex
+    _RUN_CACHE[run_id] = (cfg, inputs, rr)
+    while len(_RUN_CACHE) > _MAX_CACHED_RUNS:
+        _RUN_CACHE.popitem(last=False)
+    return run_id
+
+
+def get_cached(
+    run_id: Optional[str],
+) -> Optional[tuple[Config, Inputs, RunResult]]:
+    """Fetch the cached triple for ``run_id`` and bump its LRU position.
+
+    Returns ``None`` if the id is missing or has been evicted.
+    """
+    if not run_id or run_id not in _RUN_CACHE:
+        return None
+    _RUN_CACHE.move_to_end(run_id)
+    return _RUN_CACHE[run_id]
+
+
+def clear_cache() -> None:
+    """Drop every cached run. Mostly for tests / explicit memory release."""
+    _RUN_CACHE.clear()
+
+
+# ---------------------------------------------------------------------
+# Report rendering
+# ---------------------------------------------------------------------
+
+
+def build_html_payload(
+    cfg: Config,
+    inputs: Inputs,
+    rr: RunResult,
+    *,
+    scenario_path: Optional[str] = None,
+    year_table_scope: str = "full",
+) -> dict[str, str]:
+    """Re-render the action plan as a self-contained HTML document.
+
+    Parameters
+    ----------
+    cfg, inputs:
+        The base scenario the user ran with. Used as the anchor for the
+        tornado-sensitivity sweep (so the report's ±$ swings match what
+        the user would see in the CLI).
+    rr:
+        The :class:`~dash_app.runner.RunResult` produced by
+        :func:`~dash_app.runner.run_scenario`. ``rr.strategies`` is
+        passed straight to :func:`tax_optimizer.report.build_action_report`
+        — its `StrategyResult` shape (``cfg`` / ``inputs`` / ``df`` /
+        ``summary``) is structurally compatible with the canonical
+        :class:`tax_optimizer.results.StrategyResult` that the report
+        module type-hints against.
+    scenario_path:
+        Optional file path to surface in the report header
+        (``"Scenario file: …"``). The Dash flow loads scenarios via
+        upload so the original on-disk path is usually unknown; we
+        accept it for parity with the CLI / notebook.
+    year_table_scope:
+        Forwarded to :func:`tax_optimizer.report.build_action_report`.
+        Defaults to ``"full"`` (every simulated year). Pass
+        ``"retirement"`` for a condensed table.
+
+    Returns
+    -------
+    dict with keys ``content`` (the HTML text) and ``filename``
+    (``tax-optimizer-report-YYYYMMDD-HHMMSS.html``). The shape is the
+    one ``dcc.Download.data`` expects, so the callback can return this
+    dict directly.
+    """
+    sens_df, base_terminal = tornado_sensitivity(cfg, inputs)
+    md = build_action_report(
+        cfg=cfg,
+        inputs=inputs,
+        results=rr.strategies,
+        sens_df=sens_df,
+        base_terminal=base_terminal,
+        mc=rr.mc,
+        scenario_path=scenario_path,
+        year_table_scope=year_table_scope,
+    )
+    html_text = render_html(md)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return {
+        "content": html_text,
+        "filename": f"tax-optimizer-report-{stamp}.html",
+    }
+
+
+__all__ = [
+    "cache_run",
+    "get_cached",
+    "clear_cache",
+    "build_html_payload",
+]

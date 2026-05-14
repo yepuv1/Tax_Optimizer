@@ -32,6 +32,96 @@ Categories used:
 
 ## [Unreleased]
 
+### Added — Dash app: download action-plan report (v6.8)
+
+**Why it matters:** the Dash app already produced the same simulation
+artifacts the CLI's `--report report.html` flag exports (winner pick,
+KPI tiles, year-by-year table, MC fan / histogram), but to actually
+walk away with a *document* the user had to drop back to the
+command line. This adds a one-click "Download HTML" button next to
+the existing "Download JSON" so the optimizer's recommendations —
+TL;DR / household snapshot / recommended levers / expected outcomes /
+top tornado sensitivities / year-1 actions / year-by-year withdrawal
+& conversion table / hygiene / caveats — can be saved straight from
+the browser. The output is the same Letter-paged, self-styled HTML
+template `tax_optimizer.render.write_html` already produces, so the
+file opens cleanly in any browser and prints to PDF via the browser's
+"Save as PDF" dialog (no WeasyPrint / pango dependency).
+
+- **New module — `dash_app/report_builder.py`** with three public
+  helpers:
+  - `cache_run(cfg, inputs, RunResult) -> run_id` — registers a
+    finished run in a module-level `OrderedDict` keyed by a fresh
+    UUID, bounded to the last 5 runs (LRU eviction). The Dash
+    `run-result` `dcc.Store` carries only the run-id alongside its
+    JSON-safe figure data; the actual `Config` / `Inputs` /
+    per-strategy DataFrames live in the cache so the report
+    renderer can walk them without re-running the simulator.
+  - `get_cached(run_id)` — fetches the triple and bumps its LRU
+    position. Returns `None` for unknown / evicted ids so the
+    download callback can show a friendly "click Run again"
+    message instead of throwing.
+  - `build_html_payload(cfg, inputs, RunResult, *, scenario_path,
+    year_table_scope)` — runs `tornado_sensitivity` against the base
+    `(cfg, inputs)` and feeds the strategy dict + sensitivity sweep
+    into `tax_optimizer.report.build_action_report`, then wraps the
+    markdown via `tax_optimizer.render.render_html` into a
+    self-contained HTML document. Returns the `{"content", "filename"}`
+    shape that `dcc.Download.data` expects, with a timestamped filename
+    (`tax-optimizer-report-YYYYMMDD-HHMMSS.html`).
+- **Wiring** — `dash_app/app.py:_run` now calls `cache_run(...)` after
+  every successful `run_scenario` and tucks the run-id into the
+  serialized `run-result` payload. A new
+  `_download_report` callback reads `run-result.data["run_id"]`,
+  re-hydrates the cached `(cfg, inputs, rr)` triple, and feeds it
+  to `build_html_payload`. The "Run a scenario first" / "cache
+  expired" / generic-render-error edges all surface via the
+  existing `run-status` Span. The button is `outline=True` blue so
+  it visually distinguishes from the secondary "Download JSON".
+- **Layout** — `dash_app/layout.py:top_bar` reflows from
+  `[upload(md=8), save(md=4)]` to `[upload(md=6), save(md=3),
+  report(md=3)]`. The new column has its own `dcc.Download` (id
+  `report-download`) and a `<title>` tooltip that explains the
+  PDF-via-browser-print workflow.
+- **Mode coverage** — works for all three run modes (`single`,
+  `four_strategies`, `four_plus_mc`). Single-mode reports degrade
+  gracefully (the "Verdict" block is empty when there's no
+  S0_baseline / S3_optimized contrast); four-strategy reports
+  render the full optimizer narrative; `four_plus_mc` reports
+  additionally pick up the Monte Carlo block via the cached
+  `RunResult.mc`. No new Config knobs.
+- **No new system deps** — the Dash app only emits HTML, never PDF,
+  so the existing `[dash]` extra (`dash + dash-bootstrap-components +
+  plotly`) covers it. PDF output is still available via the CLI
+  (`python -m tax_optimizer --report report.pdf` with the `[pdf]`
+  extra), and from the downloaded HTML via the browser's print
+  dialog.
+
+### Tests — Dash report-download regression suite
+
+- `tests/test_dash_report_download.py` — 12 new tests, gated on
+  `pytest.importorskip("dash")` so a minimal install without the
+  `[dash]` extra still passes the rest of the suite:
+  - **`TestRunCache`** (4 tests) — `cache_run` / `get_cached`
+    round-trip, `None` / unknown-id handling, LRU eviction at
+    capacity (`_MAX_CACHED_RUNS = 5`), and the bump-on-touch
+    behavior (touching the oldest id promotes it so the *next*
+    eviction takes the second-oldest instead).
+  - **`TestBuildHtmlPayload`** (6 tests) — payload shape (`content`
+    + timestamped filename), full-HTML-document scaffolding
+    (`<!DOCTYPE html>` / `<title>` / report H1), presence of every
+    canonical report section (1. Household snapshot through 9.
+    Caveats), `scenario_path` propagation into the header,
+    `year_table_scope="retirement"` shrinkage vs `"full"`, and the
+    `ValueError` raise on an invalid scope (the latter is what
+    surfaces in the UI as `Report build failed: …`).
+  - **`TestEndToEnd`** (2 tests) — full `run → cache_run → get_cached
+    → build_html_payload` flow for both `single` and
+    `four_strategies` modes (the latter at `horizon_age=58` to keep
+    the differential-evolution loop fast enough for CI).
+
+Full suite: 592 passing (580 pre-existing + 12 new).
+
 ### Fixed — v6.8 estate-mode phantom spending (post-mortality drain)
 
 **Why it matters:** When both spouses' `mortality.year_of_death_*` had

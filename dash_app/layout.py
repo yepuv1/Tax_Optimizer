@@ -176,7 +176,7 @@ def top_bar() -> dbc.Card:
                                     },
                                 ),
                             ],
-                            md=8,
+                            md=6,
                         ),
                         dbc.Col(
                             [
@@ -190,7 +190,33 @@ def top_bar() -> dbc.Card:
                                 ),
                                 dcc.Download(id="scenario-download"),
                             ],
-                            md=4,
+                            md=3,
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label(
+                                    "Action-plan report",
+                                    className="form-label small",
+                                ),
+                                dbc.Button(
+                                    "Download HTML",
+                                    id="report-download-btn",
+                                    color="primary",
+                                    outline=True,
+                                    size="sm",
+                                    className="w-100",
+                                    title=(
+                                        "Build the optimizer's action-plan report "
+                                        "(TL;DR, recommended levers, expected "
+                                        "outcomes, top sensitivities, year-by-year "
+                                        "withdrawal & conversion table) as a "
+                                        "self-contained HTML file. Print to PDF "
+                                        "from the browser if you want PDF."
+                                    ),
+                                ),
+                                dcc.Download(id="report-download"),
+                            ],
+                            md=3,
                         ),
                     ],
                     className="g-2",

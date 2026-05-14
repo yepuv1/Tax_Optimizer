@@ -28,6 +28,7 @@ from tax_optimizer.scenario import (
 from . import figures
 from .forms import get_field
 from .layout import build_layout
+from .report_builder import build_html_payload, cache_run, get_cached
 from .runner import (
     deserialize_strategy_df,
     run_scenario,
@@ -234,12 +235,53 @@ def make_app() -> dash.Dash:
             return no_update, html.Span(
                 f"Run failed: {e}", className="text-danger"
             )
+        # Cache the full Python objects so the report-download callback
+        # can re-render the action plan without re-running the
+        # simulator. The Store carries only the run_id (UUID) plus the
+        # JSON-safe figure data; the actual `RunResult` (with its
+        # embedded `Config`, `Inputs`, and per-year DataFrames) lives
+        # in `report_builder._RUN_CACHE` keyed by `run_id`.
+        run_id = cache_run(cfg, inputs, rr)
         payload = serialize_run_result(rr)
+        payload["run_id"] = run_id
         msg = (
             f"Ran '{rr.mode}' in {rr.elapsed_s:.1f}s. "
             f"Winner: {rr.winner_name}."
         )
         return payload, html.Span(msg, className="text-success")
+
+    # ---- Download HTML action-plan report ---------------------------
+
+    @app.callback(
+        Output("report-download", "data"),
+        Output("run-status", "children", allow_duplicate=True),
+        Input("report-download-btn", "n_clicks"),
+        State("run-result", "data"),
+        prevent_initial_call=True,
+    )
+    def _download_report(_clicks, run_data):
+        if not run_data or not run_data.get("strategies"):
+            return no_update, html.Span(
+                "Run a scenario first - the report needs simulation results.",
+                className="text-warning",
+            )
+        run_id = run_data.get("run_id")
+        cached = get_cached(run_id)
+        if cached is None:
+            return no_update, html.Span(
+                "Run results have expired from the cache. Click 'Run' again.",
+                className="text-warning",
+            )
+        cfg, inputs, rr = cached
+        try:
+            payload = build_html_payload(cfg, inputs, rr)
+        except Exception as e:  # noqa: BLE001 - surface any render error
+            return no_update, html.Span(
+                f"Report build failed: {e}", className="text-danger"
+            )
+        return payload, html.Span(
+            f"Report ready: {payload['filename']}.", className="text-success"
+        )
 
     # ---- Overview tab -----------------------------------------------
 
