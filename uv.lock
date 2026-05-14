@@ -3443,6 +3443,8 @@ name = "tax-optimizer"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [
+    { name = "dash" },
+    { name = "dash-bootstrap-components" },
     { name = "ipython", version = "8.39.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "ipython", version = "9.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "jinja2" },
@@ -3452,17 +3454,13 @@ dependencies = [
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "plotly" },
     { name = "rich" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 
 [package.optional-dependencies]
-dash = [
-    { name = "dash" },
-    { name = "dash-bootstrap-components" },
-    { name = "plotly" },
-]
 dev = [
     { name = "black" },
     { name = "mypy" },
@@ -3484,8 +3482,8 @@ pdf = [
 [package.metadata]
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.3" },
-    { name = "dash", marker = "extra == 'dash'", specifier = ">=2.16" },
-    { name = "dash-bootstrap-components", marker = "extra == 'dash'", specifier = ">=1.6" },
+    { name = "dash", specifier = ">=4.1.0" },
+    { name = "dash-bootstrap-components", specifier = ">=1.6" },
     { name = "ipykernel", marker = "extra == 'notebook'", specifier = ">=6.29" },
     { name = "ipython", specifier = ">=8.18" },
     { name = "jinja2", specifier = ">=3.1" },
@@ -3498,7 +3496,7 @@ requires-dist = [
     { name = "notebook", marker = "extra == 'notebook'", specifier = ">=7.0" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pandas", specifier = ">=2.1" },
-    { name = "plotly", marker = "extra == 'dash'", specifier = ">=5.18" },
+    { name = "plotly", specifier = ">=5.18" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "rich", specifier = ">=13.7" },
@@ -3506,7 +3504,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.11" },
     { name = "weasyprint", marker = "extra == 'pdf'", specifier = ">=60" },
 ]
-provides-extras = ["notebook", "pdf", "dash", "dev"]
+provides-extras = ["notebook", "pdf", "dev"]
 
 [[package]]
 name = "terminado"
