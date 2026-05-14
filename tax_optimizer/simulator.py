@@ -799,13 +799,21 @@ def simulate(
         # triggered the deficit cascade and raided the just-funded
         # Roth bucket — defeating the strategy.
         if a_working or b_working:
-            # Working years: wages (Box 1) + extras, net of FICA + SDI.
-            # Portfolio dividends/interest hit the tax line but are
-            # notional (reinvested into `state.taxable`), so they
-            # aren't real cash this year.
+            # Working years: wages (Box 1) + extras, net of FICA + SDI
+            # and post-tax Roth-401(k) deferrals. Portfolio dividends /
+            # interest hit the tax line but are notional (reinvested
+            # into `state.taxable`), so they aren't real cash this year.
+            # v6.7: subtract `a_roth_contrib + b_roth_contrib`. Roth
+            # 401(k) deferrals don't reduce Box 1 (post-tax) but are
+            # paycheck dollars routed into `state.roth`, so they are
+            # NOT available cash for paying conversion tax. Pre-v6.7
+            # this gap inflated `tax_paying_capacity` and the deficit
+            # `delta` (see `cash_inflow` below) by the same dollars,
+            # silently double-counting the Roth contribution.
             earned_cash = (
                 wages_box1 + extra_interest + extra_qdiv + extra_ltcg
                 - fica_total - sdi_total
+                - a_roth_contrib - b_roth_contrib
             )
         else:
             earned_cash = 0.0
@@ -1012,12 +1020,21 @@ def simulate(
             # Working years: subtract employee-side FICA and state SDI.
             # Both are withholdings that don't show up in federal/state
             # income tax, so we deduct them explicitly from cash inflow.
+            # v6.7: also subtract `a_roth_contrib + b_roth_contrib`.
+            # Roth-401(k) deferrals are paycheck dollars routed to
+            # `state.roth` (line 230). Pre-v6.7 they were missing from
+            # this outflow, so `delta` carried that money a second time
+            # into `state.taxable` — silently double-counting every Roth
+            # 401(k) dollar (≈ deferral × marginal rate of free wealth
+            # per year). Mirrors the same fix applied to `earned_cash`
+            # in the tax-paying-capacity block above.
             cash_inflow = (
                 wages_box1
                 + extra_interest + extra_qdiv + extra_ltcg
                 + gross_cash_in
                 - fica_total
                 - sdi_total
+                - a_roth_contrib - b_roth_contrib
             )
         else:
             cash_inflow = pension_income + ssn_income + gross_cash_in

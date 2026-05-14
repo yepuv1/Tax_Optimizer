@@ -32,6 +32,74 @@ Categories used:
 
 ## [Unreleased]
 
+### Fixed — v6.7 Roth-401(k) cash-flow double-count
+
+**Why it matters:** Every dollar a spouse routed into the Roth 401(k)
+bucket was silently counted twice — once correctly (added to
+`state.roth`) and once incorrectly (carried through as taxable cash
+surplus into `state.taxable`). On the user's `example02.local.json`
+($34.6k/yr of Roth-401(k) deferrals, 100% Roth split), this added
+~$0.4M of phantom wealth over a 10-year working window — and silently
+weakened the v6.5 Roth-conversion liquidity guard by the same amount
+every year.
+
+The bug surfaced via a wealth-conservation probe: flipping
+`spouse_*_roth_401k_pct` from `1.0` to `0.0` on an otherwise-identical
+deterministic scenario (zero growth/drag, no conversion, no mega-
+backdoor) **increased** total household wealth by ~$30k, whereas the
+correct behavior is for wealth to **decrease** by ≈ `deferral ×
+marginal_rate` (the extra tax paid today for Roth treatment instead
+of paying it later on pretax withdrawals).
+
+- **Root cause** — `earned_cash` (used to derive `tax_paying_capacity`
+  for the v6.5 Roth-conversion liquidity guard) and `cash_inflow`
+  (used in the year's final `delta` that lands in `state.taxable`)
+  both omitted `a_roth_contrib + b_roth_contrib` as a paycheck
+  outflow. Pretax 401(k) is naturally subtracted via `wages_box1`
+  reduction; mega-backdoor is explicitly subtracted via
+  `mega_backdoor_total`; Roth 401(k) deferrals had no equivalent
+  outflow term despite being added to `state.roth` at the
+  contribution step.
+- **Fix** — subtract `a_roth_contrib + b_roth_contrib` from both
+  `earned_cash` and `cash_inflow` in `simulator.py`. Two-line change.
+- **Downstream effect on Roth conversion** — `tax_paying_capacity`
+  now correctly excludes Roth-401(k) deferrals. The v6.5 liquidity
+  guard fires slightly more aggressively in tight-capacity scenarios
+  (e.g. high-bracket-fill targets with low `conversion_taxable_use_ratio`).
+  In the user's `example02.local.json` at 32% bracket-fill, capacity
+  is still well above the conversion's marginal tax, so the visible
+  conversion amount is unchanged — but the underlying capacity
+  number in the `roth_conv_tax_capacity` diagnostic column drops by
+  the elective-deferral total, matching textbook cash-flow.
+
+### Tests — v6.7 wealth-conservation regression suite
+
+- `tests/test_roth_401k_cashflow_v67.py` — 4 new regression tests:
+  - `test_terminal_wealth_drops_by_tax_only_under_roth_election` —
+    toggling Roth-401(k) pct between 0 and 1 must change terminal
+    wealth by exactly `-extra_federal_tax_paid_today`. Pre-v6.7 the
+    delta was opposite-signed and dominated by the missing deferral
+    outflow.
+  - `test_pretax_and_roth_bucket_movements_offset` — orthogonal
+    "money goes to the right buckets" check; was already correct
+    pre-v6.7.
+  - `test_taxable_difference_equals_extra_tax_with_opposite_sign` —
+    pins down where the bug lived (the `taxable_balance` Δ between
+    the two cases).
+  - `test_capacity_does_not_climb_under_roth_election` — `roth_conv_tax_capacity`
+    diagnostic column must not gain the elective-deferral total when
+    Roth-401(k) toggles on.
+
+Full suite: 574 passing (570 pre-existing + 4 new).
+
+### Fixed — `scenarios/example02.json` typo
+
+- Renamed `roth_cap_conversion_by_liquidity` → `cap_conversion_by_liquidity`
+  in `scenarios/example02.json`. The misspelled key was an invalid
+  Config field, so the scenario parser correctly raised
+  `ScenarioError` on load — but that meant the example file itself
+  was unusable. Loud failure, but worth fixing so the example loads.
+
 ### Added — v6.6 mega-backdoor auto-spillover
 
 **Why it matters:** Pre-v6.6, setting `spouse_*_total_contrib_pct *

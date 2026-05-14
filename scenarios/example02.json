@@ -13,7 +13,7 @@
 
     "withdrawal_strategy": "conventional",
     "bracket_fill_target": 0.22,
-    "roth_conversion_target_bracket": 0.0,
+    "roth_conversion_target_bracket": 0.60,
     "roth_conversion_amount": 0.0,
 
     "cap_conversion_by_liquidity": true,
