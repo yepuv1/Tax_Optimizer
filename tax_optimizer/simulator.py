@@ -714,6 +714,18 @@ def simulate(
             net_need += inflated
             lump_total += inflated
 
+        # Estate / heir-mode years: with both spouses dead the household
+        # has no living member to spend, so the age-driven smile (and any
+        # scheduled lump events) must collapse to zero. Without this guard
+        # the deficit cascade keeps phantom-draining the taxable account
+        # to fund a `spending_need` of $0 worth of consumption, which
+        # silently understates the inheritance balance at horizon.
+        # Tax on portfolio yield can still produce a tiny `delta < 0`
+        # downstream and is funded by the deficit cascade as before.
+        if not (alive_a or alive_b):
+            net_need = 0.0
+            lump_total = 0.0
+
         # HSA tax-free pay-down of qualified medical expense.
         # The LTC shock is the only explicit medical-expense line in
         # the model; HSA dollars are spent against it first (the whole

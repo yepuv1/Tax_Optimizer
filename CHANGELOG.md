@@ -32,6 +32,86 @@ Categories used:
 
 ## [Unreleased]
 
+### Fixed — v6.8 estate-mode phantom spending (post-mortality drain)
+
+**Why it matters:** When both spouses' `mortality.year_of_death_*` had
+elapsed but the simulation horizon hadn't, the simulator silently
+liquidated the taxable account year after year to fund a `spending_need`
+that nobody alive could consume. On the user's `example02.local.json`
+(`year_of_death_a = year_of_death_b = 30`, `horizon_age = 90`, smile
+profile with `base_spending = 100k`), the post-death window produced
+`spending_need ≈ $273–290k/yr` driving `taxable_withdrawal` of the same
+order; the taxable balance fell from \$1.84M → \$1.26M over the last
+two years even though every income column (`wages`, `pension`, `ssn`,
+`rmd`) correctly reported \$0. The understated terminal taxable balance
+flowed straight into `terminal_after_tax_nw` and any heir-bequest
+metric, biasing the inheritance number for any scenario whose horizon
+extends past `max(year_of_death_a, year_of_death_b)`.
+
+The bug surfaced from a notebook eyeball: "the last 3 years the pension
+and ssn columns are 0, why?" — and on closer look, so were `wages` and
+`rmd`, but `taxable_withdrawal` was very much not zero.
+
+- **Root cause** — mortality was modeled as a strict income-side gate
+  (each of `wages`, `pension`, `ssn_income`, `rmd` checks `alive_a` /
+  `alive_b`) but the spending profile and withdrawal cascade had no
+  parallel guard. `spending.amount_for(...)` is age-driven by design
+  (smile profile, manual phases, lump events), so it kept emitting a
+  non-zero `net_need` in estate years. The retirement branch in
+  `simulator.py` (`else: withdraws = withdraw_for_need(...)`) only
+  toggles on `a_working or b_working` being False — which is True both
+  in normal retirement *and* in estate mode — so the cascade fell
+  through and drained taxable to net out the phantom need.
+- **Fix** — one block in `tax_optimizer/simulator.py`, immediately
+  after `net_need` and `lump_total` are built from
+  `spending.amount_for(...)`:
+
+  ```python
+  if not (alive_a or alive_b):
+      net_need = 0.0
+      lump_total = 0.0
+  ```
+
+  With `net_need = 0`, the `conventional` / `proportional` /
+  `bracket_fill` cascades in `withdrawals.py` short-circuit on their
+  `if remaining > 0 and state.taxable > 0` guards and `withdraw_for_need`
+  returns all-zero buckets. The deficit cascade can still pull a few
+  thousand dollars from taxable to fund federal/state tax on residual
+  portfolio yield (dividends + interest on the still-alive taxable
+  balance), which is the correct behavior for an estate.
+- **Downstream effect on inheritance metrics** — on the user's
+  `example02.local.json`, the last-row `taxable_balance` rises from
+  \$1.26M (pre-fix) to \$5.64M (post-fix); `pretax_balance` goes from
+  \$6.33M → \$8.42M; `roth_balance` from \$11.53M → \$6.08M (the Roth
+  drop is a different effect — pre-fix the cascade was protecting Roth
+  by draining taxable first, so Roth grew unchecked; post-fix neither
+  bucket gets touched, so the Roth's relative share is smaller because
+  the taxable bucket isn't being artificially shrunk). The `single`
+  filing-status label in estate-mode rows is left as-is — it's a
+  fallback in `Mortality.filing_status` (no "neither" enum) and is
+  cosmetic when both `alive_*` are False.
+- **No new Config knobs** — the guard is purely defensive and fires
+  automatically whenever `cfg.mortality.year_of_death_a` and
+  `year_of_death_b` are both set and the simulation horizon stretches
+  past `max(year_of_death_*)`. Default `Mortality()` (both survive to
+  horizon) is unaffected — the both-dead set is empty.
+- **Year-of-death rows unaffected** — the IRS year-of-death MFJ rule
+  in `Mortality.filing_status` and the income-side `alive_*` flips are
+  unchanged. Only the *post-death* rows (years strictly after both
+  spouses' deaths) collapse to zero spending.
+
+### Tests — v6.8 estate-phantom-spend regression suite
+
+- `tests/test_estate_phantom_spend.py` — 6 new regression tests:
+  - `test_post_death_window_exists` — sanity that the `Mortality(year_of_death_a=30, year_of_death_b=30)` + `horizon_age=90` scenario actually has post-death rows to inspect (≥5).
+  - `test_spending_need_is_zero_post_death` — the core invariant: `df.loc[both_dead, "spending_need"].sum() == 0`.
+  - `test_no_consumption_withdrawals_post_death` — `pretax_withdrawal == 0`, `roth_withdrawal == 0`, and `taxable_withdrawal < $5k/yr` (catches any regression that re-introduces the \$200k+ phantom drain; the \$5k bound leaves room for the deficit cascade to fund yield-related tax).
+  - `test_income_lines_remain_zero_post_death` — guards the existing alive-gates (wages / pension / ssn / rmd) against accidental coupling to the spending fix.
+  - `test_one_alive_spouse_keeps_spending` — single-survivor case (`year_of_death_a=20, year_of_death_b=None`) still has `spending_need > 0` in the survivor window. The guard must not fire when at least one spouse is alive.
+  - `test_default_simulation_unchanged_shape` — default `Mortality()` produces an empty both-dead mask, so the guard is a no-op and the smile profile drives `spending_need > 0` in retirement as before.
+
+Full suite: 580 passing (574 pre-existing + 6 new).
+
 ### Fixed — v6.7 Roth-401(k) cash-flow double-count
 
 **Why it matters:** Every dollar a spouse routed into the Roth 401(k)
