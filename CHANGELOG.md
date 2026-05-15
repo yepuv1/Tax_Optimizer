@@ -32,6 +32,136 @@ Categories used:
 
 ## [Unreleased]
 
+### Changed — Dash app: Year-by-year table reorganized into functional groups + per-group coloring
+
+**Why it matters:** the Year-by-year drill-down DataTable grew
+organically over time. The 22-column list was *implicitly*
+grouped via source-line breaks but the UI gave the user zero
+visual cue for the groupings, and the order had drifted in a few
+spots: `medicare_base_premium` came AFTER `irmaa` (the
+surcharge-on-top read backwards), `spending_need` was sandwiched
+between healthcare columns despite being a household-cashflow
+target, and `agi` and `federal_tax` were split by `state_tax`
+even though all three are tax-outcome metrics. The simulator
+also emits a handful of high-value diagnostic columns
+(`taxable_income`, `unfunded`, `qualified_dividends`,
+`interest_income`) that the dashboard wasn't surfacing.
+
+The drill-down table is now structured around eight functional
+groups, each with a color-blind-safe Okabe-Ito tint and a
+colored left-border divider on the first column of the group:
+
+| # | Group | Columns | Hue |
+|---|-------|---------|-----|
+| 1 | Identity        | year, spouse_a_age, filing_status                                         | slate (default)         |
+| 2 | Income          | wages, pension, ssn, qualified_dividends, interest_income                 | Okabe blue `#0072B2`    |
+| 3 | Pretax events   | rmd, roth_conversion                                                      | Okabe orange `#E69F00`  |
+| 4 | Withdrawals     | pretax_withdrawal, roth_withdrawal, taxable_withdrawal                    | Okabe yellow `#F0E442`  |
+| 5 | Spending        | spending_need, unfunded                                                   | vermillion `#D55E00`    |
+| 6 | Tax outcome     | agi, taxable_income, federal_tax, state_tax, bracket_pct                  | reddish-purple `#CC79A7`|
+| 7 | Healthcare      | medicare_base_premium, irmaa                                              | sky-blue `#56B4E9`      |
+| 8 | Balances (EOY)  | pretax_balance, roth_balance, taxable_balance, hsa_balance                | bluish-green `#009E73`  |
+
+Total: 26 columns (was 22). The four newly-surfaced columns are
+all already in the simulator output, no engine changes:
+
+- **`taxable_income`** (Tax group) — distinct from AGI; this is
+  the post-deduction line that actually drives the bracket.
+  Useful for spotting "AGI looks fine but standard deduction
+  is being phased out so taxable income is higher than expected".
+- **`unfunded`** (Spending group) — the deficit-indicator
+  diagnostic. Critical for spotting failed years where the
+  withdrawal cascade couldn't fund the spending target. The
+  most-requested missing column.
+- **`qualified_dividends`** (Income group) — LTCG-rate portfolio
+  yield, distinct from interest. Helps explain AGI build-up
+  in years with no wages.
+- **`interest_income`** (Income group) — taxable bond / cash
+  yield. Same rationale as qualified_dividends; surfaces
+  why the asset-location strategy matters.
+
+#### Implementation details
+
+- **`dash_app/figures.py`** — new structured declaration
+  `_YEARLY_COLUMN_GROUPS` (8-tuple list of
+  `(group_id, color_key, columns)`) is the single source of
+  truth. `detail_columns()` now derives from this list (with
+  `bracket_pct → marginal` translated via `_DISPLAY_TO_NATIVE`
+  for filtering against the simulator-native frame).
+  `filter_to_detail_cols()` is unchanged in behavior — same
+  `marginal × 100 → bracket_pct` rename and dollar rounding.
+
+- **`dash_app/figures.py:yearly_table_styles()`** — new helper
+  that derives three Dash DataTable conditional-style arrays
+  from the same `_YEARLY_COLUMN_GROUPS` declaration:
+  - `style_header_conditional` — 23 rules (one per non-identity
+    column) at `rgba(<hue>, 0.22)`. Strong enough that the eight
+    group blocks are obvious at a glance, light enough that the
+    column-name text stays readable.
+  - `style_data_conditional` — 23 rules (mirror) at
+    `rgba(<hue>, 0.08)`. The light tint carries the group cue
+    down through every data row without competing with the
+    digit text.
+  - `style_cell_conditional` — 7 rules (one per non-identity
+    group's first column) with
+    `borderLeft="2px solid rgba(<hue>, 0.6)"`. Vertical break
+    between groups without needing empty separator columns
+    (which would have broken sort/filter).
+
+- **`dash_app/figures.py:_hex_to_rgba()`** — tiny helper that
+  converts the canonical Okabe-Ito hex codes to the rgba alpha
+  tints used by the conditional styles. Avoids hand-mixing
+  pastels and keeps the palette as the single source of truth.
+
+- **`dash_app/layout.py:yearly_tab()`** — wires the conditional
+  styles into the existing `dash_table.DataTable` via the three
+  `style_*_conditional` props. The styles are computed once at
+  layout-build time and Dash gracefully ignores rules whose
+  `column_id` isn't in the data, so it's safe to declare every
+  rule even though `_populate_yearly_table` may filter to a
+  subset of the columns at runtime.
+
+#### Tests — `tests/test_dash_yearly_table.py`
+
+New test file (40 tests) pinning the contract so a future
+refactor can't silently regress column order, group membership,
+the simulator-native rename, or palette membership:
+
+- **Group declaration invariants**: 8 groups in the documented
+  order; only the identity group has no color; every color key
+  resolves through `_OKABE_ITO`; each color used at most once;
+  no column appears in two groups; per-group spot-check via
+  `parametrize`.
+- **`detail_columns()`**: returns simulator-native names (with
+  `bracket_pct` translated back to `marginal`); total = 26;
+  positional invariants (`year` first, balances last,
+  `unfunded` immediately after `spending_need`,
+  `medicare_base_premium` before `irmaa`, `agi` before
+  `federal_tax`); 4 new columns present.
+- **`filter_to_detail_cols`**: against a synthetic
+  simulator-shaped DataFrame, the output preserves group order,
+  renames `marginal → bracket_pct`, drops simulator extras
+  (`fica`, `rmd_a`), rounds dollar columns, and gracefully
+  handles missing columns.
+- **`yearly_table_styles`**: returns the three conditional
+  lists; header / data rules cover exactly the 23 non-identity
+  columns; cell-border rules cover exactly 7 group-first
+  columns; header alpha (0.22) is strictly greater than data
+  alpha (0.08); every rgba color used in any rule parses back
+  to an Okabe-Ito hex code (palette-membership pin); the
+  first-column-of-each-group border uses the group's own
+  color.
+- **`_hex_to_rgba`**: parameterized known-input cases (case
+  insensitivity, optional leading `#`, edge-case alpha values)
+  + ValueError on invalid lengths.
+- **`_DISPLAY_TO_NATIVE`**: `bracket_pct → marginal`; every
+  display-side key actually appears in some group.
+- **End-to-end**: a real `run_scenario(mode="four_strategies")`
+  → `filter_to_detail_cols(...)` produces a DataFrame whose
+  columns match the union of `_YEARLY_COLUMN_GROUPS` in display
+  order — catches drift between the simulator's emitted columns
+  and the dashboard's filter list.
+
 ### Fixed — Strategies tab: bar value labels truncated
 
 **Why it matters:** the 3-subplot strategy comparison chart at

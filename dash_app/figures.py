@@ -1042,17 +1042,74 @@ def _fmt_dollars(v: Any) -> str:
         return "-"
 
 
+# ---------------------------------------------------------------------
+# Year-by-year detail table — column groups, ordering, and styling
+# ---------------------------------------------------------------------
+#
+# The Year-by-year tab's drill-down DataTable used to be a flat list
+# of 22 column names whose order had drifted into "approximate
+# functional groups separated by source-line breaks". The table
+# below promotes that implicit grouping to a first-class data
+# structure so we can:
+#
+#   1. Generate `detail_columns()` (the column-filter list applied
+#      against the simulator output) directly from the groups, so
+#      adding a column = editing one tuple.
+#   2. Generate per-column DataTable conditional styles — light cell
+#      tints + medium header tints + a left-border divider on the
+#      first column of each group — directly from the same source
+#      of truth, keeping color and order in lockstep.
+#
+# Each entry is `(group_id, color_key_or_None, columns)`:
+#
+#   - `group_id`     — internal identifier; surfaces in test names.
+#   - `color_key`    — key into `_OKABE_ITO`, or `None` for the
+#                      "identity" group which keeps the default
+#                      slate header (no group hue).
+#   - `columns`      — the user-facing column names (post-rename),
+#                      in display order. `bracket_pct` is the
+#                      DataTable-side rename of the simulator-side
+#                      `marginal` (see `_DISPLAY_TO_NATIVE` and
+#                      `filter_to_detail_cols`).
+_YEARLY_COLUMN_GROUPS: list[tuple[str, str | None, list[str]]] = [
+    ("identity",  None,             ["year", "spouse_a_age", "filing_status"]),
+    ("income",    "blue",           ["wages", "pension", "ssn",
+                                     "qualified_dividends", "interest_income"]),
+    ("pretax",    "orange",         ["rmd", "roth_conversion"]),
+    ("withdraw",  "yellow",         ["pretax_withdrawal", "roth_withdrawal",
+                                     "taxable_withdrawal"]),
+    ("spending",  "vermillion",     ["spending_need", "unfunded"]),
+    ("tax",       "reddish_purple", ["agi", "taxable_income", "federal_tax",
+                                     "state_tax", "bracket_pct"]),
+    ("medicare",  "sky_blue",       ["medicare_base_premium", "irmaa"]),
+    ("balances",  "bluish_green",   ["pretax_balance", "roth_balance",
+                                     "taxable_balance", "hsa_balance"]),
+]
+
+# Display column → simulator-native column. Keeps `detail_columns()`
+# in lockstep with what `filter_to_detail_cols` renames at runtime
+# (`marginal × 100 → bracket_pct`). Grow this dict if more renames
+# are added — every entry should have a paired transform in
+# `filter_to_detail_cols`.
+_DISPLAY_TO_NATIVE: dict[str, str] = {
+    "bracket_pct": "marginal",
+}
+
+
 def detail_columns() -> list[str]:
-    """Year-by-year drill-down columns (mirror the notebook's detail_cols)."""
-    return [
-        "year", "spouse_a_age", "filing_status",
-        "wages", "pension", "ssn",
-        "rmd", "roth_conversion",
-        "pretax_withdrawal", "roth_withdrawal", "taxable_withdrawal",
-        "agi", "federal_tax", "state_tax", "marginal",
-        "irmaa", "medicare_base_premium", "spending_need",
-        "pretax_balance", "roth_balance", "taxable_balance", "hsa_balance",
-    ]
+    """Year-by-year drill-down columns in display order.
+
+    Returns simulator-native column names (so the list can be used
+    as a DataFrame filter). The post-rename display name
+    `bracket_pct` is translated back to its native `marginal`
+    via `_DISPLAY_TO_NATIVE` here — `filter_to_detail_cols`
+    performs the actual rename + percentage scaling at runtime.
+    """
+    cols: list[str] = []
+    for _group_id, _color_key, group_cols in _YEARLY_COLUMN_GROUPS:
+        for c in group_cols:
+            cols.append(_DISPLAY_TO_NATIVE.get(c, c))
+    return cols
 
 
 def filter_to_detail_cols(df: pd.DataFrame) -> pd.DataFrame:
@@ -1066,3 +1123,80 @@ def filter_to_detail_cols(df: pd.DataFrame) -> pd.DataFrame:
             continue
         out[c] = out[c].round(0)
     return out
+
+
+def _hex_to_rgba(hex_color: str, alpha: float) -> str:
+    """Convert ``"#0072B2"`` + ``0.08`` to ``"rgba(0, 114, 178, 0.08)"``.
+
+    Used to derive subtly-tinted DataTable cell / header backgrounds
+    from the canonical Okabe-Ito hex palette without having to
+    pre-mix and store hand-picked pastels for every group.
+    """
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        raise ValueError(f"expected 6-digit hex color, got {hex_color!r}")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r}, {g}, {b}, {alpha})"
+
+
+def yearly_table_styles() -> dict[str, list[dict[str, Any]]]:
+    """Generate Dash DataTable conditional-style lists from the
+    column-group declaration.
+
+    The Year-by-year DataTable receives three conditional-style
+    arrays:
+
+    * ``style_header_conditional`` — one rule per colored column
+      with a `rgba(<hue>, 0.22)` background. Strong enough that
+      the eight group blocks are obvious at a glance, light
+      enough that the column-name text stays readable.
+    * ``style_data_conditional`` — one rule per colored column
+      with a `rgba(<hue>, 0.08)` background. The light tint
+      carries the group cue down through every data row without
+      competing visually with the digit text.
+    * ``style_cell_conditional`` — one rule per *first column of
+      each non-identity group* with a `2px solid rgba(<hue>, 0.6)`
+      left border. Vertical break between groups without needing
+      empty separator columns (which would break sort/filter).
+
+    Identity columns (year / spouse_a_age / filing_status) keep
+    the default styling — they're the table's anchor and don't
+    need a group cue.
+    """
+    style_header_conditional: list[dict[str, Any]] = []
+    style_data_conditional: list[dict[str, Any]] = []
+    style_cell_conditional: list[dict[str, Any]] = []
+
+    for _group_id, color_key, group_cols in _YEARLY_COLUMN_GROUPS:
+        if color_key is None:
+            # Identity group: leave defaults alone.
+            continue
+        hue = _OKABE_ITO[color_key]
+        cell_bg = _hex_to_rgba(hue, 0.08)
+        header_bg = _hex_to_rgba(hue, 0.22)
+        border_color = _hex_to_rgba(hue, 0.60)
+
+        for idx, col in enumerate(group_cols):
+            style_header_conditional.append({
+                "if": {"column_id": col},
+                "backgroundColor": header_bg,
+            })
+            style_data_conditional.append({
+                "if": {"column_id": col},
+                "backgroundColor": cell_bg,
+            })
+            if idx == 0:
+                # Left-border divider on the first column of the
+                # group. Applied to *both* header and data rows
+                # via `style_cell_conditional` (which targets cells
+                # in both header and body).
+                style_cell_conditional.append({
+                    "if": {"column_id": col},
+                    "borderLeft": f"2px solid {border_color}",
+                })
+
+    return {
+        "style_header_conditional": style_header_conditional,
+        "style_data_conditional": style_data_conditional,
+        "style_cell_conditional": style_cell_conditional,
+    }

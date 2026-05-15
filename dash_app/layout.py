@@ -18,6 +18,7 @@ from typing import Any
 import dash_bootstrap_components as dbc
 from dash import dash_table, dcc, html
 
+from . import figures
 from .forms import FormField, fields_by_group, fields_by_tier
 
 
@@ -466,6 +467,14 @@ def mc_tab() -> dbc.Tab:
 
 
 def yearly_tab() -> dbc.Tab:
+    # Conditional styles per column group are computed once at
+    # layout-build time from `_YEARLY_COLUMN_GROUPS` (the single
+    # source of truth for column order + per-group color). Dash
+    # gracefully ignores rules whose `column_id` isn't actually
+    # in the table data, so it's safe to declare every rule
+    # here even though `_populate_yearly_table` may filter to a
+    # subset of the columns at runtime.
+    yearly_styles = figures.yearly_table_styles()
     return dbc.Tab(
         [
             html.Div(
@@ -485,6 +494,15 @@ def yearly_tab() -> dbc.Tab:
                 style_table={"overflowX": "auto"},
                 style_cell={"fontSize": "0.85rem", "padding": "4px"},
                 style_header={"backgroundColor": "#f1f5f9", "fontWeight": "600"},
+                style_header_conditional=yearly_styles[
+                    "style_header_conditional"
+                ],
+                style_data_conditional=yearly_styles[
+                    "style_data_conditional"
+                ],
+                style_cell_conditional=yearly_styles[
+                    "style_cell_conditional"
+                ],
                 sort_action="native",
                 filter_action="native",
             ),
