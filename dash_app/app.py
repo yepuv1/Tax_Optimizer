@@ -724,16 +724,36 @@ def make_app() -> dash.Dash:
         Input("run-result", "data"),
     )
     def _render_taxes(run_data):
+        """Overlay AGI / federal / state / IRMAA / marginal across all
+        strategies, plus Roth-conversion + RMD timelines, so the user
+        can compare strategies side-by-side without a per-tab dropdown.
+
+        Falls back gracefully in single-strategy mode — the
+        multi-strategy builders simply render one line per panel —
+        so the same callback handles every run mode.
+        """
         if not run_data or not run_data.get("strategies"):
             placeholder = figures.empty_figure("Click 'Run' to populate the dashboard")
             return placeholder, placeholder
-        winner_name = run_data.get("winner_name")
         strategies = run_data["strategies"]
-        winner = strategies.get(winner_name) or next(iter(strategies.values()))
-        df = deserialize_strategy_df(winner["df"])
+        winner_name = run_data.get("winner_name") or ""
+        winner_suffix = f" — winner: {winner_name}" if winner_name else ""
+        # Pass `winner_name` through so the winner's line renders
+        # with a slightly heavier stroke and is drawn on top of the
+        # alternatives (see `_add_strategy_lines`). The verdict
+        # then reads at a glance even if the user hasn't matched
+        # color → strategy in the legend yet.
         return (
-            figures.taxes_panel(df, title=f"Taxes - {winner_name}"),
-            figures.conversion_panel(df, title=f"Conversions & RMDs - {winner_name}"),
+            figures.multi_strategy_taxes_panel(
+                strategies,
+                title=f"Taxes & marginal bracket{winner_suffix}",
+                winner_name=winner_name or None,
+            ),
+            figures.multi_strategy_conversion_panel(
+                strategies,
+                title=f"Roth conversions & RMDs{winner_suffix}",
+                winner_name=winner_name or None,
+            ),
         )
 
     # ---- Strategies tab --------------------------------------------

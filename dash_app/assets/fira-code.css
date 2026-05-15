@@ -114,6 +114,42 @@ h1, h2, h3, h4, h5, h6,
     font-family: var(--tx-mono-stack);
 }
 
+/* ---- Taxes-tab figure cards ------------------------------------- */
+/* Wraps each `dcc.Graph` on the Taxes tab in a light slate-200
+ * border + 6px radius so the multi-strategy panels read as
+ * self-contained cards rather than floating SVGs on the page
+ * background. The `1px solid #e2e8f0` matches the border on the
+ * report iframe (`layout.py:report_tab`) and the strategy
+ * comparison table headers, so the Taxes tab shares the same card
+ * vocabulary as the rest of the dashboard. The `padding: 6px`
+ * leaves a little breathing room between the plotly chrome (axis
+ * labels) and the border so the chart doesn't kiss the card
+ * edge. White background ensures the card stays opaque even if
+ * the page background ever picks up a tint. */
+.tax-figure {
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    background-color: #ffffff;
+    padding: 6px;
+}
+
+/* Divider between the two stacked figure cards on the Taxes tab.
+ * Bootstrap's default `<hr>` rendering is a 1px slate line at
+ * 25% opacity, which gets visually swallowed by the card borders
+ * directly above and below it. We bump the line to a solid
+ * slate-300 (`#cbd5e1`) — one shade darker than the card border
+ * — so the eye reads it as a deliberate section break ("now
+ * we're switching from tax-paid to conversion/RMD activity")
+ * rather than as a faint accidental rule. Generous vertical
+ * margin (`my-4`-ish) keeps the divider from kissing the cards
+ * on either side. */
+.tax-figure-divider {
+    border: 0;
+    border-top: 1px solid #cbd5e1;
+    margin: 1.5rem 0.5rem;
+    opacity: 1;
+}
+
 /* ---- Strategy comparison table --------------------------------- */
 /* Highlights cells in the per-knob × per-strategy table whose
  * values differ from the baseline column. Two intensity levels:
@@ -159,10 +195,30 @@ h1, h2, h3, h4, h5, h6,
     font-size: 0.72rem !important;
 }
 
+/* Color-blind redundancy: each highlighted cell also carries a
+ * non-color cue.
+ *   - `.strategy-cell-changed`   prepends a small triangle (▲)
+ *   - `.strategy-cell-optimized` prepends a star (★)
+ * Plus a 2px left border (yellow vs green) and a font-weight
+ * step (500 vs 600). With the icon prefix even achromatopsia
+ * users can scan the table for "what changed" and "what the
+ * optimizer picked" without needing the background tint. The
+ * icons are encoded directly via CSS `::before` so they don't
+ * appear in the raw cell text (the table data the user
+ * exports / copies stays clean).
+ */
 .strategy-cell-changed {
     background-color: #fff8d6 !important;  /* warning-subtle */
     border-left: 2px solid #fcd34d;
     font-weight: 500;
+}
+
+.strategy-cell-changed::before {
+    content: "\25B2\00A0";  /* ▲ + non-breaking space */
+    color: #92400e;          /* amber-800 — readable on yellow */
+    font-size: 0.7em;
+    margin-right: 0.15em;
+    vertical-align: 1px;
 }
 
 .strategy-cell-optimized {
@@ -170,6 +226,14 @@ h1, h2, h3, h4, h5, h6,
     border-left: 2px solid #34d399;
     font-weight: 600;
     color: #065f46;
+}
+
+.strategy-cell-optimized::before {
+    content: "\2605\00A0";   /* ★ + non-breaking space */
+    color: #065f46;          /* emerald-800 — readable on green */
+    font-size: 0.85em;
+    margin-right: 0.1em;
+    vertical-align: 1px;
 }
 
 /* When a `.strategy-cell-changed` / `.strategy-cell-optimized`

@@ -398,10 +398,34 @@ def overview_tab() -> dbc.Tab:
 
 
 def taxes_tab() -> dbc.Tab:
+    # Each chart gets a `tax-figure` className so the CSS in
+    # `assets/fira-code.css` can wrap it in a light slate-200 border
+    # — matches the card aesthetic used by the KPI tiles and the
+    # report iframe so the Taxes tab doesn't read as "two charts
+    # floating on the page background". `my-3` gives the cards a
+    # bit of vertical breathing room from each other and from the
+    # tab nav.
+    #
+    # The `html.Hr` between the two cards is a deliberate visual
+    # break: the top card answers "what tax did each strategy
+    # pay?" while the bottom card answers "what conversion /
+    # RMD activity drove that?". They tell two related but
+    # distinct stories, so a thin divider helps the eye treat
+    # them as a sequence rather than a single tall scroll
+    # region. Styling lives in `.tax-figure-divider` (CSS).
     return dbc.Tab(
         [
-            dcc.Graph(id="fig-taxes-panel", config={"displaylogo": False}),
-            dcc.Graph(id="fig-conversion-panel", config={"displaylogo": False}),
+            dcc.Graph(
+                id="fig-taxes-panel",
+                config={"displaylogo": False},
+                className="tax-figure my-3",
+            ),
+            html.Hr(className="tax-figure-divider"),
+            dcc.Graph(
+                id="fig-conversion-panel",
+                config={"displaylogo": False},
+                className="tax-figure my-3",
+            ),
         ],
         label="Taxes", tab_id="tab-taxes",
     )

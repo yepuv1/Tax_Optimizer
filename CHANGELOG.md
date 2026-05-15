@@ -32,6 +32,429 @@ Categories used:
 
 ## [Unreleased]
 
+### Fixed — Strategies tab: bar value labels truncated
+
+**Why it matters:** the 3-subplot strategy comparison chart at
+the bottom of the Strategies tab showed bar values like
+`$17,4` (truncated `$17,454,663`), `$1` (truncated
+`$18,626,834`), and `$8` (truncated `$83,378`). At realistic
+Strategies-tab widths the full-precision dollar text simply
+didn't fit alongside the bars, and the previous layout used
+`textposition="outside"` with no x-axis padding so Plotly
+clipped the labels at the subplot's right edge.
+
+The fix applies the same anti-overlap pattern used for the
+Monte Carlo histogram annotations:
+
+- **`dash_app/figures.py:strategy_compare_panel`**:
+  - **Abbreviated labels via `_abbrev_dollars`**:
+    `$17,454,663` → `$17.5M`, `$83,378` → `$83K`. Cuts label
+    width by ~60% so most labels now fit *inside* their bar.
+  - **`textposition="auto"`** (was `"outside"`) so Plotly
+    decides per-bar whether to render the label inside or
+    outside based on bar width.
+  - **X-axis range padded 18%** beyond each subplot's max
+    value so any label that does spill outside has a place
+    to land.
+  - **`cliponaxis=False`** as belt-and-suspenders against
+    very small bars (e.g. zero rows) whose label has to
+    render outside.
+  - **`horizontal_spacing=0.10`** between subplots so the
+    longer subplot titles ("Lifetime federal tax (NPV)")
+    don't crash into adjacent subplots.
+  - **Font sizes pinned**: subplot title font = 13, bar
+    text font = 12, chart title font = 15. Previously the
+    subplot titles inherited Plotly's default (~12) which
+    looked smaller than the dashboard's table chrome.
+  - Total height bumped 380 → 400 px to accommodate the
+    larger subplot titles.
+
+- **`dash_app/figures.py:strategy_comparison`** (the
+  single-metric variant used by Monte Carlo and ad-hoc
+  callsites): same fix — abbreviated labels (with the
+  `(+X.X%)` baseline-delta suffix preserved),
+  `textposition="auto"`, `cliponaxis=False`, x-axis padded
+  22% (slightly more than the panel's 18% to accommodate the
+  percentage suffix), explicit chart title font.
+
+### Tests — Strategies-tab bar chart regression suite
+
+- `tests/test_dash_strategy_bars.py` (new file, 16 tests)
+  pinning the anti-truncation invariants for both bar
+  chart builders. The exact dollar values from the
+  regression screenshot — `$17,454,663`, `$18,626,834`,
+  `$1,978,147`, `$1,713,631`, `$83,378`, `$39,457` — are
+  replayed as a fixture, so the specific case the user
+  reported is now guarded.
+  - **Abbreviated text invariant**: full-precision strings
+    (`$17,454,663` etc.) are explicitly NOT present in any
+    bar label; abbreviated forms (`$17.5M`, `$83K`) ARE.
+  - **`textposition="auto"`** on every trace.
+  - **`cliponaxis=False`** on every trace.
+  - **X-axis range** extends 15-25% beyond the largest
+    value on each subplot.
+  - **Subplot title fonts** = 13, **chart title font** =
+    15, **bar text font** = 12.
+  - **NaN / None defensive case**: `strategy_comparison`
+    handles missing-summary values without choking on the
+    abbreviation helper.
+
+### Fixed — Dash app: Monte Carlo histogram percentile labels overlap
+
+**Why it matters:** the Monte-Carlo terminal-NW histogram has
+three percentile callouts (P10/P50/P90) attached to vertical
+guide lines. With long fully-formatted dollar amounts
+(`$5,826,124`, `$18,189,053`) the callouts collided horizontally
+and rendered as one tangled string at the top of the chart.
+For typical retirement-planning runs the median sits well below
+the mean (skewed distribution), so the P10 and P50 lines are
+near each other in x — exactly the case the old layout failed.
+
+- **`dash_app/figures.py`**:
+
+  - New `_abbrev_dollars(v)` helper formats large dollar
+    amounts compactly: `$5,826,124` → `$5.8M`,
+    `$1.234B` → `$1.2B`, `$50,000` → `$50K`. Sub-$10K values
+    fall through to full-precision (`$9,999`) because at that
+    magnitude there's nothing to abbreviate. Used by the
+    histogram annotations + chart title.
+
+  - **Anti-overlap layout for the P10/P50/P90 annotations**
+    in `mc_terminal_histogram`:
+    - **Distinct horizontal anchors** — leftmost line
+      (P10) anchors `xanchor=right` (label extends LEFT
+      away from the line); middle (P50) anchors `center`
+      (label sits ABOVE); rightmost (P90) anchors
+      `xanchor=left` (label extends RIGHT). The three
+      callouts now land in three different horizontal
+      zones and never compete for the same slot.
+    - **Vertical staggering** — P50 also gets
+      `yshift=22` so it sits in a higher row than the side
+      labels. Even in pathological cases (e.g. P10 ≈ P50
+      lines very close in x), the P50 label slips above
+      the side labels.
+    - **Per-annotation `bgcolor`** at 88% white, plus a
+      colored 1px border in each percentile's hue, so the
+      callout text is legible against the histogram bars
+      and the chart title above. The colored border doubles
+      as a visual link between the label and its line.
+    - Compact font (`size=11`) and slightly larger top
+      margin (`t=80` vs the default 50) so the bumped-up
+      P50 doesn't crash into the chart title.
+
+  - The chart title now also abbreviates the CVaR(10%)
+    readout via `_abbrev_dollars` so titles like
+    `CVaR(10%)=$3,823,858` shorten to
+    `CVaR(10%)=$3.8M` and stay on a single line at narrow
+    viewport widths.
+
+### Tests — Monte Carlo histogram regression suite
+
+- `tests/test_dash_mc_histogram.py` (new file, 19 tests)
+  pinning the anti-overlap invariants so a future refactor
+  can't regress the layout:
+
+  - **`_abbrev_dollars` parameter sweep** — millions
+    (`$5.8M`), billions (`$1.2B`), tens-of-thousands
+    (`$50K`), sub-$10K full-precision (`$9,999`),
+    zero (`$0`), negatives (`$-5.8M`).
+  - **Three percentile annotations present** with
+    abbreviated text and the canonical un-abbreviated
+    full-precision strings (`$5,826,124` etc.) explicitly
+    NOT present.
+  - **`xanchor` spread** — three different anchors
+    (`right` / `center` / `left`) so the labels splay
+    out into different horizontal zones.
+  - **`yshift` staggering** — P50's yshift is strictly
+    greater than P10's and P90's so the middle label
+    sits in a different vertical row.
+  - **`bgcolor`** is set on every annotation (legibility).
+  - **Title CVaR is abbreviated** (`$3.8M` not
+    `$3,823,858`).
+  - **Top margin extended** to ≥70 px so the bumped-up P50
+    callout has clearance from the chart title.
+
+  The screenshot from the bug report — P10=$5,826,124,
+  P50=$18,189,053, P90=$43,815,711 — is replayed verbatim
+  as a fixture, so the exact regression case is now
+  guarded.
+
+### Changed — Dash app: color-blind-friendly palette + shape redundancy
+
+**Why it matters:** ~8% of men and ~0.5% of women have some form
+of color blindness. The previous palettes — Tailwind-style
+`green-500` / `orange-500` / `violet-500` / `slate-500` for
+strategies, plus assorted `red-500` / `amber-500` accents
+elsewhere — fail multiple times for the most common form
+(deuteranopia): green vs orange vs red are easily confused, and
+several charts (Monte Carlo percentile lines, single-strategy
+tax/conversion panels) used the canonical "red = bad / green =
+good" mapping that a deuteranope simply cannot resolve. We've
+reworked color usage across every figure in the dashboard to
+follow color-universal-design (CUD) principles.
+
+- **Adopted the Okabe-Ito palette** (Okabe & Ito 2008,
+  https://jfly.uni-koeln.de/color/) as the canonical color set
+  for every figure. Okabe-Ito is the de-facto scientific-
+  publishing standard for accessibility — its eight hues are
+  pairwise-distinguishable across deuteranopia, protanopia,
+  AND tritanopia, and each color also carries a distinct
+  *luminance* so the palette also degrades gracefully under
+  achromatopsia and B&W printing.
+
+- **Shape redundancy on multi-strategy charts**
+  (`dash_app/figures.py`):
+  Strategy is now encoded with **three redundant cues**, not
+  one. Even users with total color blindness can distinguish
+  the four canonical strategies:
+  - **Color** (Okabe-Ito hue): S0 = blue, S1 = reddish-purple,
+    S2 = orange, S3 (winner) = bluish-green.
+  - **Marker symbol**: S0 = circle, S1 = square, S2 = diamond,
+    S3 = triangle-up. Each shape stays unambiguous at the
+    4.5 px marker size we use.
+  - **Line dash pattern**: S0 = solid, S1 = dash, S2 = dot,
+    S3 = solid. The two anchor strategies (baseline + winner)
+    stay solid so the eye can track them first; the
+    alternatives use distinct broken patterns so they're
+    distinguishable from the anchors and from each other.
+  - With these three cues a deuteranope, a protanope, a
+    tritanope, AND someone printing the dashboard on a B&W
+    printer can all read the chart correctly.
+  - Three new helpers — `_color_for`, `_marker_for`,
+    `_dash_for` — pull from `_STRATEGY_COLORS`,
+    `_STRATEGY_MARKER`, `_STRATEGY_DASH` respectively, with
+    safe fallbacks for non-canonical strategy names.
+
+- **Migrated every other palette in `figures.py` to Okabe-Ito**:
+  - `balance_stack` (account-type palette): pretax = blue, Roth
+    = bluish-green (matches the optimizer hue, since tax-free
+    growth is the household's most valuable bucket dollar-for-
+    dollar), taxable = orange (warm = drag from annual yield),
+    HSA = reddish-purple. Replaces sky-500 / green-500 /
+    amber-500 / purple-500.
+  - `taxes_panel` (single-strategy tax components): AGI = blue
+    (solid), federal tax = vermillion (solid, replaces the
+    previous `#ef4444` red — vermillion is more
+    deuteranopia-distinguishable from green), state tax =
+    orange (dashed), IRMAA = reddish-purple (dotted), marginal
+    bracket = black. Each component also has a distinct dash
+    pattern as a redundant cue.
+  - `conversion_panel` (single-strategy bars): conversion =
+    bluish-green ("the proactive move"), RMD = orange ("the
+    forced move"), liquidity-cap = vermillion ✕ marker. The
+    `✕` symbol is itself a non-color cue (no other trace on
+    that chart uses it).
+  - `mc_terminal_histogram` percentile vertical lines: P10 =
+    vermillion (worst case), P50 = black (median), P90 =
+    bluish-green (best case). Replaces the previous
+    red/black/green which fails for deuteranopia. Dash style
+    on each line was already distinct.
+  - `mc_fan_chart`: P50 = black solid, P10 = vermillion +
+    `dot` dash, P90 = bluish-green + `dash` dash, P10-P90
+    band = Okabe-Ito blue at 18% alpha. Distinct dash patterns
+    are the second redundant cue — even in monochrome the
+    user can tell which percentile is which.
+  - `strategy_comparison` and `strategy_compare_panel`
+    horizontal bars: now use `_color_for` per strategy, so
+    every strategy keeps the same color across every chart.
+    Previously the comparison bars were a special case
+    ("blue if not S3, green if S3") which broke palette
+    consistency between the strategy table and the per-year
+    timelines.
+
+- **Strategy comparison table icon prefixes**
+  (`dash_app/assets/fira-code.css`):
+  The table cells used yellow tint for "knob changed" and green
+  tint for "optimizer override". For an achromatope both pastels
+  read as off-white. Each cell class now also gets a CSS
+  `::before` icon prefix:
+  - `.strategy-cell-changed::before` → ▲ in amber-800
+  - `.strategy-cell-optimized::before` → ★ in emerald-800
+
+  The icons render via `::before` so they show in the visual
+  table but aren't part of the cell's text content — exporting
+  / copying the table data still produces clean strings. The
+  pre-existing 2 px left-border + font-weight step (500 → 600)
+  remain as additional non-color cues.
+
+### Tests — color-blind regression suite
+
+- `tests/test_dash_taxes_multi.py` — 5 new tests pinning the
+  CB-redundancy invariants so a future refactor can't silently
+  regress accessibility:
+  - **Palette membership**: every entry in `_STRATEGY_COLORS`
+    must be drawn from `_OKABE_ITO`, and the canonical
+    Okabe-Ito hex codes themselves are spot-checked
+    (`#0072B2` blue, `#009E73` bluish-green, `#E69F00`
+    orange, `#CC79A7` reddish-purple, `#D55E00` vermillion).
+  - **Marker uniqueness**: every canonical strategy must have
+    a distinct marker symbol; the four pinned shapes
+    (circle / square / diamond / triangle-up) must all
+    appear.
+  - **Dash uniqueness**: baseline and winner must be solid;
+    the two alternative strategies must each be non-solid
+    AND distinct from each other (so the four lines are
+    unambiguous in monochrome).
+  - **Rendered traces apply per-strategy marker**:
+    `multi_strategy_taxes_panel` actually puts the right
+    `marker.symbol` on every Plotly trace per panel, not
+    just stores it in a dict. Every panel for a given
+    strategy renders with the *same* symbol (so the
+    legend stays consistent), and the four canonical
+    strategies render with *four different* symbols (so
+    the legend is unambiguous in monochrome).
+  - **Rendered traces apply per-strategy dash**: same idea
+    for `line.dash`.
+
+### Changed — Dash app: Taxes tab plots all four strategies
+
+**Why it matters:** the Taxes tab previously rendered AGI / federal
+tax / state tax / IRMAA / marginal-bracket only for the **winning**
+strategy. To compare strategies the user had to switch between the
+Year-by-year tab and re-pick from the dropdown. The natural visual
+question — "in year X, which strategy paid less federal tax?" —
+required eyeballing four separate runs. The Strategies tab already
+has a side-by-side outcomes table, but the Taxes tab is where the
+*per-year* curves live, and curves only really compare when they're
+overlaid on the same axis.
+
+The Taxes tab now overlays **all four canonical strategies on
+every panel**, color-coded by strategy, with the optimizer (S3)
+pulling the strongest hue (green) so the winner pops on first
+glance.
+
+- **`dash_app/figures.py`** — two new builders:
+  - `multi_strategy_taxes_panel(strategies, *, title=...)` —
+    stacked subplots, one per metric (AGI / federal tax /
+    optionally state tax / optionally IRMAA / marginal bracket),
+    with one color-coded line per strategy. Subplots that have
+    zero signal across every strategy (state tax for stateless
+    households, IRMAA for pre-65 horizons) are silently skipped
+    so the figure stays compact (~180px per active panel +
+    ~80px chrome). Marginal bracket renders as a percentage
+    (`y_scale=100, ticksuffix="%"`).
+  - `multi_strategy_conversion_panel(strategies, *, title=...)`
+    — two stacked subplots (Roth conversion + RMD), one line
+    per strategy each. The liquidity-cap markers (small ✕) now
+    render per-strategy in that strategy's color so the user
+    can tell which strategy was constrained by the
+    `tax_paying_capacity` guard rather than just "somebody got
+    capped here".
+  - Helper functions `_color_for`, `_stable_strategy_order`,
+    `_x_for`, `_add_strategy_lines` sit at module scope so the
+    tests can pin them. The strategy → color palette is a
+    single `_STRATEGY_COLORS` dict (slate / violet / orange /
+    green) chosen for color-blindness-safe contrast.
+  - Both builders accept either a deserialized DataFrame
+    (notebook callers) or the runner's serialized payload
+    (Dash callbacks) on each strategy's `df` field. Detection
+    is `isinstance(s["df"], pd.DataFrame)`; deserialization is
+    deferred via a local import of
+    `dash_app.runner.deserialize_strategy_df` so `figures.py`
+    stays importable without Dash.
+  - Legend grouping (`legendgroup=name`) ties every trace for
+    a strategy to a single legend entry — clicking the
+    "S3_optimized" name in the legend toggles all of S3's
+    panels at once. Without this, 12+ legend entries would
+    overflow the chart and clicking one wouldn't visually
+    isolate "the optimizer".
+- **`dash_app/app.py:_render_taxes`** — now passes the full
+  `strategies` dict to the multi-strategy builders. The winner's
+  name still surfaces in the chart titles (`Taxes & marginal
+  bracket — winner: S3_optimized`) so the user sees the verdict
+  even before parsing the colors.
+- The single-strategy `taxes_panel` and `conversion_panel`
+  builders are kept unchanged — they're still the right shape
+  for notebook contexts and the canvas-style "I want one
+  strategy in detail" surfaces. The Dash app just doesn't use
+  them anymore.
+- **`dash_app/layout.py:taxes_tab`** — wraps each `dcc.Graph`
+  in a `tax-figure my-3` className so the new
+  `assets/fira-code.css:.tax-figure` rule gives both panels a
+  light slate-200 (`#e2e8f0`) border + 6px radius + 6px
+  internal padding + white background. Matches the card
+  vocabulary already used by the report iframe and strategy
+  comparison table headers, so the Taxes tab now reads as
+  "two cards" rather than "two SVGs floating on the page".
+  An `html.Hr` styled via `.tax-figure-divider` (slate-300,
+  `1.5rem` vertical margin) sits between the two cards as a
+  deliberate section break — the two charts answer different
+  questions ("what tax was paid?" vs "what conversion / RMD
+  activity drove that?") and benefit from being separated
+  rather than read as one tall scroll region.
+
+- **Readability pass on the multi-strategy charts**
+  (`dash_app/figures.py`):
+
+  - **Metric labels moved to y-axis titles**, replacing the
+    old `subplot_titles` annotations. Annotations sit at
+    y≈1.0 of each subplot and were colliding with peak trace
+    values in late retirement (e.g. AGI / federal tax / Roth
+    conversion plateau). Y-axis titles live in the left
+    gutter where there's always room. New labels:
+    `AGI ($)`, `Federal tax ($)`, optional
+    `State tax ($)` / `IRMAA ($)`, `Marginal (%)`,
+    `Roth conversion ($)`, `RMD ($)`.
+  - **Vertical spacing** bumped (`taxes_panel`: 0.045 → 0.085;
+    `conversion_panel`: 0.07 → 0.10) so adjacent panels read
+    as distinct without the annotation crutch.
+  - **Per-panel height** bumped: taxes panel from 180 → 220
+    px per panel (~1200 px total at 5 panels) and conversion
+    panel from 560 → 660 px total. Year-over-year deltas are
+    now legible at the 30+ year horizons typical for
+    retirement plans.
+  - **Mode is `lines+markers`** instead of `lines` only, with
+    a 4.5 px marker. Pins individual years visually — useful
+    around the RMD ramp-up at age 75 and around years where
+    multiple strategies overlap on the same path (without
+    markers, S0 + S1 flat at zero in the conversion panel
+    look like one strategy).
+  - **Winner gets a heavier stroke** (3.25 px vs 2.25 px for
+    alternatives) and is **drawn last** so the winning trace
+    sits on top of the z-stack rather than being buried under
+    whichever strategy it tracks closely (frequently S2 in
+    the conversion panel). The callback now passes
+    `winner_name` through to both builders.
+  - **Liquidity-cap markers** scaled up from size 9 → 11 with
+    a slightly heavier outline, so the `✕` reads at chart
+    scale rather than getting lost in the line.
+  - Wider left margin (60 → 80 px) to accommodate the new
+    y-axis titles + dollar tick labels without crowding the
+    chart area.
+
+### Tests — Dash multi-strategy Taxes-tab regressions
+
+- `tests/test_dash_taxes_multi.py` — 18 new tests, gated on
+  `pytest.importorskip("dash")`. Coverage:
+  - **Palette / ordering**: each canonical strategy has a
+    unique color; unknown strategy names fall through to a
+    neutral fallback hue (so we can spot custom runs visually);
+    `_stable_strategy_order` pins canonical strategies S0→S3
+    before any custom keys regardless of input iteration order
+    and is idempotent.
+  - **`multi_strategy_taxes_panel`**: empty payload returns the
+    placeholder; one trace per strategy per active panel (4×3
+    in the default fixture); state-tax / IRMAA panels add
+    themselves only when at least one strategy has a non-zero
+    column; zero-signal panels are silently skipped (no flat
+    zero-line clutter); the legend shows exactly N strategies,
+    not N×panels (so legend clicks toggle every panel for that
+    strategy at once); `marginal` is rendered as a percentage
+    (× 100, suffix `%`); every trace for a given strategy
+    shares one color.
+  - **`multi_strategy_conversion_panel`**: two-panel × N-strategy
+    line layout; liquidity-cap markers render only on years
+    where the guard fired and only for the affected strategy
+    (S3 in the fixture); no markers when no strategy was
+    capped; legend shows once per strategy.
+  - **End-to-end**: a real
+    `run_scenario(mode="four_strategies", seed=0)` →
+    `serialize_run_result` → builders walk to catch column-name
+    drift between simulator output and the column constants
+    hard-coded in the figure builders (`agi`, `federal_tax`,
+    `marginal`, `roth_conversion`, `rmd`,
+    `roth_conv_capped_by_liquidity`).
+
 ### Docs — Dash app: how-to-run guide
 
 **Why it matters:** the README's "Web app (Plotly Dash)" section
