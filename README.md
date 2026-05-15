@@ -91,21 +91,42 @@ uv pip install -e ".[notebook]"
 
 For an interactive dashboard with a Simple/Advanced scenario form, a
 run-mode selector (single sim / four strategies / four + Monte Carlo),
-and live Plotly charts for balances, taxes, conversions, strategy
-comparison, and Monte Carlo distributions:
+live Plotly charts for balances, taxes, conversions, strategy
+comparison, and Monte Carlo distributions, **and the full action-plan
+report rendered inline in the Report tab**:
 
 ```bash
-pip install -e ".[dash]"
-python -m dash_app                    # http://127.0.0.1:8050
-# or, after install:
-tax-optimizer-app --host 0.0.0.0 --port 8050 --debug
+pip install -e .                      # dash, plotly, etc. are base deps
+python -m dash_app                    # opens http://127.0.0.1:8050
+```
+
+Then open <http://127.0.0.1:8050> in your browser and click **Run**.
+The form starts populated with the package defaults; edit any field,
+hover the ⓘ icon next to a label for a one-sentence hint that explains
+what it means, and click **Run** to simulate.
+
+Useful flags:
+
+```bash
+python -m dash_app --port 9000        # different port
+python -m dash_app --host 0.0.0.0     # expose to the local network
+python -m dash_app --debug            # hot-reload + Dash dev console
+tax-optimizer-app --port 8051         # console-script equivalent
 ```
 
 The form covers every field of the scenario JSON. Use the **Load
 scenario JSON** drop zone (drag & drop or click to browse) to pull in
 any scenario file from your machine, or **Download JSON** to save the
 current form state as a scenario file the CLI can run with `python -m
-tax_optimizer --scenario PATH.json`.
+tax_optimizer --scenario PATH.json`. The **Report** tab renders the
+same HTML action plan the CLI emits, and the **Download HTML** button
+inside that tab saves a self-contained copy.
+
+> **Full guide:** [`docs/dashboard.md`](docs/dashboard.md) walks
+> through every part of the UI (sidebar, results tabs), common
+> workflows ("I want a printed action plan", "I want to debug a
+> specific year", etc.), and troubleshooting (port-in-use, cache
+> eviction, browser quirks).
 
 ### CLI
 
@@ -619,6 +640,7 @@ Federal bracket numbers, IRS Uniform Lifetime divisors, pension-formula coeffici
 | Document | Purpose |
 |---|---|
 | [`CHANGELOG.md`](CHANGELOG.md) | Every feature, behavior change, and bug fix shipped (and the rules for adding new entries). The first stop when "what's new?" or "when did we add X?" comes up. The `v6` block documents the action-report polish covered in [What the action report contains](#what-the-action-report-contains) above. |
+| [`docs/dashboard.md`](docs/dashboard.md) | How-to-run guide for the Plotly Dash web UI: install, launch (CLI flags + env vars), the sidebar (top bar, Simple / Advanced form, run-mode selector), the six results tabs (Overview / Taxes / Strategies / Monte Carlo / Year-by-year / Report), common workflows, tips, and troubleshooting. Read this before opening an issue against the dashboard. |
 | [`docs/architecture.md`](docs/architecture.md) | Per-module deep dive: what each `tax_optimizer/*.py` file does, how the modules layer together, and Mermaid diagrams for the cross-cutting flows (year-loop sequence, contribution cascade, withdrawal cascade, tax pipeline, Roth-conversion liquidity guard, optimizer/MC relationship). Start here when extending or auditing the package. |
 | [`docs/roth_conversion.md`](docs/roth_conversion.md) | Mechanism-focused walkthrough of Roth conversion sizing (fixed vs bracket-fill), the v6.5 liquidity guard (`tax_paying_capacity` formula + bisection), Roth protection in the deficit cascade, and the seven knobs that control it all. Includes a numerical worked example and audit recipes for the diagnostic columns. |
 | [`docs/scenario_guide.md`](docs/scenario_guide.md) | Reference for every field in a scenario JSON — `config.*`, `inputs.*`, all knobs and their defensible ranges. |

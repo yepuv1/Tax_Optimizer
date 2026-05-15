@@ -32,6 +32,67 @@ Categories used:
 
 ## [Unreleased]
 
+### Docs — Dash app: how-to-run guide
+
+**Why it matters:** the README's "Web app (Plotly Dash)" section
+was a single nine-line code block — fine as a quick-reference
+once you knew the dashboard, but useless for a first-time user
+who needs to know what each tab does, how the run modes differ,
+which workflow to follow for "I want a printed action plan", or
+how to debug the inevitable "address already in use" port clash.
+The README also referenced a `pip install -e ".[dash]"` extra
+that doesn't actually exist in `pyproject.toml` (`dash`,
+`dash-bootstrap-components`, and `plotly` are listed under the
+base `dependencies`), so users following the README would `pip`-
+install with a silently-ignored extra and get the same result
+as a plain `pip install -e .`.
+
+- **`docs/dashboard.md`** (new, ~485 lines) — full how-to-run
+  guide covering:
+  - **Quickstart** — clone / venv / `pip install -e .` /
+    `python -m dash_app`.
+  - **Launching the dashboard** — module entry point, console
+    script (`tax-optimizer-app`), `--host` / `--port` / `--debug`
+    flags, and the `DASH_HOST` / `DASH_PORT` environment
+    variables.
+  - **The UI at a glance** — ASCII diagram of the two-column
+    sidebar / results-panel layout.
+  - **Sidebar walkthrough** — top bar (Load JSON drop zone,
+    Download JSON, run-mode dropdown, Run button, status banner),
+    Simple / Advanced form tabs (with a per-field help-tooltip
+    explainer and the decimal-percent convention call-out), and
+    the run-mode selector with a wall-time table.
+  - **Results panel walkthrough** — Overview, Taxes, Strategies
+    (including the per-knob optimizer-overrides table), Monte
+    Carlo, Year-by-year, and Report tabs with a description of
+    what each surfaces.
+  - **Common workflows** — "I just want to play with my numbers",
+    "I have a saved scenario JSON", "I want to share / archive
+    the current scenario", "I want a printed action plan", "I
+    want to debug a specific year", "I want to develop on the
+    dashboard itself".
+  - **Tips and shortcuts** — per-field hints, monospace UI,
+    persistence (the form does NOT auto-save across reloads),
+    run cache, decimal-percent reminder, run-button stickiness.
+  - **Troubleshooting** — port-in-use, run-cache eviction, blank
+    iframe (tornado sweep still in flight), red form text, charts
+    not auto-updating, Dash deprecation warnings, `No module
+    named dash_app` (forgot to `pip install -e .`).
+- **`README.md`** — the "Web app (Plotly Dash)" section now:
+  - Drops the misleading `pip install -e ".[dash]"` reference
+    in favor of the correct `pip install -e .` (Dash is a base
+    dep).
+  - Adds a short "useful flags" cheat-sheet (`--port`, `--host`,
+    `--debug`, `tax-optimizer-app`).
+  - Calls out the **Report** tab and **Download HTML** button
+    explicitly so users know the action plan is available
+    inline, not just as a download.
+  - Links to `docs/dashboard.md` for the deep dive.
+- **`README.md`** — the Documentation table at the bottom of the
+  file now lists `docs/dashboard.md` alongside the other docs
+  (architecture, scenario_guide, market_models, roth_conversion,
+  CHANGELOG).
+
 ### Added — Dash app: per-field help tooltips on every form input
 
 **Why it matters:** the scenario form has 118 fields spanning
