@@ -22,7 +22,6 @@ from tax_optimizer.inputs import Inputs
 from tax_optimizer.scenario import (
     ScenarioError,
     apply_scenario,
-    scenario_to_dict,
 )
 
 from . import figures
@@ -38,6 +37,7 @@ from .state import (
     apply_form_values,
     cfg_inputs_to_form_values,
     default_form_values,
+    form_values_to_scenario,
 )
 
 
@@ -185,13 +185,45 @@ def make_app() -> dash.Dash:
         prevent_initial_call=True,
     )
     def _save_scenario(_clicks, values):
+        """Download the current form state as a scenario JSON file.
+
+        We emit the *form-shaped* dict (built by
+        :func:`form_values_to_scenario`) rather than the canonical
+        ``scenario_to_dict(cfg, inputs)`` output. The two differ in
+        three places that would otherwise corrupt the user's saved
+        file:
+
+        1. ``config.spending`` — `_spending_to_dict` always emits
+           ``kind="custom"`` with an explicit phases array, even when
+           the underlying profile was built via
+           ``SpendingProfile.retirement_smile(...)``. The form only
+           understands ``flat`` / ``smile``, so a saved-then-reloaded
+           file would render as a "custom" profile the user never
+           authored. ``form_values_to_scenario`` round-trips the
+           original ``smile`` / ``flat`` discriminator faithfully.
+        2. Deprecated paths in ``_HIDDEN_PATHS`` (``inputs.annual_expenses``,
+           ``inputs.ss.start_age``) get injected by
+           ``_inputs_to_dict`` because it walks every dataclass field;
+           the form schema explicitly hides them.
+        3. Default-valued config fields the user never set
+           (``roth_conversion_amount=0.0``,
+           ``section125_reduces_fica_wages=True``, ...) are emitted
+           by ``scenario_to_dict`` as if the user had specified them.
+
+        We still call :func:`apply_form_values` first as a validation
+        step so any malformed form input fails loudly with a clear
+        ``ScenarioError`` instead of producing a half-baked JSON file
+        the user would only notice on re-load.
+        """
         if not values:
             return no_update
         try:
-            cfg, inputs = apply_form_values(values)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", DeprecationWarning)
-                payload = scenario_to_dict(cfg, inputs)
+                # Validation: round-trip the form through the decoder
+                # so any malformed value surfaces here, not on re-load.
+                apply_form_values(values)
+                payload = form_values_to_scenario(values)
         except ScenarioError as e:
             return dict(content=f"# Error: {e}\n", filename="scenario_error.txt")
 

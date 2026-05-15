@@ -346,9 +346,15 @@ def _market_to_dict(m: MarketModel) -> dict[str, Any]:
             "bond_sigma": m.bond_sigma,
             "equity_bond_corr": m.equity_bond_corr,
         }
+        # Always emit `cape_long_run` so the round-trip preserves a
+        # user-set value even when `cape_today` is unset (no scaling
+        # applied this run, but the constant may still be the user's
+        # chosen long-run mean for future sensitivity sweeps).
+        # `cape_today` stays gated on being non-None because emitting
+        # `null` there is the documented "no scaling" sentinel.
         if m.cape_today is not None:
             out["cape_today"] = m.cape_today
-            out["cape_long_run"] = m.cape_long_run
+        out["cape_long_run"] = m.cape_long_run
         return out
     if isinstance(m, BootstrapModel):
         return {"kind": "bootstrap", "block_size": m.block_size}
