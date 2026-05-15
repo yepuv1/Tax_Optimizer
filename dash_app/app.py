@@ -34,13 +34,24 @@ def _placeholder_srcdoc(message_html: str) -> str:
     miss, or build error). Keeps the iframe self-contained so its
     styling doesn't leak from the parent dashboard's Bootstrap and
     vice-versa, matching the rendered-report behavior.
+
+    The font stack mirrors the dashboard's ``fira-code.css`` so cold-
+    state messages feel continuous with the surrounding UI even
+    though the iframe document is isolated. We import Fira Code from
+    Google Fonts inline because the iframe's document scope doesn't
+    inherit the parent page's ``external_stylesheets``.
     """
     return (
         "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<link rel='preconnect' href='https://fonts.googleapis.com'>"
+        "<link rel='preconnect' href='https://fonts.gstatic.com' "
+        "crossorigin>"
+        "<link href='https://fonts.googleapis.com/css2?family=Fira+Code:"
+        "wght@400;500&display=swap' rel='stylesheet'>"
         "<style>"
-        "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',"
-        "sans-serif;color:#475569;padding:32px;font-size:0.95rem;"
-        "line-height:1.5;}"
+        "body{font-family:'Fira Code','Fira Mono',ui-monospace,Menlo,"
+        "Monaco,Consolas,monospace;color:#475569;padding:32px;"
+        "font-size:0.9rem;line-height:1.5;font-variant-ligatures:none;}"
         "</style></head><body>"
         f"<div>{message_html}</div></body></html>"
     )
@@ -141,10 +152,44 @@ def _strategy_callout(strategies: dict[str, Any], winner_name: str | None) -> An
 def make_app() -> dash.Dash:
     app = dash.Dash(
         __name__,
-        external_stylesheets=[dbc.themes.BOOTSTRAP],
+        external_stylesheets=[
+            dbc.themes.BOOTSTRAP,
+            # Fira Code (Google Fonts). The CSS rules that *apply* the
+            # font live in `dash_app/assets/fira-code.css`, which Dash
+            # auto-loads from the `assets/` folder on every page. We
+            # only request the weights actually used in the UI to keep
+            # the font payload trim. ``display=swap`` lets the browser
+            # paint with the system fallback first and swap when Fira
+            # Code arrives — no flash of invisible text.
+            "https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&display=swap",
+        ],
         suppress_callback_exceptions=True,
         title="Tax Optimizer",
     )
+    # Fast handshake to fonts.googleapis.com / fonts.gstatic.com so the
+    # font CSS + woff2 files arrive in parallel with the rest of the
+    # bundle. Without these `<link rel="preconnect">` tags the browser
+    # only opens TCP+TLS to gstatic *after* parsing the stylesheet,
+    # adding ~200ms to first paint on a cold load.
+    app.index_string = """<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        {%css%}
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
+</html>"""
     app.layout = build_layout(default_form_values())
 
     # ---- Form values store -----------------------------------------

@@ -32,6 +32,56 @@ Categories used:
 
 ## [Unreleased]
 
+### Changed — Dash app: switch the dashboard UI to Fira Code (monospace)
+
+**Why it matters:** the dashboard renders a lot of money / percent /
+year values across the form, KPI tiles, and Year-by-year DataTable.
+With the previous proportional system stack (`-apple-system, Segoe
+UI, …`), digit columns shifted around as the user typed and the
+KPI rows didn't visually line up. Switching to a monospace ("fixed
+font") face — Fira Code — makes every figure column-align by glyph
+position, so the dashboard reads like a spreadsheet instead of a
+prose document.
+
+- **`dash_app/app.py`** — added the Fira Code Google Fonts URL to
+  `external_stylesheets` (weights 400/500/600 only, ``display=swap``
+  to avoid a flash of invisible text) and rewrote `app.index_string`
+  to inject `<link rel="preconnect">` for `fonts.googleapis.com` and
+  `fonts.gstatic.com`. Without the preconnect the browser opens
+  TCP+TLS to gstatic only after parsing the stylesheet, which adds
+  ~200ms to first paint on a cold load.
+- **`dash_app/assets/fira-code.css`** (new) — Dash auto-loads any
+  CSS file under `dash_app/assets/`, so this is where the actual
+  font rules live. Applies the stack to `body`, `.form-control`,
+  `.btn`, `.nav-tabs`, `.dash-table-container`, `.kpi-tile`, etc.,
+  with sensible monospace fallbacks (`Fira Mono` → `JetBrains Mono`
+  → `SFMono-Regular` → `ui-monospace` → `Menlo` → … → `monospace`).
+  Disables Fira Code's programming ligatures (`>=` becoming `≥`) via
+  `font-variant-ligatures: none` and `font-feature-settings: "calt"
+  0` because they're distracting in form labels and KPI text.
+  Enables tabular-numerals (`tnum`) on numeric inputs and
+  DataTables for belt-and-suspenders digit alignment. Bumps
+  `line-height` slightly because Fira Code's taller x-height makes
+  the default Bootstrap row spacing feel cramped, and trims KPI
+  tile font-size by a hair so monospace dollar amounts don't wrap.
+- **Inline iframe placeholder srcDoc** in
+  `dash_app/app.py:_placeholder_srcdoc` and the empty-state srcDoc
+  in `dash_app/layout.py:report_tab` — both inline-load Fira Code
+  from Google Fonts with their own `<link>` tags. Iframes are
+  document-isolated so they don't inherit the parent page's
+  `external_stylesheets`; the inline imports keep cold-state
+  messages typographically continuous with the surrounding
+  dashboard.
+
+**What's NOT styled by this change:** the action-plan report
+rendered inside the Report-tab iframe. That HTML carries its own
+`<style>` block from `tax_optimizer/render.py` (sans-serif body +
+SFMono code), unchanged so the in-dashboard view and the
+downloaded HTML / PDF look identical to the CLI's output. The
+`fira-code.css` rules can't reach the iframe document, so this
+separation is enforced by the browser's same-origin styling
+boundary.
+
 ### Added — Dash app: Report tab auto-renders the action plan
 
 **Why it matters:** the previous flow had users click a "Download HTML"

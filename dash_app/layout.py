@@ -444,10 +444,26 @@ def report_tab() -> dbc.Tab:
                 html.Iframe(
                     id="report-iframe",
                     srcDoc=(
+                        # Match the placeholder font stack from
+                        # `_placeholder_srcdoc` in `dash_app/app.py`
+                        # so the cold-state message inside the iframe
+                        # uses the same Fira Code typography as the
+                        # surrounding dashboard. The iframe is isolated
+                        # from the parent page's CSS so we have to
+                        # request the font directly here.
                         "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-                        "<style>body{font-family:-apple-system,BlinkMacSystemFont,"
-                        "'Segoe UI',sans-serif;color:#475569;padding:32px;"
-                        "font-size:0.95rem;line-height:1.5;}</style></head>"
+                        "<link rel='preconnect' href='https://fonts."
+                        "googleapis.com'>"
+                        "<link rel='preconnect' href='https://fonts."
+                        "gstatic.com' crossorigin>"
+                        "<link href='https://fonts.googleapis.com/css2?"
+                        "family=Fira+Code:wght@400;500&display=swap' "
+                        "rel='stylesheet'>"
+                        "<style>body{font-family:'Fira Code','Fira Mono',"
+                        "ui-monospace,Menlo,Monaco,Consolas,monospace;"
+                        "color:#475569;padding:32px;font-size:0.9rem;"
+                        "line-height:1.5;font-variant-ligatures:none;}"
+                        "</style></head>"
                         "<body><div>Run a scenario to populate the "
                         "action-plan report.</div></body></html>"
                     ),

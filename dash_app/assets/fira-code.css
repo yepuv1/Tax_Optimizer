@@ -1,0 +1,115 @@
+/* Global typography for the Tax Optimizer Dash UI.
+ *
+ * Loaded automatically by Dash because the file lives under
+ * `dash_app/assets/`. The font itself is fetched via Google Fonts
+ * (declared in `external_stylesheets` in `dash_app/app.py`); this
+ * stylesheet is just the rules that *apply* the font.
+ *
+ * Why monospace ("fixed font") for a financial dashboard?
+ *
+ * - Numeric columns line up cleanly without CSS table tricks
+ *   (every glyph has the same advance width, so $123,456 and
+ *    $98,765 stack at the decimal).
+ * - Form fields where the user types currency / percent values
+ *   become easier to scan when digits don't shimmer between
+ *   proportional widths as you type.
+ * - Tabular figures in the KPI tiles and the year-by-year table
+ *   read like a spreadsheet rather than prose.
+ *
+ * The action-plan report rendered in the Report-tab iframe is
+ * **not** styled by this file — that document carries its own
+ * `<style>` block from `tax_optimizer/render.py` so the Dash view
+ * and the downloaded HTML look identical (sans-serif body +
+ * monospace code blocks). Don't move that styling here.
+ */
+
+/* ---- Font stack -------------------------------------------------- */
+:root {
+    --tx-mono-stack:
+        "Fira Code",
+        "Fira Mono",
+        "JetBrains Mono",
+        "SFMono-Regular",
+        ui-monospace,
+        Menlo,
+        Monaco,
+        Consolas,
+        "Liberation Mono",
+        monospace;
+}
+
+/* ---- Apply globally --------------------------------------------- */
+html,
+body,
+.dash-graph,
+.results-card,
+.kpi-tile,
+.callout-card,
+.scenario-form,
+.form-control,
+.form-control-sm,
+.form-label,
+.form-check-label,
+.btn,
+.nav-tabs,
+.nav-link,
+.dropdown-menu,
+.alert {
+    font-family: var(--tx-mono-stack);
+    /* Fira Code's x-height is taller than common sans-serif fonts;
+     * default Bootstrap line-heights look slightly cramped. Bump it a
+     * touch so input rows don't feel claustrophobic. */
+    line-height: 1.5;
+    /* Fira Code ships with programming ligatures (>= becomes ≥, etc.).
+     * Useful in code editors, distracting in form labels and KPI
+     * tiles. Disable them across the dashboard but keep the font's
+     * other contextual alternates. */
+    font-variant-ligatures: none;
+    font-feature-settings: "calt" 0;
+}
+
+/* ---- Tabular numerals on money / percent inputs ----------------- */
+/* Fira Code is already monospace so digit widths are equal, but
+ * ``tnum`` also keeps the lining vs. oldstyle figures consistent
+ * across browsers. Mostly belt-and-suspenders. */
+input[type="number"],
+.dash-cell-value,
+.dash-spreadsheet-container,
+.dash-table-container {
+    font-feature-settings: "tnum" 1;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---- Headings get a slightly heavier weight --------------------- */
+/* Default Bootstrap renders h1-h6 as bold (700). Fira Code 700 is
+ * very dense; 600 reads cleaner in tab labels and section titles. */
+h1, h2, h3, h4, h5, h6,
+.fs-1, .fs-2, .fs-3, .fs-4, .fs-5, .fs-6,
+.fw-bold, .fw-semibold {
+    font-family: var(--tx-mono-stack);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+/* ---- Slightly tighter KPI tiles --------------------------------- */
+/* Monospace digits are wider than proportional ones; the value row
+ * was sized for the system stack. Trim so KPI tiles don't wrap their
+ * dollar amounts onto two lines on common laptop widths. */
+.kpi-tile .fs-5 {
+    font-size: 1.05rem;
+    letter-spacing: -0.02em;
+}
+
+/* ---- DataTable typography -------------------------------------- */
+/* The Year-by-year table inherits from `.dash-table-container`, but
+ * the inline `style_cell={"fontSize": "0.85rem"}` on the component
+ * wins specificity. We just normalize the family here so the cells
+ * pick up Fira Code without forcing a code-edit on every DataTable. */
+.dash-table-container .dash-spreadsheet-inner table {
+    font-family: var(--tx-mono-stack) !important;
+}
+
+/* ---- Upload box -------------------------------------------------- */
+.upload-box * {
+    font-family: var(--tx-mono-stack);
+}
