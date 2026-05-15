@@ -51,11 +51,18 @@ def _input_for(fld: FormField, value: Any) -> Any:
         # label rather than rescaling on input. That keeps round-trips
         # exact (0.07 in JSON, 0.07 in the box) and avoids a "did the
         # user enter 7 or 0.07?" guessing game.
+        #
+        # `step="any"` is critical: HTML5 step validation is implemented
+        # as `(value - min) % step == 0`, which fails on legitimate
+        # decimals because of float-point representation
+        # (`0.07 / 0.005 == 14.000000000000002`, not 14). Browsers then
+        # render the box as `:invalid` -> red text. Using "any" disables
+        # the step constraint while keeping `min`/`max` bounds intact.
         return dcc.Input(
             id=base_id,
             type="number",
             value=value,
-            step=fld.step or 0.005,
+            step="any",
             min=fld.min,
             max=fld.max,
             debounce=True,
@@ -74,13 +81,35 @@ def _input_for(fld: FormField, value: Any) -> Any:
             className="form-control form-control-sm",
         )
 
+    # Generic numeric / text inputs.
+    #
+    # `<input type="number">` defaults to `step=1` when the attribute is
+    # missing, and even an explicit `step=1000` flags real-world values
+    # like `taxable_brokerage=460270.90` (or `pension_balance=416741.12`)
+    # as `:invalid` because they are not exact multiples — Chrome
+    # paints the text red. The schema's per-field `fld.step` is
+    # primarily a *spinner increment hint* (how far the up/down arrows
+    # should jump), not a validation rule, so we always render with
+    # `step="any"` here to disable HTML5 step validation while still
+    # honoring `min` / `max` bounds. Spinner increments default to 1,
+    # which is acceptable for currency entry where most users type the
+    # value rather than spinning.
+    if fld.kind == "number":
+        return dcc.Input(
+            id=base_id,
+            type="number",
+            value=value,
+            step="any",
+            min=fld.min,
+            max=fld.max,
+            debounce=True,
+            className="form-control form-control-sm",
+        )
+
     return dcc.Input(
         id=base_id,
-        type="number" if fld.kind == "number" else "text",
+        type="text",
         value=value,
-        step=fld.step,
-        min=fld.min,
-        max=fld.max,
         debounce=True,
         className="form-control form-control-sm",
     )

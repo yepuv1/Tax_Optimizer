@@ -32,6 +32,199 @@ Categories used:
 
 ## [Unreleased]
 
+### Fixed — Dash app: input boxes turn red on legitimate values
+
+**Why it matters:** percent and currency fields rendered with red text
+in the browser for inputs the user knew were valid (e.g. a Roth-401(k)
+percentage of `0.07`, or a taxable balance of `460,270.90`). Looked
+like a validation error in the simulator, but every value re-loaded
+fine, ran fine, and produced the expected report — the red was purely
+a visual lie.
+
+The cause is HTML5's `<input type="number">` step-validation rule:
+the browser treats the `step` attribute as a *constraint* rather than
+a spinner-increment hint, and an input fails `:invalid` when
+`(value - min) % step != 0`. JavaScript / IEEE-754 floats turn
+that math into a minefield:
+
+- **Percent fields** rendered with `step=0.005` to give arrow-key
+  spinners a 0.5% increment. But `0.07 / 0.005 = 14.000000000000002`
+  in float arithmetic, not 14, so the browser flagged 0.07 as
+  off-step. Same for 0.135, 0.0125, etc. Any percent field whose
+  decimal representation isn't an exact binary fraction tripped it.
+- **Number fields without an explicit step** fell through to the
+  HTML5 default of `step=1`, marking every dollar amount with a
+  fractional component as `:invalid`. Even an explicit `step=1000`
+  (used in the schema as a UX hint for "round-thousand spinner")
+  did not save us — real-world balances like `taxable_brokerage =
+  $460,270.90` and `pension_balance = $416,741.12` are obviously
+  not exact multiples of $1k.
+
+Browsers (Chrome, Safari, Firefox) all paint `:invalid` numeric
+inputs with a red ring; combined with the `form-control form-control-sm`
+Bootstrap class, the visible result was red text on every plausibly
+populated form.
+
+- **Fix (dash_app/layout.py:_input_for)** — render `percent` and
+  `number` kinds with `step="any"`, which disables HTML5 step
+  validation entirely while keeping `min` / `max` bounds intact.
+  `int` kinds keep `step=1` (or the schema's explicit step) because
+  integer-only is intentional there (ages, year offsets, horizon).
+  The schema's per-field `step=1000` / `step=100` / `step=50`
+  values are now what they should always have been — advisory
+  spinner hints, not validation rules — and the renderer ignores
+  them for `number` kinds in favor of `step="any"`. Spinner
+  arrow-key increments default to 1, which is fine for currency
+  entry where most users type the value rather than spinning.
+- **Bounds preserved** — `min` / `max` still pass through to the
+  rendered input, so e.g. `inputs.spouse_a_age_start` (min=18,
+  max=100) still flags 5 or 200 as invalid. Only the off-step
+  `:invalid` triggers were defused.
+
+### Tests — Dash form-input regression suite
+
+- `tests/test_dash_form_inputs.py` — 10 new tests, gated on
+  `pytest.importorskip("dash")`. The test harness invokes the
+  `_input_for` renderer directly per schema field rather than
+  standing up `make_app()` (which would drag in `dash_table.DataTable`
+  and emit a `DeprecationWarning` that the project's `filterwarnings
+  = ["error"]` would promote to a failure):
+  - `TestPercentInputsAllowAnyStep` (2) — every `percent` field
+    renders with the literal string `step="any"` (catches a
+    regression to `step=0.005` or any float).
+  - `TestNumberInputsAllowAnyStep` (1) — every `number` field
+    renders with `step="any"`, including those whose schema
+    declares an explicit dollar-rounded `step` (currency hints
+    are intentionally ignored at render time).
+  - `TestIntInputsKeepIntegerStep` (2) — `int` fields preserve
+    `step=1` (or the schema's explicit step), so the browser
+    correctly rejects e.g. "65.5" for a spouse age. Plus a
+    sanity check that the schema actually contains int fields.
+  - `TestBoundsArePreserved` (1) — pins down that `min` / `max`
+    still flow through (e.g. `spouse_a_age_start` still has
+    18-100 bounds), so the fix didn't accidentally strip them.
+  - `TestKnownInvalidValuesNowAccepted` (4) — a parametrized
+    sanity check that `0.07` / `460270.90` / `1549863.75` /
+    `416741.12` all *would* have failed the old step rules
+    (proving the fix is non-vacuous and pinning down the exact
+    values the user reported).
+
+Full suite: 615 passing (605 pre-existing + 10 new).
+
+### Fixed — Dash app: "Download JSON" persistence
+
+**Why it matters:** the Dash app's Save → JSON button silently rewrote
+the user's scenario in two ways that broke "round-trip" expectations:
+
+1. **Spending profile downgraded `kind="smile"` → `kind="custom"`.**
+   The save callback called
+   ``scenario_to_dict(*apply_form_values(values))``, which funnels
+   every spending profile through ``_spending_to_dict`` — and that
+   helper unconditionally emits ``kind="custom"`` with an explicit
+   ``phases`` array, ``lump_events``, and ``ltc_shock`` block, even
+   for profiles built via :meth:`SpendingProfile.retirement_smile`.
+   A user who loaded ``scenarios/example02.local.json`` (smile
+   profile, ``ltc_years=4``, ``ltc_annual_today=$150k``) and clicked
+   Save received a JSON file with the verbose custom shape — fields
+   like ``ltc_years`` and ``ltc_annual_today`` vanished, replaced by
+   a phases array and a separate ``ltc_shock`` block. Re-uploading
+   the file still simulated correctly (the form-side
+   ``_normalize_spending_block`` defensively demoted ``custom`` back
+   to ``smile``), but the saved JSON was unrecognizable as the
+   user's original intent and the diff against the on-disk file was
+   massively noisy.
+2. **Deprecated / legacy paths leaked into saved JSON.**
+   ``_inputs_to_dict`` walked every dataclass field and surfaced
+   ``inputs.annual_expenses`` (deprecated; replaced by
+   ``config.annual_expenses_today`` /
+   ``config.spending.base_spending``) and ``inputs.ss.start_age``
+   (legacy single-spouse SS claim age, replaced by ``start_age_a``
+   / ``start_age_b``). Both are in ``_HIDDEN_PATHS`` for the form
+   schema, so the form never authors them — but the save was
+   re-injecting them every time.
+
+There was also a related ``tax_optimizer.scenario`` round-trip bug
+that surfaced through the same path:
+
+3. **``LognormalModel.cape_long_run`` silently dropped when
+   ``cape_today`` was ``None``.** ``_market_to_dict`` only emitted
+   ``cape_long_run`` *inside* the ``cape_today is not None`` branch.
+   A user who set ``"cape_long_run": 22.0`` with ``"cape_today":
+   null`` (the normal "no scaling, but I want this constant for
+   future sensitivity sweeps" pattern) lost their value on every
+   ``scenario_to_dict`` round-trip. This affected both the Dash
+   form-load path (the form's ``cape_long_run`` field came back
+   blank) and any direct ``scenario_to_dict`` consumer.
+
+- **Fix 1 (dash_app/app.py:_save_scenario)** — switch the save
+  callback to emit ``form_values_to_scenario(values)`` instead of
+  ``scenario_to_dict(*apply_form_values(values))``. The form-shaped
+  dict already excludes ``_HIDDEN_PATHS`` and respects the active
+  ``spending.kind`` discriminator (``flat`` / ``smile`` only — the
+  form doesn't author ``custom``), so the saved JSON now matches
+  what the user actually entered. We still call
+  ``apply_form_values(values)`` first as a *validation* step so any
+  malformed form input fails loudly with a ``ScenarioError`` here
+  rather than producing a half-baked file the user only notices on
+  re-load.
+- **Fix 2 (tax_optimizer/scenario.py:_market_to_dict)** — emit
+  ``cape_long_run`` unconditionally for ``LognormalModel``. Only
+  ``cape_today`` stays gated on being non-``None`` (its absence is
+  the documented "no scaling" sentinel; emitting a literal ``null``
+  would round-trip the same).
+- **Drift reduction** — for
+  ``scenarios/example02.local.json``, the diff between the on-disk
+  scenario and the saved-from-form scenario went from **11 drift
+  entries** (smile-vs-custom split, plus injected
+  ``annual_expenses`` / ``start_age`` / ``phases`` / ``lump_events``
+  / ``ltc_shock`` / ``cape_long_run`` loss) to **2 drift entries**
+  (``roth_conversion_amount=0.0`` and
+  ``section125_reduces_fica_wages=True``, both Config defaults the
+  form correctly emits because that's what its values are after a
+  load). The remaining two are semantically equivalent — they
+  round-trip cleanly and yield byte-identical JSON on the next
+  Save → Reload → Save cycle.
+- **Save → Reload → Save fixed point** — the new
+  ``test_two_saves_byte_identical`` test pins this down: loading a
+  scenario, saving it, re-uploading the saved JSON, and saving
+  again produces a byte-identical second save. That's the property
+  the user actually relies on when they iterate on a plan.
+
+### Tests — Dash save round-trip regression suite
+
+- ``tests/test_dash_save_roundtrip.py`` — 13 new tests, gated on
+  ``pytest.importorskip("dash")``:
+  - **``TestSmileProfilePreserved``** (3) —
+    ``kind="smile"`` survives the round-trip with
+    ``base_spending`` / ``inflation`` / ``ltc_years`` /
+    ``ltc_annual_today`` intact; ``phases`` / ``lump_events`` /
+    ``ltc_shock`` do *not* leak into the saved file (otherwise the
+    decoder's ``_check_keys('spending(smile)', ...)`` would reject
+    on re-upload); the saved JSON re-loads cleanly and produces a
+    simulator output equal to the original on first-year and
+    last-year balance vectors.
+  - **``TestFlatProfilePreserved``** (1) — same shape guard for
+    ``kind="flat"``.
+  - **``TestHiddenPathsNotEmitted``** (2) —
+    ``inputs.annual_expenses`` and ``inputs.ss.start_age`` do not
+    appear in the saved JSON; ``inputs.ss.start_age_a`` /
+    ``start_age_b`` do.
+  - **``TestMarketRoundTrip``** (2) — ``kind="lognormal"`` carries
+    only lognormal-shaped fields; ``kind="deterministic"`` carries
+    only ``equity`` / ``bond`` (no lognormal-only keys leak in).
+  - **``TestCapeLongRunPreserved``** (3) —
+    ``cape_long_run`` is emitted by ``scenario_to_dict`` even when
+    ``cape_today`` is unset; round-trips through
+    ``apply_scenario`` to the same value; the original both-set
+    branch still works.
+  - **``TestSaveReloadFixedPoint``** (2) — Save → Reload → Save
+    reaches a byte-identical fixed point;
+    ``apply_form_values(values)`` validates the save payload
+    (decoder accepts it without error and yields a simulator
+    output equal to the original).
+
+Full suite: 605 passing (592 pre-existing + 13 new).
+
 ### Added — Dash app: download action-plan report (v6.8)
 
 **Why it matters:** the Dash app already produced the same simulation
