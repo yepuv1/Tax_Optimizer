@@ -1,21 +1,40 @@
-"""Tests for the Dash app's "Download HTML report" feature.
+"""Tests for the Dash app's action-plan report rendering.
 
-Covers the on-demand action-plan builder that backs the
-``report-download-btn`` button in :mod:`dash_app.app`. The Dash
-callback layer itself is exercised indirectly: we call the public
-helpers (``cache_run`` / ``get_cached`` / ``build_html_payload``)
-that the callback delegates to, plus a smoke test that runs the full
-pipeline end-to-end on a small scenario.
+Two surfaces share the same memoized HTML source:
 
-These tests exercise the *server-side* report generation. They do not
-spin up a browser or a Dash dev server.
+* ``report-download-btn`` — saves the report as a self-contained HTML
+  file (callback ``_download_report``).
+* The Report tab's ``<iframe>`` — auto-renders when the user
+  activates the tab (callback ``_render_report_tab``).
+
+These tests exercise the *server-side* helpers that back both
+callbacks (``cache_run`` / ``get_cached`` / ``build_html_payload`` /
+``build_inline_html``) plus a smoke test that ``make_app()`` builds
+the full Dash callback graph without duplicate-Output errors.
+They do not spin up a browser or a Dash dev server.
 """
 
 from __future__ import annotations
 
+import warnings
+from contextlib import contextmanager
 from dataclasses import replace
+from unittest.mock import patch
 
 import pytest
+
+
+@contextmanager
+def _silence_dash_deprecations():
+    """Suppress noisy ``DeprecationWarning``s emitted while building
+    the Dash layout (e.g. ``dash_table.DataTable`` will be removed in
+    a future major version). The pytest config treats warnings as
+    errors, so we have to scope-silence them around ``make_app()``
+    instead of polluting the global filter list.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        yield
 
 # `dash_app` is an optional install (only available when the user does
 # `pip install -e ".[dash]"`). Skip the entire module if dash isn't
@@ -26,7 +45,9 @@ from tax_optimizer import Config, Inputs
 
 from dash_app.report_builder import (  # noqa: E402  - import after skip
     _MAX_CACHED_RUNS,
+    CachedRun,
     build_html_payload,
+    build_inline_html,
     cache_run,
     clear_cache,
     get_cached,
@@ -67,16 +88,17 @@ def small_scenario() -> tuple[Config, Inputs]:
 
 
 class TestRunCache:
-    def test_round_trip_returns_same_triple(self, small_scenario) -> None:
+    def test_round_trip_returns_same_objects(self, small_scenario) -> None:
         cfg, inputs = small_scenario
         rr = run_scenario(cfg, inputs, mode="single")
         run_id = cache_run(cfg, inputs, rr)
         cached = get_cached(run_id)
-        assert cached is not None
-        c2, i2, r2 = cached
-        assert c2 is cfg
-        assert i2 is inputs
-        assert r2 is rr
+        assert isinstance(cached, CachedRun)
+        # Identity preserved through the cache so the report builder
+        # can walk the original Config / Inputs without copies.
+        assert cached.cfg is cfg
+        assert cached.inputs is inputs
+        assert cached.rr is rr
 
     def test_get_cached_returns_none_for_unknown_id(self) -> None:
         assert get_cached("never-cached-id") is None
@@ -194,6 +216,100 @@ class TestBuildHtmlPayload:
         with pytest.raises(ValueError, match="year_table_scope"):
             build_html_payload(cfg, inputs, rr, year_table_scope="bogus")
 
+    def test_three_arg_legacy_call_still_works(self, small_scenario) -> None:
+        """Backward compat: ``build_html_payload(cfg, inputs, rr)`` is
+        the original public shape. Make sure adding the
+        single-``CachedRun`` overload didn't break it (existing
+        notebooks / external callers may still use the 3-arg form).
+        """
+        cfg, inputs = small_scenario
+        rr = run_scenario(cfg, inputs, mode="single")
+        payload = build_html_payload(cfg, inputs, rr)
+        assert payload["content"]
+        assert payload["filename"].startswith("tax-optimizer-report-")
+
+    def test_cached_run_overload(self, small_scenario) -> None:
+        """``build_html_payload(cached_run)`` is the preferred shape
+        used by the Dash callbacks — it shares the memoized markdown
+        with :func:`build_inline_html` so both surfaces stay cheap."""
+        cfg, inputs = small_scenario
+        rr = run_scenario(cfg, inputs, mode="single")
+        run_id = cache_run(cfg, inputs, rr)
+        cached = get_cached(run_id)
+        payload = build_html_payload(cached)
+        assert payload["content"]
+        assert "Retirement Tax Optimization" in payload["content"]
+
+    def test_two_arg_call_raises(self, small_scenario) -> None:
+        """Catch obvious mis-uses of the overloaded signature early."""
+        cfg, inputs = small_scenario
+        with pytest.raises(TypeError, match="CachedRun or"):
+            build_html_payload(cfg, inputs)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------
+# build_inline_html  (Report-tab iframe srcDoc)
+# ---------------------------------------------------------------------
+
+
+class TestBuildInlineHtml:
+    def test_returns_full_html_document(self, small_scenario) -> None:
+        cfg, inputs = small_scenario
+        rr = run_scenario(cfg, inputs, mode="single")
+        cached = CachedRun(cfg=cfg, inputs=inputs, rr=rr)
+        html = build_inline_html(cached)
+        assert html.lstrip().startswith("<!DOCTYPE html>")
+        assert "Retirement Tax Optimization" in html
+
+    def test_inline_html_matches_download_content(self, small_scenario) -> None:
+        """The Download HTML button and the Report tab share their
+        source so users see the *same* document on both surfaces.
+        """
+        cfg, inputs = small_scenario
+        rr = run_scenario(cfg, inputs, mode="single")
+        cached = CachedRun(cfg=cfg, inputs=inputs, rr=rr)
+        inline = build_inline_html(cached)
+        download = build_html_payload(cached)["content"]
+        assert inline == download
+
+    def test_second_call_hits_cache(self, small_scenario) -> None:
+        """The expensive piece is the tornado-sensitivity sweep run
+        inside ``_build_markdown``. Re-rendering the same cached run
+        a second time must short-circuit through the per-CachedRun
+        markdown cache so tab re-visits during a session don't pay
+        the sweep again.
+        """
+        cfg, inputs = small_scenario
+        rr = run_scenario(cfg, inputs, mode="single")
+        cached = CachedRun(cfg=cfg, inputs=inputs, rr=rr)
+
+        with patch(
+            "dash_app.report_builder.tornado_sensitivity",
+            wraps=__import__(
+                "tax_optimizer.sensitivity", fromlist=["tornado_sensitivity"]
+            ).tornado_sensitivity,
+        ) as m:
+            first = build_inline_html(cached)
+            second = build_inline_html(cached)
+            third = build_html_payload(cached)["content"]
+
+        assert first == second == third
+        # Tornado sweep ran exactly once across the three renders even
+        # though they hit two different entry points.
+        assert m.call_count == 1
+
+    def test_different_scopes_cached_separately(self, small_scenario) -> None:
+        """Switching ``year_table_scope`` must not return a stale
+        cached HTML keyed under the other scope.
+        """
+        cfg, inputs = small_scenario
+        rr = run_scenario(cfg, inputs, mode="single")
+        cached = CachedRun(cfg=cfg, inputs=inputs, rr=rr)
+        full = build_inline_html(cached, year_table_scope="full")
+        retired = build_inline_html(cached, year_table_scope="retirement")
+        assert full != retired
+        assert len(retired) < len(full)
+
 
 # ---------------------------------------------------------------------
 # Round-trip through the cache (mirrors the production callback flow)
@@ -210,9 +326,8 @@ class TestEndToEnd:
 
         cached = get_cached(run_id)
         assert cached is not None
-        cfg_back, inp_back, rr_back = cached
 
-        payload = build_html_payload(cfg_back, inp_back, rr_back)
+        payload = build_html_payload(cached)
         assert payload["content"]
         assert "Retirement Tax Optimization" in payload["content"]
 
@@ -236,9 +351,68 @@ class TestEndToEnd:
         }
         run_id = cache_run(cfg, inputs, rr)
 
-        cfg_back, inp_back, rr_back = get_cached(run_id)
-        payload = build_html_payload(cfg_back, inp_back, rr_back)
+        cached = get_cached(run_id)
+        payload = build_html_payload(cached)
         html = payload["content"]
         # Four-strategy reports surface the verdict block.
         assert "S0_baseline" in html
         assert "S3_optimized" in html
+
+
+# ---------------------------------------------------------------------
+# Dash app smoke test (callback graph)
+# ---------------------------------------------------------------------
+
+
+class TestAppCallbackGraph:
+    """Ensure the new Report-tab callback registers cleanly.
+
+    We don't run the dev server — building the Dash app already
+    validates every ``@app.callback`` decorator (duplicate Outputs
+    without ``allow_duplicate=True`` raise at registration time).
+    Importing :func:`dash_app.app.make_app` and calling it covers all
+    the callback wiring in one shot.
+    """
+
+    def test_make_app_builds_without_duplicate_output_errors(self) -> None:
+        from dash_app.app import make_app
+
+        with _silence_dash_deprecations():
+            app = make_app()
+        cb_map = app.callback_map
+        # Sanity: the report iframe srcDoc should be the output of at
+        # least one registered callback (the new ``_render_report_tab``).
+        outputs = []
+        for spec in cb_map.values():
+            outs = spec.get("output", [])
+            if not isinstance(outs, list):
+                outs = [outs]
+            for out in outs:
+                outputs.append(getattr(out, "component_id", None))
+        assert "report-iframe" in outputs, (
+            "expected report-iframe to be the output of the report-tab "
+            "callback"
+        )
+
+    def test_report_iframe_has_at_most_one_writer(self) -> None:
+        """The Report-tab refactor moved the iframe srcDoc output off
+        the Download callback so only one callback writes to it.
+        Multiple writers would force ``allow_duplicate=True`` and
+        introduce ordering hazards (whichever fires last wins).
+        """
+        from dash_app.app import make_app
+
+        with _silence_dash_deprecations():
+            app = make_app()
+        writers = 0
+        for spec in app.callback_map.values():
+            outs = spec.get("output", [])
+            if not isinstance(outs, list):
+                outs = [outs]
+            for o in outs:
+                if getattr(o, "component_id", None) == "report-iframe":
+                    writers += 1
+        assert writers == 1, (
+            f"report-iframe.srcDoc has {writers} writer callbacks; "
+            "expected exactly 1 (the Report-tab renderer)."
+        )

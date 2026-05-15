@@ -32,6 +32,95 @@ Categories used:
 
 ## [Unreleased]
 
+### Added — Dash app: Report tab auto-renders the action plan
+
+**Why it matters:** the previous flow had users click a "Download HTML"
+button to get the action-plan report, which produced a downloaded file
+that they then had to open in a separate browser tab. Most users
+expect to *see* the report in the dashboard the moment they click the
+"Report" tab — the download is for archiving / sharing later.
+
+The Report tab now renders the action plan in an inline `<iframe>` the
+moment the user activates it, with no extra click required. The
+"Download HTML" button stays in the same tab for users who want to
+save a copy, but it no longer drives the iframe state.
+
+- **dash_app/app.py — new `_render_report_tab` callback** triggered
+  by `results-tabs.active_tab` *and* `run-result.data` so:
+  - Switching to the Report tab right after a Run shows the fresh
+    report immediately.
+  - Re-running while the tab is already active swaps the iframe to
+    the new run's report.
+  - Switching away to a different tab and back doesn't pay for a
+    rebuild — see the caching note below.
+  The callback gates on `active_tab == "tab-report"` and returns
+  `no_update` for every other tab so we don't burn cycles on the
+  tornado-sensitivity sweep when nobody is looking.
+- **dash_app/app.py — `_download_report` simplified.** The previous
+  version had three Outputs (download payload + status banner +
+  iframe srcDoc); the iframe Output moved to the new tab callback so
+  exactly one callback writes to `report-iframe.srcDoc`. No more
+  `allow_duplicate=True` ordering hazard.
+- **dash_app/report_builder.py — `CachedRun` dataclass with memoized
+  markdown / HTML.** The expensive piece of the report build is the
+  tornado-sensitivity sweep (~1-2s on the default scenario, since it
+  re-simulates the household for every perturbed knob). Now the sweep
+  runs once per cached run, and both the iframe-render path and the
+  download-file path share the cached HTML through
+  `_build_markdown` / `_build_html` keyed by
+  `(year_table_scope, scenario_path)`.
+  - `cache_run(cfg, inputs, rr)` now stores a `CachedRun` instead of
+    a raw 3-tuple. Per-run state (cfg / inputs / rr) is unchanged;
+    the dataclass just hangs the two memoization dicts on the same
+    object so the LRU eviction reclaims them together.
+  - `get_cached(run_id)` returns the `CachedRun` directly. (Tests
+    that previously used tuple unpacking — `cfg, inputs, rr =
+    cached` — were updated to `cached.cfg`, `cached.inputs`,
+    `cached.rr`.)
+  - `build_html_payload(...)` accepts either the new `CachedRun`
+    (preferred — shares the cache) or the legacy 3-arg shape
+    `(cfg, inputs, rr)` (kept for backward compatibility with
+    notebooks / external callers; builds an ephemeral `CachedRun`).
+  - `build_inline_html(cached)` is the new entry point used by the
+    iframe callback. Returns the same HTML string the download
+    payload's `content` field carries, so users get an identical
+    document on both surfaces.
+- **dash_app/layout.py — `report_tab()` reorganized.** The "Download
+  HTML" button kept its id / behavior. Above the iframe we added a
+  small grey hint ("The action plan renders automatically below
+  when you switch to this tab after a Run.") so the auto-render
+  is discoverable without forcing the user to read the changelog.
+  The iframe sits inside `dcc.Loading` so the user sees a spinner
+  during the first render's tornado sweep instead of staring at a
+  blank pane.
+
+### Tests — Dash report-tab rendering
+
+- `tests/test_dash_report_download.py` extended (was 12 tests, now
+  21):
+  - `TestBuildInlineHtml::test_inline_html_matches_download_content`
+    — proves the iframe and the download share their source.
+  - `TestBuildInlineHtml::test_second_call_hits_cache` — patches
+    `dash_app.report_builder.tornado_sensitivity` and asserts the
+    sweep runs *exactly once* across two `build_inline_html` calls
+    + one `build_html_payload` call. Catches a regression where
+    the cache key drift would silently re-run the sweep on tab
+    re-visits.
+  - `TestBuildInlineHtml::test_different_scopes_cached_separately`
+    — `year_table_scope="full"` and `="retirement"` cache under
+    distinct keys so toggling scopes doesn't return stale HTML.
+  - `TestAppCallbackGraph` — boots `make_app()` and walks the
+    `callback_map` to verify (a) the Report-tab callback is
+    registered, (b) `report-iframe.srcDoc` has *exactly one*
+    writer (regression guard for the duplicate-Output trap that
+    forced `allow_duplicate=True`).
+  - `TestBuildHtmlPayload::test_cached_run_overload` and
+    `test_two_arg_call_raises` cover the new overloaded
+    signature.
+  Existing tests that did `cfg, inputs, rr = get_cached(run_id)`
+  were updated to use the `CachedRun` attributes; the public LRU
+  semantics are otherwise unchanged.
+
 ### Fixed — Dash app: input boxes turn red on legitimate values
 
 **Why it matters:** percent and currency fields rendered with red text

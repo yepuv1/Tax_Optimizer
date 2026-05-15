@@ -9,6 +9,7 @@ import tree shallow.
 from __future__ import annotations
 
 import base64
+import html as html_module
 import json
 import warnings
 from typing import Any
@@ -16,6 +17,33 @@ from typing import Any
 import dash
 import dash_bootstrap_components as dbc
 from dash import ALL, Input, Output, State, html, no_update
+
+
+# ``html.escape`` from the stdlib clashes with the ``dash.html`` import
+# above (we use the latter for component construction). Keep an alias
+# under a distinct name so the report-tab callback can sanitize error
+# strings before injecting them into the iframe srcDoc.
+def html_module_escape(text: str) -> str:
+    return html_module.escape(text, quote=True)
+
+
+def _placeholder_srcdoc(message_html: str) -> str:
+    """Wrap an inline HTML message in a styled iframe srcDoc.
+
+    Used when there's nothing meaningful to render yet (no run, cache
+    miss, or build error). Keeps the iframe self-contained so its
+    styling doesn't leak from the parent dashboard's Bootstrap and
+    vice-versa, matching the rendered-report behavior.
+    """
+    return (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<style>"
+        "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',"
+        "sans-serif;color:#475569;padding:32px;font-size:0.95rem;"
+        "line-height:1.5;}"
+        "</style></head><body>"
+        f"<div>{message_html}</div></body></html>"
+    )
 
 from tax_optimizer.config import Config
 from tax_optimizer.inputs import Inputs
@@ -27,7 +55,12 @@ from tax_optimizer.scenario import (
 from . import figures
 from .forms import get_field
 from .layout import build_layout
-from .report_builder import build_html_payload, cache_run, get_cached
+from .report_builder import (
+    build_html_payload,
+    build_inline_html,
+    cache_run,
+    get_cached,
+)
 from .runner import (
     deserialize_strategy_df,
     run_scenario,
@@ -287,34 +320,93 @@ def make_app() -> dash.Dash:
     @app.callback(
         Output("report-download", "data"),
         Output("run-status", "children", allow_duplicate=True),
-        Output("report-iframe", "srcDoc"),
         Input("report-download-btn", "n_clicks"),
         State("run-result", "data"),
         prevent_initial_call=True,
     )
     def _download_report(_clicks, run_data):
+        """Save the action-plan report as a self-contained HTML file.
+
+        Iframe rendering is owned by ``_render_report_tab`` (which fires
+        on tab activation), so this callback now only emits the
+        download payload — the user can save the file regardless of
+        whether the Report tab is currently active. Both callbacks
+        share the same memoized ``CachedRun._html_cache`` so the work
+        of building the markdown + tornado sweep happens at most once
+        per run.
+        """
         if not run_data or not run_data.get("strategies"):
             return no_update, html.Span(
                 "Run a scenario first - the report needs simulation results.",
                 className="text-warning",
-            ), no_update
+            )
         run_id = run_data.get("run_id")
         cached = get_cached(run_id)
         if cached is None:
             return no_update, html.Span(
                 "Run results have expired from the cache. Click 'Run' again.",
                 className="text-warning",
-            ), no_update
-        cfg, inputs, rr = cached
+            )
         try:
-            payload = build_html_payload(cfg, inputs, rr)
+            payload = build_html_payload(cached)
         except Exception as e:  # noqa: BLE001 - surface any render error
             return no_update, html.Span(
                 f"Report build failed: {e}", className="text-danger"
-            ), no_update
+            )
         return payload, html.Span(
             f"Report ready: {payload['filename']}.", className="text-success"
-        ), payload["content"]
+        )
+
+    # ---- Render the Report tab (auto on tab activation) -------------
+
+    @app.callback(
+        Output("report-iframe", "srcDoc"),
+        Input("results-tabs", "active_tab"),
+        Input("run-result", "data"),
+        prevent_initial_call=True,
+    )
+    def _render_report_tab(active_tab, run_data):
+        """Build the action-plan HTML when the Report tab is selected.
+
+        Triggers on both the active-tab change *and* the ``run-result``
+        Store data so:
+
+        * Switching to the Report tab right after a Run renders the
+          fresh report immediately.
+        * Re-running while the Report tab is already active swaps the
+          iframe to the new run's report.
+        * Switching away to a different tab and back doesn't pay for
+          a rebuild — :func:`build_inline_html` is memoized per
+          :class:`CachedRun`, so the second call short-circuits to
+          the cached HTML.
+
+        We surface a friendly placeholder srcDoc when there is no
+        cached run yet (cold start) or when the cache has been evicted
+        (long-lived session that ran more than ``_MAX_CACHED_RUNS``
+        scenarios since this one).
+        """
+        if active_tab != "tab-report":
+            # User isn't looking at the report; don't burn cycles on
+            # the tornado sweep until they actually need it.
+            return no_update
+        if not run_data or not run_data.get("strategies"):
+            return _placeholder_srcdoc(
+                "Run a scenario first to populate the action-plan report."
+            )
+        run_id = run_data.get("run_id")
+        cached = get_cached(run_id)
+        if cached is None:
+            return _placeholder_srcdoc(
+                "Run results have expired from the cache. "
+                "Click <strong>Run</strong> again to refresh the report."
+            )
+        try:
+            return build_inline_html(cached)
+        except Exception as e:  # noqa: BLE001 - surface any render error
+            return _placeholder_srcdoc(
+                f"<span style='color:#dc3545'>Report build failed: "
+                f"{html_module_escape(str(e))}</span>"
+            )
 
     # ---- Overview tab -----------------------------------------------
 

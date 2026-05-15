@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import uuid
 from collections import OrderedDict
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
@@ -54,38 +55,60 @@ from .runner import RunResult
 
 _MAX_CACHED_RUNS = 5
 
-# Keys are UUID hex strings; values are (cfg, inputs, RunResult). We use
-# `OrderedDict` so we can evict the oldest entry on overflow.
-_RUN_CACHE: "OrderedDict[str, tuple[Config, Inputs, RunResult]]" = OrderedDict()
+
+@dataclass
+class CachedRun:
+    """Server-side state for a single Dash run.
+
+    We hold the original Python objects (``cfg`` / ``inputs`` / ``rr``)
+    so the report renderer can walk them on demand without re-running
+    the simulator. The two ``*_cache`` fields memoize the heavy build
+    paths so the user can hop between the Report tab and the Download
+    button without paying the tornado-sensitivity sweep twice — both
+    paths share the same markdown source.
+    """
+
+    cfg: Config
+    inputs: Inputs
+    rr: RunResult
+    # Lazy: built on first request via `_build_markdown`.
+    _markdown_cache: dict[tuple[str, Optional[str]], str] = field(
+        default_factory=dict
+    )
+    # Lazy: built on first request via `_build_html`. Keyed the same
+    # way as `_markdown_cache` (year_table_scope, scenario_path).
+    _html_cache: dict[tuple[str, Optional[str]], str] = field(
+        default_factory=dict
+    )
+
+
+# Keys are UUID hex strings; values are CachedRun. `OrderedDict` lets
+# us evict the oldest entry when the cache overflows.
+_RUN_CACHE: "OrderedDict[str, CachedRun]" = OrderedDict()
 
 
 def cache_run(cfg: Config, inputs: Inputs, rr: RunResult) -> str:
     """Register a finished run and return a fresh ``run_id`` for it.
 
     The Dash run-result ``dcc.Store`` carries this id alongside the
-    JSON-serialized strategy frames. The download callback uses the id
-    to recover the original Python objects so the report renderer can
-    walk them.
+    JSON-serialized strategy frames. Both the Download HTML callback
+    and the Report-tab renderer use the id to recover the original
+    Python objects.
 
     LRU bound: when the cache exceeds :data:`_MAX_CACHED_RUNS`, the
     oldest entry is evicted. That keeps memory bounded in long-lived
     app sessions while still letting the user jump back to a few
-    recent runs (e.g. tweak inputs, hit Run, decide they preferred the
-    previous result, hit Download for the previous run via that
-    Store's id — works as long as that earlier run is still in the
-    last 5).
+    recent runs.
     """
     run_id = uuid.uuid4().hex
-    _RUN_CACHE[run_id] = (cfg, inputs, rr)
+    _RUN_CACHE[run_id] = CachedRun(cfg=cfg, inputs=inputs, rr=rr)
     while len(_RUN_CACHE) > _MAX_CACHED_RUNS:
         _RUN_CACHE.popitem(last=False)
     return run_id
 
 
-def get_cached(
-    run_id: Optional[str],
-) -> Optional[tuple[Config, Inputs, RunResult]]:
-    """Fetch the cached triple for ``run_id`` and bump its LRU position.
+def get_cached(run_id: Optional[str]) -> Optional[CachedRun]:
+    """Fetch the cached run for ``run_id`` and bump its LRU position.
 
     Returns ``None`` if the id is missing or has been evicted.
     """
@@ -101,63 +124,100 @@ def clear_cache() -> None:
 
 
 # ---------------------------------------------------------------------
-# Report rendering
+# Report rendering (memoized at the markdown layer)
 # ---------------------------------------------------------------------
 
 
+def _build_markdown(
+    cached: CachedRun,
+    *,
+    scenario_path: Optional[str],
+    year_table_scope: str,
+) -> str:
+    """Return the action-plan markdown for ``cached``, building once.
+
+    Cache key is ``(year_table_scope, scenario_path)`` so a user that
+    happens to flip between scopes still benefits from
+    short-circuiting on repeats. The expensive piece is
+    :func:`tornado_sensitivity` (~1-2s for the default scenario),
+    not the markdown formatting itself.
+    """
+    key = (year_table_scope, scenario_path)
+    if key in cached._markdown_cache:
+        return cached._markdown_cache[key]
+    sens_df, base_terminal = tornado_sensitivity(cached.cfg, cached.inputs)
+    md = build_action_report(
+        cfg=cached.cfg,
+        inputs=cached.inputs,
+        results=cached.rr.strategies,
+        sens_df=sens_df,
+        base_terminal=base_terminal,
+        mc=cached.rr.mc,
+        scenario_path=scenario_path,
+        year_table_scope=year_table_scope,
+    )
+    cached._markdown_cache[key] = md
+    return md
+
+
+def _build_html(
+    cached: CachedRun,
+    *,
+    scenario_path: Optional[str],
+    year_table_scope: str,
+) -> str:
+    """Return the rendered HTML for ``cached``, memoized."""
+    key = (year_table_scope, scenario_path)
+    if key in cached._html_cache:
+        return cached._html_cache[key]
+    md = _build_markdown(
+        cached, scenario_path=scenario_path, year_table_scope=year_table_scope
+    )
+    html_text = render_html(md)
+    cached._html_cache[key] = html_text
+    return html_text
+
+
 def build_html_payload(
-    cfg: Config,
-    inputs: Inputs,
-    rr: RunResult,
+    cfg_or_cached,
+    inputs: Optional[Inputs] = None,
+    rr: Optional[RunResult] = None,
     *,
     scenario_path: Optional[str] = None,
     year_table_scope: str = "full",
 ) -> dict[str, str]:
     """Re-render the action plan as a self-contained HTML document.
 
-    Parameters
-    ----------
-    cfg, inputs:
-        The base scenario the user ran with. Used as the anchor for the
-        tornado-sensitivity sweep (so the report's ±$ swings match what
-        the user would see in the CLI).
-    rr:
-        The :class:`~dash_app.runner.RunResult` produced by
-        :func:`~dash_app.runner.run_scenario`. ``rr.strategies`` is
-        passed straight to :func:`tax_optimizer.report.build_action_report`
-        — its `StrategyResult` shape (``cfg`` / ``inputs`` / ``df`` /
-        ``summary``) is structurally compatible with the canonical
-        :class:`tax_optimizer.results.StrategyResult` that the report
-        module type-hints against.
-    scenario_path:
-        Optional file path to surface in the report header
-        (``"Scenario file: …"``). The Dash flow loads scenarios via
-        upload so the original on-disk path is usually unknown; we
-        accept it for parity with the CLI / notebook.
-    year_table_scope:
-        Forwarded to :func:`tax_optimizer.report.build_action_report`.
-        Defaults to ``"full"`` (every simulated year). Pass
-        ``"retirement"`` for a condensed table.
+    Two call shapes are supported:
+
+    * ``build_html_payload(cached_run)`` — preferred; uses the
+      memoized markdown / HTML attached to the
+      :class:`CachedRun`.
+    * ``build_html_payload(cfg, inputs, rr)`` — legacy 3-arg shape
+      kept for backward compatibility with tests / external callers.
+      Builds an ephemeral :class:`CachedRun` so the work isn't shared
+      with the in-process LRU cache.
 
     Returns
     -------
     dict with keys ``content`` (the HTML text) and ``filename``
     (``tax-optimizer-report-YYYYMMDD-HHMMSS.html``). The shape is the
-    one ``dcc.Download.data`` expects, so the callback can return this
-    dict directly.
+    one :class:`dash.dcc.Download` expects, so the callback can
+    return this dict directly.
     """
-    sens_df, base_terminal = tornado_sensitivity(cfg, inputs)
-    md = build_action_report(
-        cfg=cfg,
-        inputs=inputs,
-        results=rr.strategies,
-        sens_df=sens_df,
-        base_terminal=base_terminal,
-        mc=rr.mc,
-        scenario_path=scenario_path,
-        year_table_scope=year_table_scope,
+    if isinstance(cfg_or_cached, CachedRun):
+        cached = cfg_or_cached
+    else:
+        if inputs is None or rr is None:
+            raise TypeError(
+                "build_html_payload() requires either a CachedRun or "
+                "the (cfg, inputs, rr) triple."
+            )
+        cached = CachedRun(cfg=cfg_or_cached, inputs=inputs, rr=rr)
+
+    html_text = _build_html(
+        cached, scenario_path=scenario_path, year_table_scope=year_table_scope
     )
-    html_text = render_html(md)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return {
         "content": html_text,
@@ -165,9 +225,29 @@ def build_html_payload(
     }
 
 
+def build_inline_html(
+    cached: CachedRun,
+    *,
+    scenario_path: Optional[str] = None,
+    year_table_scope: str = "full",
+) -> str:
+    """Return just the HTML string for the Report tab's iframe.
+
+    Same content as :func:`build_html_payload` but skips the
+    download-payload wrapping. Memoized via :class:`CachedRun`'s
+    ``_html_cache``, so the second visit to the Report tab during
+    the same run re-renders instantly.
+    """
+    return _build_html(
+        cached, scenario_path=scenario_path, year_table_scope=year_table_scope
+    )
+
+
 __all__ = [
     "cache_run",
     "get_cached",
     "clear_cache",
     "build_html_payload",
+    "build_inline_html",
+    "CachedRun",
 ]

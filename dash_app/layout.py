@@ -403,10 +403,27 @@ def yearly_tab() -> dbc.Tab:
 
 
 def report_tab() -> dbc.Tab:
+    """Action-plan report tab.
+
+    The iframe auto-renders whenever the user activates this tab and a
+    completed run is in the cache (callback: ``_render_report_tab``).
+    The "Download HTML" button is purely for saving a copy of what the
+    user already sees rendered above it; it does not drive the iframe
+    state.
+
+    The iframe lets the report's own ``<style>`` block paint the
+    document the same way it would in a standalone browser tab, with
+    no CSS bleed from the dashboard's Bootstrap theme.
+    """
     return dbc.Tab(
         [
             html.Div(
                 [
+                    html.Span(
+                        "The action plan renders automatically below "
+                        "when you switch to this tab after a Run.",
+                        className="text-muted small me-3",
+                    ),
                     dbc.Button(
                         "Download HTML",
                         id="report-download-btn",
@@ -414,24 +431,36 @@ def report_tab() -> dbc.Tab:
                         outline=True,
                         size="sm",
                         title=(
-                            "Build the optimizer's action-plan report as a "
-                            "self-contained HTML file and display it below. "
-                            "Print to PDF from the browser if you want PDF."
+                            "Save the report as a self-contained HTML "
+                            "file. Print to PDF from your browser if "
+                            "you want a PDF."
                         ),
                     ),
                     dcc.Download(id="report-download"),
                 ],
-                className="my-3",
+                className="my-3 d-flex align-items-center",
             ),
-            html.Iframe(
-                id="report-iframe",
-                srcDoc=(
-                    "<div style='font-family:sans-serif;padding:20px;color:#6c757d'>"
-                    "Run a scenario, then click <strong>Download HTML</strong> "
-                    "to generate and display the action-plan report."
-                    "</div>"
+            dcc.Loading(
+                html.Iframe(
+                    id="report-iframe",
+                    srcDoc=(
+                        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                        "<style>body{font-family:-apple-system,BlinkMacSystemFont,"
+                        "'Segoe UI',sans-serif;color:#475569;padding:32px;"
+                        "font-size:0.95rem;line-height:1.5;}</style></head>"
+                        "<body><div>Run a scenario to populate the "
+                        "action-plan report.</div></body></html>"
+                    ),
+                    style={
+                        "width": "100%",
+                        "height": "900px",
+                        "border": "1px solid #e2e8f0",
+                        "borderRadius": "6px",
+                        "background": "white",
+                    },
                 ),
-                style={"width": "100%", "height": "900px", "border": "none"},
+                type="default",
+                color="#0d6efd",
             ),
         ],
         label="Report", tab_id="tab-report",
