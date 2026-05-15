@@ -145,6 +145,250 @@ def _strategy_callout(strategies: dict[str, Any], winner_name: str | None) -> An
 
 
 # ---------------------------------------------------------------------
+# Strategy comparison table
+# ---------------------------------------------------------------------
+
+# Display labels for the canonical four strategies. Anything not in
+# this map renders with the raw key (typically the user's own
+# strategy name from a custom run). Keeping this map small and
+# explicit avoids surprising abbreviations on third-party strategy
+# names.
+_STRATEGY_HEADERS: dict[str, str] = {
+    "S0_baseline": "Baseline",
+    "S1_all_roth_401k": "All Roth",
+    "S2_bracket_fill_22": "Fill to 22%",
+    "S3_optimized": "Optimizer",
+}
+
+# Strategies whose values define the "no override" reference column
+# for diff highlighting. The first match wins so users running with a
+# subset (e.g. only S0 + S3) still get a sensible baseline.
+_BASELINE_PREFERENCE: tuple[str, ...] = (
+    "S0_baseline",
+    "S1_all_roth_401k",
+    "S2_bracket_fill_22",
+)
+
+
+def _fmt_value(value: Any, kind: str) -> str:
+    """Render a strategy parameter / outcome value as a human string."""
+    if value is None:
+        return "—"
+    try:
+        if kind == "pct":
+            return f"{float(value) * 100:.0f}%"
+        if kind == "money":
+            return f"${float(value):,.0f}"
+        if kind == "int":
+            return f"{int(value)}"
+    except (TypeError, ValueError):
+        return str(value)
+    return str(value)
+
+
+def _approx_equal(a: Any, b: Any, *, tol: float = 1e-9) -> bool:
+    """Robust equality for numeric / int / None values across strategies.
+
+    The cfg_summary dict round-trips through JSON so we can't rely on
+    object identity. Floats can also wobble at the 1e-12 level when
+    the same `inputs` dataclass is fed through different
+    `dataclasses.replace()` chains. ``tol=1e-9`` is well below any
+    user-visible delta (we round to 0% / $0 in the table) but well
+    above float-equality wobble.
+    """
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    try:
+        return abs(float(a) - float(b)) <= tol
+    except (TypeError, ValueError):
+        return a == b
+
+
+def _pick_baseline(names: list[str]) -> str:
+    """Return the column name to diff every other column against."""
+    for candidate in _BASELINE_PREFERENCE:
+        if candidate in names:
+            return candidate
+    # Fallback: the first column the runner emitted. ``RunResult``
+    # preserves insertion order so this is deterministic.
+    return names[0]
+
+
+def _strategy_compare_table(
+    strategies: dict[str, Any], winner_name: str | None
+) -> Any:
+    """Build the per-knob × per-strategy comparison table.
+
+    Rows are split into two visually distinct groups:
+
+    1. **Decision parameters** — the seven knobs the optimizer can
+       turn (Roth-401(k) % per spouse, conversion bracket, after-tax
+       401(k) % per spouse, SS claim age per spouse). Cells whose
+       value differs from the baseline column get a yellow tint;
+       cells in the optimizer column that differ from baseline get
+       a stronger green tint to make "what the optimizer overrode"
+       jump out at a glance.
+
+    2. **Outcomes** — terminal after-tax NW, lifetime federal tax
+       NPV, lifetime IRMAA NPV, peak marginal rate. Same diff
+       coloring rules so users can visually correlate which knob
+       move drove which outcome delta.
+
+    Falls back to :func:`_strategy_callout` for single-strategy
+    runs, where there's nothing to compare *against*. The callout
+    is the right shape for that case (Winner / picks summary).
+    """
+    if not strategies:
+        return html.Div(
+            "Click 'Run' to populate the dashboard.",
+            className="text-muted small",
+        )
+
+    names = list(strategies.keys())
+    if len(names) < 2:
+        # Nothing to diff against — defer to the single-row callout.
+        return _strategy_callout(strategies, winner_name)
+
+    baseline_name = _pick_baseline(names)
+
+    # (display label, payload key, value kind, source bucket)
+    param_rows: list[tuple[str, str, str, str]] = [
+        ("Roth-401(k) % (Spouse A)", "spouse_a_roth_401k_pct", "pct", "cfg_summary"),
+        ("Roth-401(k) % (Spouse B)", "spouse_b_roth_401k_pct", "pct", "cfg_summary"),
+        ("Roth conversion target bracket", "roth_conversion_target_bracket",
+         "pct", "cfg_summary"),
+        ("After-tax 401(k) % (Spouse A)", "spouse_a_after_tax_401k_pct",
+         "pct", "cfg_summary"),
+        ("After-tax 401(k) % (Spouse B)", "spouse_b_after_tax_401k_pct",
+         "pct", "cfg_summary"),
+        ("SS claim age (Spouse A)", "ss_start_age_a", "int", "cfg_summary"),
+        ("SS claim age (Spouse B)", "ss_start_age_b", "int", "cfg_summary"),
+    ]
+    outcome_rows: list[tuple[str, str, str, str]] = [
+        ("Terminal after-tax NW", "terminal_after_tax", "money", "summary"),
+        ("Lifetime federal tax (NPV)", "lifetime_tax_npv", "money", "summary"),
+        ("Lifetime IRMAA (NPV)", "lifetime_irmaa_npv", "money", "summary"),
+        ("Peak marginal rate", "peak_marginal", "pct", "summary"),
+    ]
+
+    def _value_for(strat_name: str, key: str, source: str) -> Any:
+        return strategies[strat_name].get(source, {}).get(key)
+
+    def _cell(strat_name: str, key: str, kind: str, source: str) -> Any:
+        val = _value_for(strat_name, key, source)
+        baseline_val = _value_for(baseline_name, key, source)
+        differs = strat_name != baseline_name and not _approx_equal(
+            val, baseline_val
+        )
+        # Outcome rows always differ in $ terms — coloring those by
+        # diff would just paint every cell. Restrict the diff
+        # highlight to the parameter rows where the column-vs-column
+        # comparison actually says something about the strategy's
+        # *inputs* rather than its outputs.
+        is_param_row = source == "cfg_summary"
+        css_classes = ["text-end"]
+        if is_param_row and differs:
+            if strat_name == winner_name:
+                css_classes.append("strategy-cell-optimized")
+            else:
+                css_classes.append("strategy-cell-changed")
+        return html.Td(
+            _fmt_value(val, kind), className=" ".join(css_classes)
+        )
+
+    def _row(label: str, key: str, kind: str, source: str) -> Any:
+        return html.Tr(
+            [html.Td(label, className="text-muted small")]
+            + [_cell(name, key, kind, source) for name in names]
+        )
+
+    def _section_header(text: str) -> Any:
+        return html.Tr(
+            html.Td(
+                text,
+                colSpan=len(names) + 1,
+                className=(
+                    "fw-semibold text-muted small "
+                    "strategy-compare-section bg-light"
+                ),
+            )
+        )
+
+    def _column_header(strat_name: str) -> Any:
+        label = _STRATEGY_HEADERS.get(strat_name, strat_name)
+        is_winner = strat_name == winner_name
+        return html.Th(
+            [
+                html.Span(label),
+                html.Span(
+                    " ★", className="text-success ms-1",
+                    title="Optimizer's chosen strategy",
+                ) if is_winner else "",
+                html.Div(
+                    strat_name,
+                    className="text-muted small fw-normal",
+                    style={"fontSize": "0.7rem"},
+                ),
+            ],
+            className="text-end",
+        )
+
+    legend = html.Div(
+        [
+            html.Span("Cell shading: ", className="text-muted small me-2"),
+            html.Span(
+                "differs from baseline",
+                className="strategy-cell-changed px-2 me-2 small",
+            ),
+            html.Span(
+                "optimizer's override",
+                className="strategy-cell-optimized px-2 me-2 small",
+            ),
+            html.Span(
+                f"(baseline column: {_STRATEGY_HEADERS.get(baseline_name, baseline_name)})",
+                className="text-muted small",
+            ),
+        ],
+        className="mb-2",
+    )
+
+    table = dbc.Table(
+        [
+            html.Thead(
+                html.Tr(
+                    [html.Th("Parameter", className="text-muted small")]
+                    + [_column_header(n) for n in names]
+                )
+            ),
+            html.Tbody(
+                [_section_header("Decision parameters")]
+                + [_row(*r) for r in param_rows]
+                + [_section_header("Outcomes")]
+                + [_row(*r) for r in outcome_rows]
+            ),
+        ],
+        bordered=True,
+        hover=True,
+        size="sm",
+        responsive=True,
+        className="strategy-compare-table mb-3",
+    )
+
+    return html.Div(
+        [
+            html.Div(
+                "Strategy comparison — what each strategy changed",
+                className="fw-semibold mb-2",
+            ),
+            legend,
+            table,
+        ]
+    )
+
+
+# ---------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------
 
@@ -495,20 +739,21 @@ def make_app() -> dash.Dash:
     # ---- Strategies tab --------------------------------------------
 
     @app.callback(
-        Output("strategies-callout", "children"),
+        Output("strategies-comparison", "children"),
         Output("fig-strategy-compare", "figure"),
         Input("run-result", "data"),
     )
     def _render_strategies(run_data):
         if not run_data or not run_data.get("strategies"):
             return (
-                html.Div("Click 'Run' to populate the dashboard", className="text-muted"),
+                html.Div("Click 'Run' to populate the dashboard",
+                         className="text-muted"),
                 figures.empty_figure("Run first"),
             )
         strategies = run_data["strategies"]
         winner_name = run_data.get("winner_name")
         return (
-            _strategy_callout(strategies, winner_name),
+            _strategy_compare_table(strategies, winner_name),
             figures.strategy_compare_panel(strategies),
         )
 

@@ -32,6 +32,92 @@ Categories used:
 
 ## [Unreleased]
 
+### Added — Dash app: Strategies tab shows optimizer overrides
+
+**Why it matters:** the Strategies tab previously displayed the
+winner's seven decision-axis values in a one-line "Optimizer picks"
+callout, but the user couldn't see at a glance *which* knobs the
+optimizer chose to override versus the canonical reference
+strategies (S0 baseline, S1 all-Roth-401(k), S2 fill-to-22%-bracket).
+The bar chart below the callout shows outcome deltas (terminal NW,
+lifetime tax, lifetime IRMAA) but says nothing about the *inputs*
+that produced them.
+
+The tab now renders a per-knob × per-strategy comparison table that
+makes overrides visually obvious, then shows the existing outcome
+chart below it. Cells whose value differs from the baseline column
+get a yellow tint; cells in the optimizer column that differ from
+baseline get a stronger green tint and bold weight so "what did the
+optimizer change?" pops on first read.
+
+- **`dash_app/app.py`** — new `_strategy_compare_table` helper
+  builds a `dbc.Table` with two row groups:
+  - **Decision parameters** (7 rows): Roth-401(k) % per spouse,
+    Roth conversion target bracket, after-tax 401(k) % per spouse,
+    SS claim age per spouse. Cell-level diff highlight against the
+    baseline column.
+  - **Outcomes** (4 rows): terminal after-tax NW, lifetime federal
+    tax NPV, lifetime IRMAA NPV, peak marginal rate. Diff
+    highlighting *not* applied here — every strategy's NW differs
+    in $ so coloring would just paint every cell. Outcome rows are
+    purely for visual correlation with the parameter rows above.
+  Headers use brief friendly labels (`Baseline`, `All Roth`,
+  `Fill to 22%`, `Optimizer ★`) with the canonical strategy id as
+  a small subtitle so users can still match against the CLI / docs.
+  The optimizer's column gets a green star next to the label. The
+  raw key is used for any custom strategy name not in the
+  canonical four (no silent label substitution).
+  Helper functions `_fmt_value`, `_approx_equal` (1e-9 tolerance
+  to absorb float wobble through the JSON round-trip), and
+  `_pick_baseline` (prefers `S0_baseline` → `S1_all_roth_401k` →
+  `S2_bracket_fill_22` → first column) are also exposed at module
+  scope so the tests can pin them.
+- **`dash_app/app.py`** — the existing `_strategy_callout`
+  (one-line "Optimizer picks" summary) is kept as the
+  **single-strategy fallback**: when the run mode is `single`,
+  the comparison table degenerates to a single column and there's
+  nothing to diff against, so we render the old callout instead.
+  No regressions for users running single-mode reports.
+- **`dash_app/layout.py`** — the `strategies-callout` Div was
+  renamed to `strategies-comparison` (and its docstring updated
+  to describe the new two-section layout). The callback Output
+  follows.
+- **`dash_app/assets/fira-code.css`** — added two cell-shading
+  classes (`strategy-cell-changed` for the yellow tint and
+  `strategy-cell-optimized` for the green tint), a section-header
+  divider rule for the "Decision parameters" / "Outcomes" group
+  separators, and tighter row padding so the full 11-row table
+  fits above the fold on a 1366×768 laptop. Background colors
+  are pulled from Bootstrap's `bg-warning-subtle` / `bg-success-
+  subtle` palettes so the highlights read consistently against
+  the rest of the dashboard's neutral grays.
+
+### Tests — Dash strategy-compare table
+
+- `tests/test_dash_strategy_compare.py` — 28 new tests, gated on
+  `pytest.importorskip("dash")`. Coverage includes:
+  - Pure helpers: `_fmt_value` (percent / money / int / None /
+    pass-through), `_approx_equal` (within-tolerance equality),
+    `_pick_baseline` (fallback ordering S0 → S1 → S2 → first
+    column).
+  - Table builder: empty placeholder, single-strategy fallback to
+    the callout, four-strategy table headers / row labels,
+    cell-highlight counts (3 'changed' body cells + 1 legend chip
+    for the synthetic fixture; 2 'optimized' body cells + 1
+    legend chip), and the regression guard that outcome rows
+    don't get diff-highlighted (would paint every NW cell).
+  - Winner-following: the green optimized class follows the
+    runner's `winner_name`, not a hardcoded `S3_optimized`.
+  - Custom strategy names: unknown keys render with the raw key
+    rather than a silent canonical substitution.
+  - End-to-end: a real `run_scenario(mode="four_strategies")` →
+    `serialize_run_result` → `_strategy_compare_table` walk to
+    catch drift between the runner's `_cfg_summary` keys and the
+    parameter rows hard-coded in the table builder.
+  Tests inspect the component tree by serializing through
+  `to_plotly_json` so they don't need a Dash dev server or a
+  browser.
+
 ### Changed — Dash app: switch the dashboard UI to Fira Code (monospace)
 
 **Why it matters:** the dashboard renders a lot of money / percent /

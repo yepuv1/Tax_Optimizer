@@ -113,3 +113,72 @@ h1, h2, h3, h4, h5, h6,
 .upload-box * {
     font-family: var(--tx-mono-stack);
 }
+
+/* ---- Strategy comparison table --------------------------------- */
+/* Highlights cells in the per-knob × per-strategy table whose
+ * values differ from the baseline column. Two intensity levels:
+ *
+ *   `.strategy-cell-changed`   — any non-baseline strategy that
+ *                                turned a knob (e.g. S1 cranking
+ *                                Roth-401(k) % to 100%). Subtle
+ *                                yellow tint so the eye can scan
+ *                                rows for "where did somebody
+ *                                deviate?".
+ *   `.strategy-cell-optimized` — the optimizer (S3) override.
+ *                                Stronger green tint because that's
+ *                                the headline answer to the question
+ *                                "what did the algorithm change?".
+ *
+ * Background colors lifted from Bootstrap's `bg-warning-subtle`
+ * and `bg-success-subtle` palettes so they read consistently
+ * against the rest of the dashboard's neutral grays.
+ */
+.strategy-compare-table {
+    /* Force the same monospace stack the rest of the dashboard uses
+     * so column widths are predictable for digit alignment. */
+    font-family: var(--tx-mono-stack);
+}
+
+.strategy-compare-table th,
+.strategy-compare-table td {
+    /* Tighten row height so the table fits ≥6 strategy rows + 4
+     * outcome rows above the fold on a 1366×768 laptop. */
+    padding: 0.35rem 0.6rem;
+    vertical-align: middle;
+}
+
+.strategy-compare-table .strategy-compare-section {
+    /* Section divider rows (Decision parameters / Outcomes).
+     * Slightly bolder bottom border so the eye registers the split
+     * even when many cells are highlighted above and below. */
+    border-top: 2px solid #e2e8f0;
+    border-bottom: 1px solid #e2e8f0;
+    background-color: #f8fafc;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.72rem !important;
+}
+
+.strategy-cell-changed {
+    background-color: #fff8d6 !important;  /* warning-subtle */
+    border-left: 2px solid #fcd34d;
+    font-weight: 500;
+}
+
+.strategy-cell-optimized {
+    background-color: #d1fadf !important;  /* success-subtle */
+    border-left: 2px solid #34d399;
+    font-weight: 600;
+    color: #065f46;
+}
+
+/* When a `.strategy-cell-changed` / `.strategy-cell-optimized`
+ * class is applied to a span inside the legend (not a `<td>`),
+ * the inline `bg-light`-style padding pill needs a rounded edge
+ * so it visually matches a button-ish tag. */
+span.strategy-cell-changed,
+span.strategy-cell-optimized {
+    border-left: none;
+    border-radius: 0.25rem;
+    display: inline-block;
+}

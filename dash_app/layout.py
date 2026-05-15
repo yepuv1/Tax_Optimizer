@@ -355,9 +355,23 @@ def taxes_tab() -> dbc.Tab:
 
 
 def strategies_tab() -> dbc.Tab:
+    """Strategies-tab layout.
+
+    Two stacked sections:
+
+    1. ``strategies-comparison`` — a per-knob × per-strategy table
+       (or, in single-strategy runs, the optimizer-picks callout).
+       Surfaces *what each strategy changed* relative to the
+       baseline so the user can see at a glance which decision
+       axes the optimizer overrode.
+    2. ``fig-strategy-compare`` — bar chart of the headline outcome
+       metrics (terminal NW, lifetime tax, lifetime IRMAA) so the
+       user can visually correlate parameter overrides above with
+       outcome deltas below.
+    """
     return dbc.Tab(
         [
-            html.Div(id="strategies-callout", className="my-3"),
+            html.Div(id="strategies-comparison", className="my-3"),
             dcc.Graph(id="fig-strategy-compare", config={"displaylogo": False}),
         ],
         label="Strategies", tab_id="tab-strategies",
