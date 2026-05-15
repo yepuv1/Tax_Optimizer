@@ -121,7 +121,60 @@ def _label_text(fld: FormField) -> str:
     return fld.label
 
 
+def _hint_id(path: str) -> str:
+    """Stable DOM id for a field's help-tooltip target.
+
+    Dotted paths (e.g. ``inputs.spouse_a_age_start``) aren't valid in
+    a plain HTML id selector context — Dash itself accepts them, but
+    Bootstrap's tooltip target uses the id as a CSS selector via
+    ``getElementById`` and can stumble on the dot in some browsers.
+    Replacing dots with double underscores keeps the id readable
+    while staying CSS-safe.
+    """
+    return "hint-" + path.replace(".", "__")
+
+
+def _help_components(fld: FormField) -> list[Any]:
+    """Render the ⓘ icon + Bootstrap tooltip for a field's help text.
+
+    Returns an empty list when the field has no ``help`` so callers
+    can splat the result into a label's children unconditionally.
+
+    The native HTML ``title`` attribute is kept on the icon as an
+    accessibility / no-JS fallback — Bootstrap tooltips need the
+    bundled JS to render, and screen readers tend to surface
+    ``title`` more reliably than aria-described-by relationships.
+    """
+    if not fld.help:
+        return []
+    icon_id = _hint_id(fld.path)
+    return [
+        # Non-breaking space so the icon clings to the label text and
+        # never wraps onto its own line on narrow sidebars.
+        html.Span("\u00a0"),
+        html.Span(
+            "ⓘ",
+            id=icon_id,
+            className="form-hint-icon",
+            title=fld.help,
+            **{"aria-label": fld.help},
+        ),
+        # Tooltip placement="left" so the popover never gets clipped
+        # by the right edge of the (relatively narrow) sidebar.
+        dbc.Tooltip(
+            fld.help,
+            target=icon_id,
+            placement="left",
+            delay={"show": 150, "hide": 50},
+            className="form-hint-tooltip",
+        ),
+    ]
+
+
 def _field_row(fld: FormField, value: Any) -> dbc.Row:
+    # Native ``title`` on the label as a fallback (always available,
+    # even before Bootstrap's tooltip JS has booted). The richer
+    # ⓘ icon + ``dbc.Tooltip`` lives inside the label's children.
     label_kwargs: dict[str, Any] = {}
     if fld.help:
         label_kwargs["title"] = fld.help
@@ -129,7 +182,7 @@ def _field_row(fld: FormField, value: Any) -> dbc.Row:
         [
             dbc.Col(
                 html.Label(
-                    _label_text(fld),
+                    [_label_text(fld), *_help_components(fld)],
                     className="text-end small text-muted py-1 d-block w-100",
                     **label_kwargs,
                 ),

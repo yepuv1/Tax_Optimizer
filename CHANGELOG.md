@@ -32,6 +32,78 @@ Categories used:
 
 ## [Unreleased]
 
+### Added — Dash app: per-field help tooltips on every form input
+
+**Why it matters:** the scenario form has 118 fields spanning
+household basics, contribution mechanics, tax-regime knobs, market
+parameters, mortality, asset location, spending profile, IRA /
+mega-backdoor, pension, and health premiums. Many of them use
+domain abbreviations (PIA, FRA, IRMAA, RMD, NRD, MAGI, FICA, CAPE,
+J&S, MFJ, S125) that mean nothing to a first-time user, and the
+labels are short by design (≤ ~30 chars) so they fit the sidebar.
+Without tooltips the only way to learn a field's meaning was to
+read the source.
+
+The form now exposes each field's help text in three layers:
+
+1. A small ⓘ icon next to every label — the discoverable
+   surface that signals "hover for help".
+2. A Bootstrap `dbc.Tooltip` anchored to the icon. Instant-show
+   (150ms delay), styled with a wider 360px max-width and 1.45
+   line-height so two-sentence hints read cleanly.
+3. The native HTML `title=` attribute on both the label and the
+   icon — a screen-reader / no-JS fallback that surfaces the same
+   text via the browser's default tooltip.
+
+- **`dash_app/forms.py` — populated `help=` on all 118
+  `FormField` entries.** Hints are concise (≤ 360 chars, single
+  sentence preferred) and explain *what the field is*, *what unit
+  it's in*, and *the effect of changing it*. Domain abbreviations
+  are spelled out at first use ("Primary Insurance Amount at Full
+  Retirement Age", "Required Minimum Distribution", "Modified
+  Adjusted Gross Income", etc.). Decimal-percent fields explicitly
+  call out the convention ("0.10 = 10%") because the form already
+  appends "(decimal, e.g. 0.07)" to percent labels.
+- **`dash_app/layout.py` — new `_help_components(fld)` helper**
+  returns a 3-element list (NBSP separator, ⓘ span, `dbc.Tooltip`)
+  to splat into the label's children, or `[]` if the field has
+  no help. The icon's id is built by `_hint_id(path)` which
+  replaces dots with double underscores so the resulting CSS
+  selector (`#hint-config__market__equity_mu`) is universally
+  valid (raw dotted ids trip Bootstrap's tooltip on some
+  browsers). `_field_row` keeps the existing `title=help`
+  attribute on the label as a no-JS fallback.
+- **`dash_app/assets/fira-code.css` — new `.form-hint-icon` and
+  `.form-hint-tooltip` rules.** Icon is muted gray with a
+  `cursor: help` affordance and a subtle blue hover state to
+  signal interactivity. Tooltip max-width bumped from
+  Bootstrap's default 200px to 360px and line-height to 1.45 so
+  paragraph-shaped help reads cleanly. Tooltip text drops Fira
+  Code in favor of the system sans-serif stack — body copy
+  reads materially faster in proportional fonts than monospace,
+  and tooltip text is purely prose (no aligned numbers).
+
+### Tests — Dash form-help coverage
+
+- `tests/test_dash_form_help.py` — 9 new tests, gated on
+  `pytest.importorskip("dash")`. Coverage:
+  - **Schema-level**: every `FormField` in `FIELD_SCHEMA` has a
+    non-empty `help`; no hint exceeds 360 characters (Bootstrap
+    tooltip max-width budget); no hint is a verbatim copy of
+    its label (the most common no-info anti-pattern).
+  - **Rendering**: `_help_components` produces exactly one icon
+    + one tooltip pair with matching ids; the icon's
+    `title=help` fallback is set; `_hint_id` strips dots from
+    dotted paths.
+  - **Negative case**: a hand-rolled field with `help=None` does
+    NOT render an icon — defensive guard against shipping
+    orphaned tooltip targets that throw a console error.
+  - **Label fallback**: the underlying `<label>` element exposes
+    `title=help` for the no-JS / screen-reader path.
+  - **Smoke**: `_field_row` doesn't blow up on any of the 118
+    schema entries (catches future kwarg drift on `dbc.Tooltip`
+    / `html.Span`); every hint id is globally unique.
+
 ### Added — Dash app: Strategies tab shows optimizer overrides
 
 **Why it matters:** the Strategies tab previously displayed the
