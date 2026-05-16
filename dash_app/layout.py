@@ -568,7 +568,7 @@ def yearly_tab() -> dbc.Tab:
             ),
             dash_table.DataTable(
                 id="yearly-table",
-                page_size=20,
+                page_size=100,
                 style_table={"overflowX": "auto"},
                 style_cell={"fontSize": "0.85rem", "padding": "4px"},
                 style_header={"backgroundColor": "#f1f5f9", "fontWeight": "600"},
