@@ -141,10 +141,16 @@ def _help_components(fld: FormField) -> list[Any]:
     Returns an empty list when the field has no ``help`` so callers
     can splat the result into a label's children unconditionally.
 
-    The native HTML ``title`` attribute is kept on the icon as an
-    accessibility / no-JS fallback — Bootstrap tooltips need the
-    bundled JS to render, and screen readers tend to surface
-    ``title`` more reliably than aria-described-by relationships.
+    The single tooltip surface is the ``dbc.Tooltip`` (delayed
+    Bootstrap popover with our richer styling). We deliberately do
+    NOT set a native ``title`` attribute on the icon — the browser
+    would render its own immediate native tooltip in addition to
+    the Bootstrap one, producing a double-popover effect on hover.
+
+    Screen-reader / accessibility support is preserved via the
+    ⓘ icon's ``aria-label`` attribute, which assistive technology
+    prefers over ``title`` anyway (``title`` is famously
+    inconsistently surfaced by AT software).
     """
     if not fld.help:
         return []
@@ -157,7 +163,6 @@ def _help_components(fld: FormField) -> list[Any]:
             "ⓘ",
             id=icon_id,
             className="form-hint-icon",
-            title=fld.help,
             **{"aria-label": fld.help},
         ),
         # Tooltip placement="left" so the popover never gets clipped
@@ -173,19 +178,16 @@ def _help_components(fld: FormField) -> list[Any]:
 
 
 def _field_row(fld: FormField, value: Any) -> dbc.Row:
-    # Native ``title`` on the label as a fallback (always available,
-    # even before Bootstrap's tooltip JS has booted). The richer
-    # ⓘ icon + ``dbc.Tooltip`` lives inside the label's children.
-    label_kwargs: dict[str, Any] = {}
-    if fld.help:
-        label_kwargs["title"] = fld.help
+    # Help is delivered exclusively via the ⓘ icon's ``dbc.Tooltip``
+    # inside the label's children — no native ``title`` on the
+    # label itself, otherwise the browser fires an immediate
+    # tooltip in addition to the delayed Bootstrap one.
     return dbc.Row(
         [
             dbc.Col(
                 html.Label(
                     [_label_text(fld), *_help_components(fld)],
                     className="text-end small text-muted py-1 d-block w-100",
-                    **label_kwargs,
                 ),
                 width=7,
             ),

@@ -32,6 +32,78 @@ Categories used:
 
 ## [Unreleased]
 
+### Fixed — Dash app: duplicate hint tooltips on hover (Overview tiles + form fields)
+
+**Why it matters:** every hint surface in the dashboard
+(Overview KPI tiles + scenario-form ⓘ icons) was wired with
+*two* tooltip layers — a native HTML ``title`` attribute (which
+the browser renders immediately on hover) AND a
+``dbc.Tooltip`` (the styled Bootstrap popover, with a 150 ms
+show delay). The result on hover was a flicker: the browser's
+native tooltip flashed first, then the Bootstrap one rendered
+on top. The user's perception was "two duplicate tooltips, one
+quick and one delayed".
+
+**Fix:** drop the native ``title`` attribute on every
+hint-bearing element. The single visible tooltip is the
+``dbc.Tooltip`` popover. Accessibility / screen-reader support
+is retained via the ⓘ icon's ``aria-label`` attribute, which
+assistive technology prefers to ``title`` anyway. Touched both
+the form-panel pattern (`dash_app/layout.py:_help_components`,
+`_field_row`) and the Overview-tile pattern
+(`dash_app/app.py:_build_kpi_tile`).
+
+**Tests:** `test_dash_form_help.py` and
+`test_dash_overview_growth.py` updated — the two tests that
+previously *required* a native ``title`` attribute now assert
+the opposite (no ``title`` anywhere in the rendered tree),
+pinning the contract so a future change can't reintroduce the
+duplicate-tooltip bug.
+
+### Added — Dash app: Overview-tab KPI tiles get tooltip hints
+
+**Why it matters:** the Overview tab has 11+ tiles (5–7
+Outcomes + 6 Growth) packed with terms-of-art labels — "Peak
+marginal rate", "CVaR (10%)", "Effective CAGR", "Accumulation
+CAGR" — that don't necessarily mean the same thing to every
+viewer. A clinician-style label without explanation invites
+misinterpretation (e.g. reading Effective CAGR as a pure
+investment return when it actually bundles contributions +
+withdrawals + tax drag).
+
+This change attaches help text to every Overview tile via the
+same ⓘ-icon + Bootstrap-tooltip pattern already used by the
+scenario-form fields:
+
+- ``figures.overview_kpis`` now emits 3-tuple tiles
+  ``(label, value, hint)``. Hints are sourced from a single
+  ``_OVERVIEW_TILE_HINTS`` dict (one source of truth, makes
+  adding a tile a single-place edit).
+- ``_build_kpi_tiles`` (in ``dash_app/app.py``) renders each
+  tile with a small ⓘ icon next to the label, a ``dbc.Tooltip``
+  for the rich popover, and a native ``title`` attribute on an
+  inner wrapper as the no-JS / screen-reader fallback. The
+  cursor on the tile body changes to ``cursor: help`` so the
+  affordance is obvious.
+- Hints surface the bequest-tax-aware Terminal-NW formula, the
+  Lifetime-NPV discount rate, the IRMAA tier mechanics, the
+  Effective-CAGR caveat (NOT a pure investment return), and the
+  Fisher-equation rule of thumb on Real CAGR.
+- New ``.kpi-hint-icon`` and ``.kpi-hint-tooltip`` CSS rules in
+  ``dash_app/assets/fira-code.css`` mirror the form-input
+  styling so the dashboard's help vocabulary stays consistent
+  across all tabs.
+- Back-compat: ``_build_kpi_tiles`` still accepts the legacy
+  2-tuple ``(label, value)`` shape — those tiles render without
+  a tooltip surface.
+
+**Tests:** ``test_dash_overview_growth.py`` extended with a
+new ``TestOverviewTileHints`` class pinning that every tile in
+both sections (and the MC-only tiles) carries a non-trivial
+hint (≥ 40 chars), plus two new ``TestBuildKpiTiles`` cases
+verifying the rendered ``dbc.Tooltip`` + native-``title``
+fallback structure.
+
 ### Added — Dash app: Overview tab — growth-rate metrics + multi-strategy growth chart
 
 **Why it matters:** the Overview tab used to show one bottom-line

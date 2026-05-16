@@ -1118,12 +1118,129 @@ def mc_fan_chart(mc_payload: dict[str, Any] | None) -> go.Figure:
 # ---------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------
+# Overview-tab KPI tile help text
+# ---------------------------------------------------------------------
+#
+# Every tile gets a one-or-two-sentence explanation that surfaces
+# via the same ⓘ icon + Bootstrap tooltip pattern used by the
+# scenario form fields (see `dash_app/layout.py:_help_components`).
+# Co-locating the hint dictionary with the tile builder keeps
+# label / value / hint in lockstep — adding a new tile requires
+# adding the hint here, not in a separate i18n file.
+_OVERVIEW_TILE_HINTS: dict[str, str] = {
+    # ---- Outcomes section ----------------------------------------
+    "Terminal after-tax NW": (
+        "Bequest-tax-aware net worth at the end of the plan "
+        "(spouse_a_age == horizon_age, default 90). Pretax + HSA "
+        "are discounted by the heir's marginal rate "
+        "(cfg.heir_marginal_rate, default 22%); Roth is tax-free; "
+        "taxable is at face value (heirs receive a step-up in "
+        "basis at death). "
+        "Formula: pretax × (1 − rate) + roth + taxable + hsa × (1 − rate)."
+    ),
+    "Lifetime federal tax (NPV)": (
+        "Net present value of every year's federal income tax "
+        "across the horizon, discounted at 2.5%/yr. Lower is better — "
+        "this is the tile the optimizer's terminal-NW objective "
+        "implicitly drives down."
+    ),
+    "Lifetime IRMAA (NPV)": (
+        "NPV of Medicare IRMAA premium surcharges across the "
+        "horizon (discount 2.5%/yr). Surcharges kick in for "
+        "Medicare enrollees whose AGI from two years prior crosses "
+        "an IRMAA tier — large Roth conversions can push you across "
+        "a tier and inflate this number."
+    ),
+    "Peak marginal rate": (
+        "Highest year-end marginal federal bracket the plan ever "
+        "touches. Mirrors the bracket-fill ceiling — e.g. an S2 "
+        "(fill-to-22%) plan should peak at 22%, while an "
+        "unbounded plan can peak much higher in late RMD years."
+    ),
+    "Years with IRMAA": (
+        "Number of years during which an IRMAA surcharge is paid "
+        "by either spouse. Uses the standard 2-year AGI lookback. "
+        "Zero is ideal; > 0 means you're crossing a tier in some year."
+    ),
+    "Probability of success": (
+        "Fraction of Monte Carlo paths that finish without ever "
+        "running out of liquid net worth. \"Success\" is the "
+        "complement of \"ruin\" — see `MonteCarloResult.prob_success`."
+    ),
+    "CVaR (10%)": (
+        "Conditional value-at-risk at the 10% tail: the average "
+        "terminal NW across the worst 10% of Monte Carlo paths. "
+        "Tells you \"how bad is bad?\" — a P10 percentile gives one "
+        "point, CVaR averages everything below it."
+    ),
+    # ---- Growth section ------------------------------------------
+    "Starting after-tax NW": (
+        "Bequest-tax-aware starting net worth — same lens as the "
+        "Terminal-NW tile, applied to today's StartingBalances. "
+        "Using the same lens on both ends matters: otherwise the "
+        "growth ratio bundles a methodology change in with the "
+        "actual growth."
+    ),
+    "Total growth": (
+        "Terminal NW divided by Starting NW. A multiplier (e.g. "
+        "3.15× = ended with 3.15 times the starting after-tax NW). "
+        "Returns \"-\" if Starting NW is zero or negative."
+    ),
+    "Effective CAGR": (
+        "Compound annual growth rate of after-tax NW across the "
+        "full horizon. Caveat: this is NOT a pure investment "
+        "return — it bundles market returns + contributions + "
+        "withdrawals + tax drag into one effective compounding "
+        "rate. The accumulation-vs-decumulation split below "
+        "separates \"growth\" from \"drawdown\"."
+    ),
+    "Real CAGR": (
+        "Effective CAGR adjusted for inflation. Terminal NW is "
+        "first discounted by (1 + cfg.inflation)^years (today's "
+        "dollars), then compared to the starting NW. Rule of "
+        "thumb for small rates: real ≈ nominal − inflation "
+        "(Fisher equation)."
+    ),
+    "Accumulation CAGR": (
+        "CAGR for the years before retirement "
+        "(spouse_a_age < spouse_a_retire_age). Usually positive — "
+        "you're contributing AND markets are growing the balance."
+    ),
+    "Decumulation CAGR": (
+        "CAGR for the years from retirement onward "
+        "(spouse_a_age >= spouse_a_retire_age). Often negative — "
+        "the whole point of the decumulation phase is to draw "
+        "down liquid NW. A negative number here is healthy; a "
+        "deeply-negative number means you're drawing down faster "
+        "than markets can keep up."
+    ),
+}
+
+
+def _hint_for(label: str) -> str:
+    """Look up the tooltip for a tile label.
+
+    Returns ``""`` (empty string, NOT ``None``) for an unknown
+    label so the renderer can pass the value to the DOM unchanged
+    without dealing with optionals. New tiles must add an entry
+    to ``_OVERVIEW_TILE_HINTS``.
+    """
+    return _OVERVIEW_TILE_HINTS.get(label, "")
+
+
 def overview_kpis(
     summary: dict[str, Any], mc_payload: dict[str, Any] | None
-) -> list[tuple[str, list[tuple[str, str]]]]:
+) -> list[tuple[str, list[tuple[str, str, str]]]]:
     """Sectioned KPI data for the Overview tab.
 
-    Returns ``[(section_label, [(tile_label, tile_value), ...]), ...]``.
+    Returns ``[(section_label, [(tile_label, tile_value, tile_hint), ...]), ...]``.
+
+    Each tile entry is a 3-tuple ``(label, value, hint)`` — the
+    hint is the help text that surfaces via the ⓘ-icon tooltip
+    next to the tile's label. Hints come from
+    ``_OVERVIEW_TILE_HINTS`` so adding a tile requires touching
+    one place.
 
     **Outcomes** — bottom-line plan results: terminal after-tax NW,
     lifetime tax / IRMAA NPV, peak marginal, MC stats. The
@@ -1144,56 +1261,62 @@ def overview_kpis(
     investment return. Decumulation CAGR is often negative (the
     plan is meant to draw down).
     """
-    outcomes: list[tuple[str, str]] = []
+    def _tile(label: str, value: str) -> tuple[str, str, str]:
+        return (label, value, _hint_for(label))
+
+    outcomes: list[tuple[str, str, str]] = []
     outcomes.append(
-        ("Terminal after-tax NW",
-         _fmt_dollars(summary.get("terminal_after_tax")))
+        _tile("Terminal after-tax NW",
+              _fmt_dollars(summary.get("terminal_after_tax")))
     )
     outcomes.append(
-        ("Lifetime federal tax (NPV)",
-         _fmt_dollars(summary.get("lifetime_tax_npv")))
+        _tile("Lifetime federal tax (NPV)",
+              _fmt_dollars(summary.get("lifetime_tax_npv")))
     )
     outcomes.append(
-        ("Lifetime IRMAA (NPV)",
-         _fmt_dollars(summary.get("lifetime_irmaa_npv")))
+        _tile("Lifetime IRMAA (NPV)",
+              _fmt_dollars(summary.get("lifetime_irmaa_npv")))
     )
     pm = summary.get("peak_marginal")
     outcomes.append(
-        ("Peak marginal rate",
-         f"{pm * 100:.0f}%" if pm is not None else "-")
+        _tile("Peak marginal rate",
+              f"{pm * 100:.0f}%" if pm is not None else "-")
     )
     yi = summary.get("years_irmaa")
     outcomes.append(
-        ("Years with IRMAA", f"{int(yi)}" if yi is not None else "-")
+        _tile("Years with IRMAA", f"{int(yi)}" if yi is not None else "-")
     )
     if mc_payload:
         outcomes.append(
-            ("Probability of success",
-             f"{mc_payload['prob_success']:.0%}")
+            _tile("Probability of success",
+                  f"{mc_payload['prob_success']:.0%}")
         )
         outcomes.append(
-            ("CVaR (10%)", _fmt_dollars(mc_payload["cvar_terminal"]))
+            _tile("CVaR (10%)", _fmt_dollars(mc_payload["cvar_terminal"]))
         )
 
-    growth: list[tuple[str, str]] = []
+    growth: list[tuple[str, str, str]] = []
     growth.append(
-        ("Starting after-tax NW",
-         _fmt_dollars(summary.get("starting_after_tax")))
+        _tile("Starting after-tax NW",
+              _fmt_dollars(summary.get("starting_after_tax")))
     )
     growth.append(
-        ("Total growth", _fmt_multiplier(summary.get("total_growth_mult")))
+        _tile("Total growth",
+              _fmt_multiplier(summary.get("total_growth_mult")))
     )
     growth.append(
-        ("Effective CAGR", _fmt_cagr(summary.get("effective_cagr")))
+        _tile("Effective CAGR", _fmt_cagr(summary.get("effective_cagr")))
     )
     growth.append(
-        ("Real CAGR", _fmt_cagr(summary.get("real_cagr")))
+        _tile("Real CAGR", _fmt_cagr(summary.get("real_cagr")))
     )
     growth.append(
-        ("Accumulation CAGR", _fmt_cagr(summary.get("accumulation_cagr")))
+        _tile("Accumulation CAGR",
+              _fmt_cagr(summary.get("accumulation_cagr")))
     )
     growth.append(
-        ("Decumulation CAGR", _fmt_cagr(summary.get("decumulation_cagr")))
+        _tile("Decumulation CAGR",
+              _fmt_cagr(summary.get("decumulation_cagr")))
     )
 
     return [("Outcomes", outcomes), ("Growth", growth)]

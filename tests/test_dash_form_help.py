@@ -1,24 +1,27 @@
 """Tests for per-field help hints in the scenario form.
 
 Every :class:`dash_app.forms.FormField` declares an optional
-``help`` string. The dashboard renders it in three layers:
+``help`` string. The dashboard renders it via two surfaces:
 
-1. The native HTML ``title`` attribute on the field's ``<label>`` —
-   the no-JS / screen-reader fallback.
-2. A small ⓘ icon (``span.form-hint-icon``) inserted into the
-   label children. The icon is the discoverable surface — the
-   `title` attribute alone is invisible until the user happens
-   to hover on the right pixel.
-3. A :class:`dash_bootstrap_components.Tooltip` whose ``target``
-   matches the icon's ``id``. Provides the styled, instant-show
-   popover with the same help text.
+1. A small ⓘ icon (``span.form-hint-icon``) inserted into the
+   label children. The icon is the discoverable affordance — its
+   ``aria-label`` attribute carries the help text for assistive
+   technology (we deliberately skip the native HTML ``title``
+   attribute, which would race the Bootstrap popover and produce
+   a duplicate / immediate tooltip on hover).
+2. A :class:`dash_bootstrap_components.Tooltip` whose ``target``
+   matches the icon's ``id``. Provides the styled, delayed
+   popover with the help text — the single visible tooltip
+   surface.
 
-These tests pin both layers without spinning up a Dash dev server:
+These tests pin the contract without spinning up a Dash dev
+server:
 
 * **Schema completeness** — every field in ``FIELD_SCHEMA`` has a
   non-empty ``help``. New fields can't be merged without a hint.
 * **Rendering** — exercising ``_field_row`` / ``_help_components``
-  directly produces the icon + tooltip pair with matching IDs.
+  directly produces the icon + tooltip pair with matching IDs and
+  no native ``title`` attributes anywhere in the tree.
 * **Negative case** — a field built without ``help`` does NOT
   render the icon (defensive guard so we don't ship broken
   tooltip targets if a future field is added without a hint).
@@ -155,8 +158,15 @@ class TestHelpComponentRendering:
         tooltip_target = tooltips[0]["props"]["target"]
         assert icon_id == tooltip_target == _hint_id(fld.path)
 
-        # Native title-attribute fallback is also wired on the icon.
-        assert icons[0]["props"]["title"] == fld.help
+        # The icon must NOT carry a native ``title`` attribute —
+        # that would race the Bootstrap popover and produce a
+        # duplicate immediate-tooltip on hover. Accessibility is
+        # provided via ``aria-label`` instead.
+        assert "title" not in icons[0]["props"], (
+            "Icon must not set a native `title` attribute "
+            "(would produce a duplicate browser tooltip)"
+        )
+        assert icons[0]["props"]["aria-label"] == fld.help
         # Tooltip carries the same help text as its first child.
         assert tooltips[0]["props"]["children"] == fld.help
 
@@ -191,29 +201,26 @@ class TestHelpComponentRendering:
         )
         assert icons == []
 
-    def test_label_native_title_falls_back_to_help(self) -> None:
-        """``<label title="...">`` is the universal fallback that
-        works without JS / Bootstrap. Verify the label's `title`
-        attribute carries the same help string as the tooltip.
+    def test_field_row_does_not_set_native_title(self) -> None:
+        """The rendered field row must not carry a native HTML
+        ``title`` attribute on any node — that was the source of
+        the duplicate-tooltip bug (browser fires native tooltip
+        immediately, then the delayed ``dbc.Tooltip`` fires too).
+        Help is delivered exclusively via the icon's
+        ``dbc.Tooltip`` + ``aria-label``.
         """
         fld = next(
             f for f in FIELD_SCHEMA if f.path == "config.start_year"
         )
         tree = _to_json(_field_row(fld, 2024))
-        labels = _find(tree, lambda n: n.get("type") == "Label")
-        # Bootstrap-themed Label component is named differently:
-        # in Dash core it's `Label`. Use the html alias if needed.
-        if not labels:
-            labels = _find(tree, lambda n: "title" in n.get("props", {}))
-        # At least one node carries the title attribute with the
-        # field's help text.
         with_title = [
-            n for n in labels
-            if n.get("props", {}).get("title") == fld.help
+            n for n in _walk(tree)
+            if n.get("props", {}).get("title")
         ]
-        assert with_title, (
-            "expected the label (or some wrapping node) to expose "
-            "`title=help` as a no-JS fallback"
+        assert not with_title, (
+            "no node in the field row may set a native `title` "
+            f"attribute, but found {len(with_title)}: "
+            f"{[n.get('type') for n in with_title]}"
         )
 
 

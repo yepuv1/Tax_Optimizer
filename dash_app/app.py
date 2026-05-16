@@ -85,16 +85,95 @@ from .state import (
 )
 
 
+def _kpi_tile_id(section_idx: int, tile_idx: int) -> str:
+    """Stable DOM id for a KPI tile's tooltip target.
+
+    Bootstrap's `dbc.Tooltip` needs a target id that maps to a
+    real element via `getElementById`. Section + tile index keeps
+    the id deterministic across renders (the tiles render in a
+    canonical order).
+    """
+    return f"kpi-hint-{section_idx}-{tile_idx}"
+
+
+def _build_kpi_tile(
+    label: str, value: str, hint: str, dom_id: str
+) -> Any:
+    """Render one KPI tile as a Bootstrap card.
+
+    When ``hint`` is non-empty we attach a single tooltip surface:
+    a `dbc.Tooltip` targeting the outer card. Hovering anywhere on
+    the tile (body or the small ⓘ affordance next to the label)
+    triggers the same Bootstrap tooltip — just one popover, no
+    duplicate.
+
+    Earlier we also set a native ``title`` attribute on the icon
+    and on an inner wrapper as a no-JS fallback. That produced
+    *two* tooltips on hover (the browser's native one fires
+    immediately; ``dbc.Tooltip`` fires after its 150 ms delay).
+    The duplicate was confusing, so the native ``title`` is
+    dropped here. Screen-reader / accessibility support is
+    preserved via the ⓘ icon's ``aria-label`` attribute, which
+    AT software prefers over ``title`` anyway.
+    """
+    label_children: list[Any] = [label]
+    body_extras: list[Any] = []
+    card_id = dom_id if hint else None
+    if hint:
+        label_children.extend(
+            [
+                html.Span("\u00a0"),
+                html.Span(
+                    "\u24d8",  # ⓘ
+                    className="kpi-hint-icon",
+                    **{"aria-label": hint},
+                ),
+            ]
+        )
+        body_extras.append(
+            dbc.Tooltip(
+                hint,
+                target=dom_id,
+                placement="top",
+                delay={"show": 150, "hide": 50},
+                className="kpi-hint-tooltip",
+            )
+        )
+
+    inner = html.Div(
+        [
+            html.Div(label_children, className="text-muted small"),
+            html.Div(value, className="fs-5 fw-semibold"),
+        ]
+    )
+
+    card_kwargs: dict[str, Any] = {
+        "className": "kpi-tile flex-grow-1",
+        "style": {"minWidth": "180px"},
+    }
+    if card_id is not None:
+        card_kwargs["id"] = card_id
+
+    return dbc.Card(dbc.CardBody([inner, *body_extras]), **card_kwargs)
+
+
 def _build_kpi_tiles(
-    sections: list[tuple[str, list[tuple[str, str]]]] | list[tuple[str, str]]
+    sections: (
+        list[tuple[str, list[tuple[str, str, str]]]]
+        | list[tuple[str, list[tuple[str, str]]]]
+        | list[tuple[str, str]]
+    )
 ) -> list[Any]:
     """Render the Overview KPI sections.
 
     Accepts the sectioned structure
-    ``[(section_label, [(tile_label, tile_value), ...]), ...]``
-    returned by `figures.overview_kpis`. For back-compat with any
-    legacy caller that still passes a flat ``[(label, value), ...]``
-    list, that shape is rendered as a single unlabeled section.
+    ``[(section_label, [(tile_label, tile_value, tile_hint), ...]), ...]``
+    returned by `figures.overview_kpis`. Tile tuples are accepted
+    in either the new 3-tuple form (`label, value, hint`) or the
+    legacy 2-tuple form (`label, value`); a 2-tuple tile renders
+    without a tooltip. For back-compat with any caller that still
+    passes a flat ``[(label, value), ...]`` list, that shape is
+    rendered as a single unlabeled section.
     """
     if not sections:
         return []
@@ -110,7 +189,7 @@ def _build_kpi_tiles(
         sections = [("", sections)]  # type: ignore[list-item]
 
     children: list[Any] = []
-    for idx, (section_label, tiles) in enumerate(sections):
+    for sec_idx, (section_label, tiles) in enumerate(sections):
         if section_label:
             children.append(
                 html.Div(
@@ -118,29 +197,26 @@ def _build_kpi_tiles(
                     className=(
                         "text-uppercase small fw-semibold text-muted "
                         "mt-3 mb-1 kpi-section-label"
-                        if idx > 0
+                        if sec_idx > 0
                         else "text-uppercase small fw-semibold text-muted "
                              "mb-1 kpi-section-label"
                     ),
                 )
             )
-        children.append(
-            html.Div(
-                [
-                    dbc.Card(
-                        dbc.CardBody(
-                            [
-                                html.Div(label, className="text-muted small"),
-                                html.Div(value, className="fs-5 fw-semibold"),
-                            ]
-                        ),
-                        className="kpi-tile flex-grow-1",
-                        style={"minWidth": "180px"},
-                    )
-                    for label, value in tiles
-                ],
-                className="d-flex flex-wrap gap-2",
+        rendered_tiles: list[Any] = []
+        for tile_idx, tile in enumerate(tiles):
+            if len(tile) == 3:
+                label, value, hint = tile  # type: ignore[misc]
+            else:
+                label, value = tile  # type: ignore[misc]
+                hint = ""
+            rendered_tiles.append(
+                _build_kpi_tile(
+                    label, value, hint, _kpi_tile_id(sec_idx, tile_idx)
+                )
             )
+        children.append(
+            html.Div(rendered_tiles, className="d-flex flex-wrap gap-2")
         )
     return children
 
