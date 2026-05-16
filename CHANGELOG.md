@@ -32,6 +32,76 @@ Categories used:
 
 ## [Unreleased]
 
+### Added — Single-filer households (`inputs.household_kind`)
+
+**Why it matters:** the simulator was previously
+married-filing-jointly only — every scenario had to model a
+two-spouse household, even for users who file Single. Adding a
+single-filer flag lets a never-married / divorced filer plan in
+the right tax tables (Single brackets, Single std deduction),
+the right FICA thresholds ($200k Additional-Medicare vs $250k
+MFJ), the right IRMAA tiers, and the right HSA self-only limit
+without faking it via mortality.
+
+**What changed:**
+
+- New ``Inputs.household_kind`` field with values ``"mfj"``
+  (default, back-compat) and ``"single"``. Validated in
+  ``__post_init__`` so a typo raises immediately rather than
+  silently falling through to the wrong branch.
+- ``simulator.simulate`` overrides ``alive_b = False`` and
+  ``filing_status = "single"`` from year 0 when
+  ``household_kind == "single"``. This bypasses the IRS
+  year-of-death MFJ exception (which would otherwise apply if
+  a user faked single via ``year_of_death_b = 0``) and routes
+  every downstream tax / FICA / IRMAA / SS-provisional call
+  through the existing Single tables in ``TaxRegime``.
+- ``simulator.simulate`` Social Security branch now
+  distinguishes never-married single filers from widows: the
+  former gets only their own benefit (no fictitious survivor
+  benefit on a non-existent spouse's record); the latter
+  retains the existing widow survivor logic.
+- ``hsa_family_cap`` accepts a new ``b_alive`` keyword (default
+  ``True`` for back-compat). Single households drop to the
+  IRS self-only HSA limit instead of the family limit.
+- New scenario file ``scenarios/example_single.json`` showing
+  a complete single-filer household.
+- ``scenarios/template.json`` now includes the
+  ``household_kind`` field at its default value.
+
+**Dash app:**
+
+- New "Filing status" selector at the top of the simple-tier
+  Ages & retirement section (``inputs.household_kind``).
+- New ``FormField.couple_only`` flag tagging every spouse-B
+  field (ages, income, 401(k), starting balances, SS, IRA,
+  mega-backdoor, mortality, FRA, health premiums).
+- New callback ``_toggle_couple_only_inputs`` disables every
+  ``couple_only`` input when ``household_kind == "single"``
+  (and re-enables them on flip back to "mfj"). Values stay in
+  the form so toggling the discriminator doesn't blow away
+  user-entered data.
+- New CSS (``fira-code.css``) gives disabled inputs / dropdowns
+  / switches a faded look so users can see at a glance which
+  fields the simulator will ignore.
+
+**Tests:**
+
+- ``tests/test_simulator_single_household.py`` — 16 tests
+  pinning filing status, ``alive_b``, spouse-B input
+  suppression, single tax > MFJ tax at the same income, no
+  widow MFJ exception, the SS no-survivor-benefit guarantee,
+  the HSA self-only cap, and the no-spurious-rollover
+  invariant.
+- ``tests/test_dash_household_kind.py`` — 14 tests pinning
+  the form schema (selector exists, in simple tier, two
+  options, has help, isn't itself ``couple_only``), the
+  ``couple_only`` flag coverage (every spouse-B field tagged,
+  no household-level field tagged), the toggle callback
+  semantics (mfj enables everything, single disables exactly
+  the couple-only inputs), and the live ``make_app()``
+  callback registration.
+
 ### Changed — Dash app: every Plotly chart now renders in Fira Code
 
 **Why it matters:** the dashboard chrome (form labels, KPI

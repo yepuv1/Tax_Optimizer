@@ -64,7 +64,7 @@ from tax_optimizer.scenario import (
 )
 
 from . import figures
-from .forms import get_field
+from .forms import FIELD_SCHEMA, get_field
 from .layout import build_layout
 from .report_builder import (
     build_html_payload,
@@ -581,6 +581,32 @@ def make_app() -> dash.Dash:
             else:
                 current[path] = v
         return current
+
+    # ---- Single-filer toggle ---------------------------------------
+    #
+    # When ``inputs.household_kind == "single"`` every Spouse-B field
+    # in the schema is irrelevant: the simulator forces ``alive_b =
+    # False`` and ``filing_status = "single"``, ignoring spouse-B
+    # salary, contributions, IRA / Roth elections, SS, etc. We mirror
+    # that on the form by disabling every couple-only input so users
+    # don't waste effort tweaking values that won't move the numbers.
+    # The values themselves stay in the scenario JSON so flipping
+    # back to "mfj" restores them without re-entry.
+
+    @app.callback(
+        Output({"type": "form-input", "path": ALL}, "disabled"),
+        Input({"type": "form-input", "path": "inputs.household_kind"}, "value"),
+        State({"type": "form-input", "path": ALL}, "id"),
+    )
+    def _toggle_couple_only_inputs(household_kind, ids):
+        is_single = household_kind == "single"
+        couple_only_paths = {
+            f.path for f in FIELD_SCHEMA if f.couple_only
+        }
+        return [
+            (is_single and ident["path"] in couple_only_paths)
+            for ident in ids
+        ]
 
     # ---- Scenario load (upload + quick-load) -----------------------
 

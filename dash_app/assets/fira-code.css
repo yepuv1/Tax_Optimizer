@@ -365,3 +365,32 @@ span.strategy-cell-optimized {
      * readable. */
     margin-bottom: 0.15rem;
 }
+
+/* ---- Single-filer disabled inputs -------------------------------- */
+/* When ``inputs.household_kind == "single"`` the
+ * `_toggle_couple_only_inputs` callback in `dash_app/app.py` sets
+ * `disabled=True` on every couple-only `dcc.Input` / `dcc.Dropdown`
+ * / `dbc.Switch`. The browser already greys disabled <input>s, but
+ * Dash's Dropdown ships its own React component whose disabled
+ * styling is subtle — fade it explicitly so users immediately see
+ * which fields the simulator will ignore. The simulator silently
+ * skips spouse-B contributions / SS / RMDs / etc. when single, so
+ * this is purely UX feedback ("we won't read these"). */
+.form-control:disabled,
+.form-control[disabled] {
+    background-color: #f1f5f9;
+    color: #94a3b8;
+    cursor: not-allowed;
+}
+
+.Select--is-disabled,
+.is-disabled {
+    opacity: 0.55;
+}
+
+/* Bootstrap Switch in disabled state — bump opacity so the toggle
+ * track / thumb fades together with the rest of the row. */
+.form-switch input.form-check-input:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}

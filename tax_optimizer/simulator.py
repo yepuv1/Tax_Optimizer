@@ -70,8 +70,13 @@ def simulate(
     # / §408). This is what makes the survivor's RMDs continue on the
     # combined balance instead of the deceased's pretax sitting frozen
     # forever — a real-world correctness bug otherwise.
+    #
+    # For a single-filer household (no spouse B from year 0), seed
+    # `prev_alive_b = False` so the rollover-on-death detector
+    # (`prev_alive_b and not alive_b and alive_a`) doesn't spuriously
+    # fire in year 0 against an empty spouse-B balance.
     prev_alive_a = True
-    prev_alive_b = True
+    prev_alive_b = inputs.household_kind != "single"
 
     market = cfg.resolved_market()
     market.begin_path(n_years, rng)
@@ -128,6 +133,21 @@ def simulate(
         alive_a = cfg.mortality.alive_a(year_offset)
         alive_b = cfg.mortality.alive_b(year_offset)
         filing_status = cfg.mortality.filing_status(year_offset)
+
+        # Single-filer household override. ``inputs.household_kind ==
+        # "single"`` means there is no spouse B from year 0 — not a
+        # widowhood transition. We force ``alive_b = False`` (so every
+        # downstream "if alive_b" branch correctly skips B's salary,
+        # contributions, RMDs, SS, etc.) and ``filing_status =
+        # "single"`` (so we bypass the year-of-death MFJ exception in
+        # `Mortality.filing_status` — a never-married single filer
+        # never gets an MFJ year). Done here once at the top of the
+        # year loop so every downstream tax / FICA / IRMAA / SS code
+        # path automatically uses the Single tables already present in
+        # the regime.
+        if inputs.household_kind == "single":
+            alive_b = False
+            filing_status = "single"
 
         # Spousal IRA rollover on death transition. When a spouse dies
         # the survivor inherits the IRA / 401(k); IRS rules let them
@@ -312,7 +332,12 @@ def simulate(
         # HSA family contribution: capped at IRS family limit + 55+
         # catch-up, only valid while at least one spouse works AND is
         # Medicare-ineligible. Pre-tax: reduces wages_box1 below.
-        hsa_cap = hsa_family_cap(a_age, b_age, either_working=(a_working or b_working))
+        hsa_cap = hsa_family_cap(
+            a_age,
+            b_age,
+            either_working=(a_working or b_working),
+            b_alive=alive_b,
+        )
         hsa_contrib = min(max(0.0, inputs.contrib.hsa_family), hsa_cap)
         state.hsa += hsa_contrib
 
@@ -528,9 +553,18 @@ def simulate(
                 ssn_income += a_annual_at_claim * ss_inflator
             if b_ss_eligible:
                 ssn_income += b_annual_at_claim * ss_inflator
+        elif inputs.household_kind == "single":
+            # Never-married single filer. ``alive_b`` is False from
+            # year 0 because the household has no spouse B at all —
+            # NOT because of widowhood. Skip the survivor branch
+            # entirely: a never-married filer has no deceased
+            # spouse's record to claim a survivor benefit on.
+            if alive_a and a_ss_eligible:
+                ssn_income = a_annual_at_claim * ss_inflator
         else:
-            # One spouse dead. Survivor takes max(own, survivor-of-
-            # deceased) — but each piece is gated by its own age rule:
+            # One spouse dead (true widowhood). Survivor takes
+            # max(own, survivor-of-deceased) — but each piece is
+            # gated by its own age rule:
             #   * own benefit: survivor must have reached own claim_age
             #   * survivor benefit (deceased's record): survivor must
             #     be at least SS_SURVIVOR_MIN_AGE (60).

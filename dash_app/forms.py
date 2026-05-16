@@ -45,6 +45,15 @@ class FormField:
     min: float | None = None
     max: float | None = None
     help: str | None = None
+    # ``couple_only`` flags fields that only apply to a married
+    # household. When ``inputs.household_kind == "single"`` the Dash
+    # callback ``_toggle_couple_only_inputs`` disables every input
+    # whose schema entry has ``couple_only=True`` (and re-enables them
+    # on toggle back to "mfj"). The simulator already silently ignores
+    # spouse-B inputs when single, so this is purely a UX affordance —
+    # the values stay in the scenario JSON so a flip back to "mfj"
+    # restores them without re-entry.
+    couple_only: bool = False
 
     @property
     def component_id(self) -> dict[str, str]:
@@ -57,6 +66,11 @@ class FormField:
 
 
 # --- Choice tables ---------------------------------------------------
+
+_HOUSEHOLD_KINDS: tuple[tuple[str, str], ...] = (
+    ("mfj", "Married filing jointly (two spouses)"),
+    ("single", "Single (one filer)"),
+)
 
 _TAX_REGIMES: tuple[tuple[str, str], ...] = (
     ("tcja", "TCJA (current law, 2018-2025)"),
@@ -114,13 +128,25 @@ def _f(*args: Any, **kwargs: Any) -> FormField:
 
 
 FIELD_SCHEMA: tuple[FormField, ...] = (
-    # --- Household: ages & retirement (Simple) ---
+    # --- Household kind (Simple) ---
+    # First field on purpose: it discriminates which downstream tax
+    # tables / FICA thresholds / IRMAA tiers the simulator uses, and
+    # the Dash callback grays out every couple-only input below when
+    # set to "single".
+    _f("inputs.household_kind", "Filing status", "select",
+       options=_HOUSEHOLD_KINDS,
+       group="Ages & retirement", tier="simple",
+       help="MFJ uses married-filing-jointly tax tables and reads both "
+            "spouses' inputs. Single uses single tables, single FICA "
+            "Additional-Medicare threshold, single IRMAA tiers, and "
+            "ignores every Spouse-B field below."),
     _f("inputs.spouse_a_age_start", "Spouse A current age", "int",
        group="Ages & retirement", tier="simple", min=18, max=100,
        help="Spouse A's age in years at the start of the simulation. "
             "Drives RMD start, Medicare eligibility, and SS claim windows."),
     _f("inputs.spouse_b_age_start", "Spouse B current age", "int",
        group="Ages & retirement", tier="simple", min=18, max=100,
+       couple_only=True,
        help="Spouse B's age in years at the start of the simulation. "
             "Drives RMD start, Medicare eligibility, and SS claim windows."),
     _f("inputs.spouse_a_retire_age", "Spouse A retire age", "int",
@@ -129,6 +155,7 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
             "to current age to model an already-retired spouse."),
     _f("inputs.spouse_b_retire_age", "Spouse B retire age", "int",
        group="Ages & retirement", tier="simple", min=40, max=100,
+       couple_only=True,
        help="Age at which Spouse B stops earning W-2 income. Set equal "
             "to current age to model an already-retired spouse."),
 
@@ -139,6 +166,7 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
             "before any pretax deductions. Inflated by wage growth each year."),
     _f("inputs.income.spouse_b_gross", "Spouse B gross W-2", "number",
        group="Current income", tier="simple", step=1000,
+       couple_only=True,
        help="Annual W-2 gross wages for Spouse B in today's dollars, "
             "before any pretax deductions. Inflated by wage growth each year."),
     _f("inputs.income.spouse_a_bonus", "Spouse A bonus", "number",
@@ -166,6 +194,7 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
             "Decimal: 0.10 = 10%. Capped at the IRS elective-deferral limit."),
     _f("inputs.spouse_b_total_contrib_pct", "Spouse B total 401(k) %",
        "percent", group="401(k) contributions", tier="simple",
+       couple_only=True,
        help="Fraction of Spouse B's gross wages contributed to the 401(k). "
             "Decimal: 0.10 = 10%. Capped at the IRS elective-deferral limit."),
     _f("inputs.spouse_a_roth_401k_pct", "Spouse A Roth-401(k) %",
@@ -174,6 +203,7 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
             "Rest goes to pretax. 0.0 = all pretax, 1.0 = all Roth."),
     _f("inputs.spouse_b_roth_401k_pct", "Spouse B Roth-401(k) %",
        "percent", group="401(k) contributions", tier="simple",
+       couple_only=True,
        help="Fraction of Spouse B's 401(k) contribution routed to Roth-401(k). "
             "Rest goes to pretax. 0.0 = all pretax, 1.0 = all Roth."),
     _f("inputs.spouse_a_employer_match_rate", "Spouse A match rate",
@@ -186,10 +216,12 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
             "0.07 = match applies only to first 7% of salary."),
     _f("inputs.spouse_b_employer_match_rate", "Spouse B match rate",
        "percent", group="401(k) contributions", tier="simple",
+       couple_only=True,
        help="Employer match rate for Spouse B. 1.0 = dollar-for-dollar; "
             "0.5 = 50 cents on the dollar; 0.0 = no match."),
     _f("inputs.spouse_b_employer_match_max_pct", "Spouse B match max %",
        "percent", group="401(k) contributions", tier="simple",
+       couple_only=True,
        help="Employer-match cap on contribution percentage for Spouse B. "
             "0.07 = match applies only to first 7% of salary."),
     _f("inputs.contrib.hsa_family", "HSA family contribution", "number",
@@ -206,6 +238,7 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
     _f("inputs.starting.spouse_b_pretax_401k",
        "Spouse B pretax 401(k)", "number",
        group="Starting balances", tier="simple", step=1000,
+       couple_only=True,
        help="Current pretax 401(k) balance for Spouse B in today's dollars. "
             "Subject to RMDs starting at the RMD start age."),
     _f("inputs.starting.spouse_a_pretax_ira",
@@ -216,6 +249,7 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
     _f("inputs.starting.spouse_b_pretax_ira",
        "Spouse B pretax IRA", "number",
        group="Starting balances", tier="simple", step=1000,
+       couple_only=True,
        help="Current pretax (traditional) IRA balance for Spouse B. Aggregated "
             "with the pretax 401(k) for Roth-conversion and RMD purposes."),
     _f("inputs.starting.spouse_a_roth_ira",
@@ -226,6 +260,7 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
     _f("inputs.starting.spouse_b_roth_ira",
        "Spouse B Roth IRA", "number",
        group="Starting balances", tier="simple", step=1000,
+       couple_only=True,
        help="Current Roth IRA balance for Spouse B. Withdrawals are tax-free "
             "after age 59½ and the 5-year seasoning rule."),
     _f("inputs.starting.hsa", "HSA balance", "number",
@@ -250,6 +285,7 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
             "Age, in today's dollars (read off your SSA statement)."),
     _f("inputs.ss.monthly_spouse_b", "Spouse B PIA at FRA ($/mo)",
        "number", group="Social Security", tier="simple", step=50,
+       couple_only=True,
        help="Spouse B's monthly Primary Insurance Amount at Full Retirement "
             "Age, in today's dollars (read off your SSA statement)."),
     _f("inputs.ss.start_age_a", "Spouse A claim age", "int",
@@ -258,6 +294,7 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
             "70=max delayed-credit boost (32% over FRA)."),
     _f("inputs.ss.start_age_b", "Spouse B claim age", "int",
        group="Social Security", tier="simple", min=62, max=70,
+       couple_only=True,
        help="Age at which Spouse B files for SS. 62=earliest (25-30% reduction); "
             "70=max delayed-credit boost (32% over FRA)."),
 
@@ -465,6 +502,7 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
     _f("config.mortality.year_of_death_b",
        "Year of death - Spouse B", "int",
        group="Mortality", tier="advanced", min=1, max=80,
+       couple_only=True,
        help="Year offset (from start) when Spouse B dies. Triggers MFJ→single "
             "filing transition and spousal account rollover. Set high to disable."),
     _f("config.mortality.pension_survivor_pct",
@@ -590,6 +628,7 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
     _f("inputs.spouse_b_after_tax_401k_pct",
        "Spouse B after-tax 401(k) %", "percent",
        group="IRA & Mega-backdoor", tier="advanced",
+       couple_only=True,
        help="Fraction of Spouse B's gross routed to *after-tax* 401(k) (the "
             "mega-backdoor source). Only if your plan supports it."),
     _f("inputs.spouse_a_mega_backdoor_enabled",
@@ -600,6 +639,7 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
     _f("inputs.spouse_b_mega_backdoor_enabled",
        "Spouse B mega-backdoor enabled", "bool",
        group="IRA & Mega-backdoor", tier="advanced",
+       couple_only=True,
        help="If on, Spouse B's after-tax 401(k) contributions are converted "
             "to Roth in-plan annually (the 'mega-backdoor Roth' move)."),
     _f("inputs.spouse_a_traditional_ira_contrib",
@@ -610,6 +650,7 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
     _f("inputs.spouse_b_traditional_ira_contrib",
        "Spouse B Trad IRA contribution", "number",
        group="IRA & Mega-backdoor", tier="advanced", step=500,
+       couple_only=True,
        help="Annual traditional IRA contribution for Spouse B (today's $). "
             "Subject to deductibility phase-outs based on income."),
     _f("inputs.spouse_a_roth_ira_contrib",
@@ -620,6 +661,7 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
     _f("inputs.spouse_b_roth_ira_contrib",
        "Spouse B direct Roth IRA contribution", "number",
        group="IRA & Mega-backdoor", tier="advanced", step=500,
+       couple_only=True,
        help="Annual *direct* Roth IRA contribution for Spouse B. Phased out "
             "above MAGI thresholds; use the backdoor knob if over the cap."),
     _f("inputs.spouse_a_backdoor_roth",
@@ -630,6 +672,7 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
     _f("inputs.spouse_b_backdoor_roth",
        "Spouse B backdoor Roth", "bool",
        group="IRA & Mega-backdoor", tier="advanced",
+       couple_only=True,
        help="If on, contribute to a non-deductible IRA and convert to Roth "
             "when MAGI is too high for direct Roth contributions."),
 
@@ -640,6 +683,7 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
             "between 66 and 67 for earlier birth years."),
     _f("inputs.ss.fra_b", "Spouse B FRA", "int",
        group="Social Security (advanced)", tier="advanced", min=62, max=70,
+       couple_only=True,
        help="Spouse B's Full Retirement Age. 67 for those born 1960+; "
             "between 66 and 67 for earlier birth years."),
 
@@ -683,16 +727,19 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
     _f("inputs.health_premiums.spouse_b_medical",
        "Spouse B medical premium", "number",
        group="Health premiums", tier="advanced", step=100,
+       couple_only=True,
        help="Annual *post-tax* medical premium portion for Spouse B (today's $). "
             "Pretax/Section 125 premiums should be excluded here."),
     _f("inputs.health_premiums.spouse_b_dental",
        "Spouse B dental premium", "number",
        group="Health premiums", tier="advanced", step=50,
+       couple_only=True,
        help="Annual dental premium for Spouse B (today's $). Typically a "
             "small post-tax line item."),
     _f("inputs.health_premiums.spouse_b_vision",
        "Spouse B vision premium", "number",
        group="Health premiums", tier="advanced", step=50,
+       couple_only=True,
        help="Annual vision premium for Spouse B (today's $)."),
 )
 

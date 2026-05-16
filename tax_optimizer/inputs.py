@@ -24,12 +24,21 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
+from typing import Literal
 
 # Sentinel value used to detect "field was never touched by the caller".
 # We use a non-default float (the historical default) and emit a warning
 # only when a user explicitly sets `annual_expenses` to something else.
 # See `Inputs.__post_init__` for the deprecation gating.
 _ANNUAL_EXPENSES_LEGACY_DEFAULT = 85_000.0
+
+# Household-shape discriminator. A "single" household uses Single
+# tax tables, FICA Additional-Medicare threshold $200k (vs $250k
+# MFJ), Single IRMAA tiers, and Single SS-provisional thresholds.
+# Spouse B inputs are silently ignored when ``household_kind ==
+# "single"``; see `simulator.simulate` for the override of
+# ``alive_b`` and ``filing_status`` that makes this concrete.
+HouseholdKind = Literal["mfj", "single"]
 
 
 @dataclass
@@ -271,6 +280,17 @@ class Inputs:
     layout readable.
     """
 
+    # ``household_kind`` discriminates between a married-filing-jointly
+    # household (the default — every spouse_b_* field is read normally)
+    # and a single-filer household (spouse_b_* fields are silently
+    # ignored, the simulator forces ``alive_b = False`` and
+    # ``filing_status = "single"`` from year 0, and tax / FICA / IRMAA
+    # / SS-provisional thresholds all use their Single variants).
+    #
+    # Defaults to "mfj" for back-compat: every existing scenario file
+    # and every existing test continues to behave exactly as before.
+    household_kind: HouseholdKind = "mfj"
+
     spouse_a_age_start: int = 50
     spouse_b_age_start: int = 50
     spouse_a_retire_age: int = 65
@@ -369,6 +389,14 @@ class Inputs:
     annual_expenses: float = _ANNUAL_EXPENSES_LEGACY_DEFAULT
 
     def __post_init__(self) -> None:
+        if self.household_kind not in ("mfj", "single"):
+            raise ValueError(
+                f"Inputs.household_kind must be 'mfj' or 'single', "
+                f"got {self.household_kind!r}. The simulator routes "
+                f"this discriminator through tax / FICA / IRMAA / SS "
+                f"selection, so a typo would silently fall through to "
+                f"the wrong tax tables."
+            )
         if self.annual_expenses != _ANNUAL_EXPENSES_LEGACY_DEFAULT:
             warnings.warn(
                 "Inputs.annual_expenses is deprecated and ignored by the "

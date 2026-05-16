@@ -88,6 +88,8 @@
   },
 
   "inputs": {
+    "household_kind": "mfj",
+
     "spouse_a_age_start": 50,
     "spouse_b_age_start": 50,
     "spouse_a_retire_age": 65,

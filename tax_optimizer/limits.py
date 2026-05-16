@@ -97,7 +97,13 @@ def roth_ira_phaseout_factor(magi: float, filing_status: str) -> float:
     return (hi - magi) / (hi - lo)
 
 
-def hsa_family_cap(age_a: int, age_b: int, *, either_working: bool) -> float:
+def hsa_family_cap(
+    age_a: int,
+    age_b: int,
+    *,
+    either_working: bool,
+    b_alive: bool = True,
+) -> float:
     """Annual HSA contribution cap given both spouses' ages and work status.
 
     The returned cap models the IRS rules:
@@ -116,11 +122,17 @@ def hsa_family_cap(age_a: int, age_b: int, *, either_working: bool) -> float:
     Pre-v6.2 the model kept the full family limit until BOTH
     spouses hit 65, overstating capacity by ~$4.3k/year in staggered-
     Medicare scenarios.
+
+    ``b_alive`` lets a single-filer household (or a widowed survivor)
+    drop spouse B out of the HDHP-eligibility calculation entirely:
+    when False, B is treated as not-HSA-eligible regardless of age,
+    which collapses the cap to self-only for spouse A. Defaults to
+    True for back-compat with all existing callers.
     """
     if not either_working:
         return 0.0
     a_hsa_eligible = age_a < HSA_INELIGIBLE_AGE
-    b_hsa_eligible = age_b < HSA_INELIGIBLE_AGE
+    b_hsa_eligible = b_alive and age_b < HSA_INELIGIBLE_AGE
     if not a_hsa_eligible and not b_hsa_eligible:
         return 0.0
     if a_hsa_eligible and b_hsa_eligible:
