@@ -32,6 +32,47 @@ Categories used:
 
 ## [Unreleased]
 
+### Changed — Dash app: every Plotly chart now renders in Fira Code
+
+**Why it matters:** the dashboard chrome (form labels, KPI
+tiles, DataTable, headings) is themed via
+``dash_app/assets/fira-code.css`` to use Fira Code as the
+primary monospace font. Plotly figures, however, render their
+text inside the chart's SVG and do NOT inherit ``font-family``
+from the surrounding HTML. Every chart was therefore rendering
+in Plotly's default sans-serif (``Open Sans, verdana, arial``),
+which looked visually disconnected from the rest of the
+dashboard — chart titles, axis labels, tick labels, legend
+entries, hover tooltips, and percentile callouts were all in a
+different typeface than the surrounding UI.
+
+**Fix:** add a single ``_FIRA_FONT_FAMILY`` constant to
+``dash_app/figures.py`` mirroring the same fallback chain the
+CSS uses (``'Fira Code', 'Fira Mono', 'JetBrains Mono',
+'SFMono-Regular', ui-monospace, Menlo, Monaco, Consolas,
+'Liberation Mono', monospace``), and wire it into the shared
+``_LAYOUT`` fragment as ``font=dict(family=_FIRA_FONT_FAMILY,
+size=12)``. Every figure builder that spreads ``**_LAYOUT``
+into ``update_layout`` now picks up the family automatically;
+``empty_figure`` (the only builder that doesn't use
+``_LAYOUT``) sets the same family directly.
+
+Per-element ``font=dict(size=N, color=…)`` overrides scattered
+through this module continue to work — Plotly merges the
+partial dicts with the layout-level default, leaving family
+inherited unless explicitly clobbered.
+
+**Tests:** new ``tests/test_dash_figure_font.py`` pins the
+contract — every public figure builder
+(``balance_stack``, ``taxes_panel``, ``conversion_panel``,
+``multi_strategy_taxes_panel``, ``multi_strategy_conversion_panel``,
+``multi_strategy_growth_panel``, ``strategy_comparison``,
+``strategy_compare_panel``, ``mc_terminal_histogram``,
+``mc_fan_chart``, ``empty_figure``) must produce a figure
+whose ``layout.font.family`` contains "Fira Code". Two
+extra tests verify that per-element annotation overrides
+don't accidentally clobber the family.
+
 ### Fixed — Dash app: Monte Carlo histogram P50 callout overlapping the chart title
 
 **Why it matters:** the `mc_terminal_histogram` figure pushed

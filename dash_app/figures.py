@@ -21,11 +21,37 @@ from plotly.subplots import make_subplots
 # Reusable layout fragments
 _AXIS_DOLLAR = dict(tickprefix="$", tickformat=",.0f")
 _AXIS_PCT = dict(ticksuffix="%", tickformat=".0f")
+
+# Plotly figures render their text in SVG and do NOT inherit
+# ``font-family`` from the surrounding HTML the way ordinary Dash
+# components do. So we mirror the dashboard's CSS monospace stack
+# (see ``dash_app/assets/fira-code.css`` :root) inside every
+# figure's layout. The fallback chain reaches the same
+# system-monospace fonts the CSS does so a viewer who blocked
+# Google Fonts still gets a coherent look.
+#
+# Single Plotly font string (comma-separated, quoted multi-word
+# names) covers every text element automatically: chart title,
+# axis titles + tick labels, legend, hover tooltips, annotations.
+# Per-element ``font`` overrides scattered through this module
+# only set ``size`` / ``color`` — the family still inherits from
+# the layout default below.
+_FIRA_FONT_FAMILY = (
+    "'Fira Code', 'Fira Mono', 'JetBrains Mono', "
+    "'SFMono-Regular', ui-monospace, Menlo, Monaco, Consolas, "
+    "'Liberation Mono', monospace"
+)
+
 _LAYOUT = dict(
     template="plotly_white",
     margin=dict(l=60, r=20, t=50, b=50),
     legend=dict(orientation="h", y=-0.15, x=0),
     hovermode="x unified",
+    # Default text size matches Bootstrap's base-font scaling on
+    # the rest of the dashboard. Per-element overrides can still
+    # bump this up (chart titles use 15px, callouts 11px, etc.)
+    # via their own ``font=dict(size=...)`` kwargs.
+    font=dict(family=_FIRA_FONT_FAMILY, size=12),
 )
 
 
@@ -64,6 +90,11 @@ def empty_figure(message: str = "No data") -> go.Figure:
     fig = go.Figure()
     fig.update_layout(
         template="plotly_white",
+        # Inherit the Fira Code stack so the placeholder message
+        # matches the look of populated charts. The annotation's
+        # own ``font`` only sets size + color so family flows
+        # through from this layout default.
+        font=dict(family=_FIRA_FONT_FAMILY, size=12),
         annotations=[
             dict(
                 text=message, x=0.5, y=0.5, xref="paper", yref="paper",
