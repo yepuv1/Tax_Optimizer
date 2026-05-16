@@ -695,6 +695,116 @@ def multi_strategy_conversion_panel(
     return fig
 
 
+def multi_strategy_growth_panel(
+    strategies: dict[str, dict[str, Any]],
+    *,
+    heir_marginal_rate: float = 0.22,
+    title: str = "Liquid NW after tax & year-over-year growth",
+    winner_name: str | None = None,
+) -> go.Figure:
+    """Overlay after-tax NW + YoY growth across all strategies.
+
+    Two stacked subplots, mirroring the multi-strategy taxes /
+    conversions pattern:
+
+    * **Top — Liquid NW after tax ($)**: per-year application of
+      the bequest-tax-aware terminal formula
+      (`pretax × (1 - rate) + roth + taxable + hsa × (1 - rate)`)
+      so the chart line *is* the same number the Terminal NW
+      tile shows, traced through every year.
+    * **Bottom — YoY growth (%)**: pct-change of the same series
+      with a horizontal reference line at 0 %. Decumulation
+      years go negative — surfacing this visually matches the
+      "Decumulation CAGR" KPI tile.
+
+    Each strategy uses the same Okabe-Ito hue + marker + dash
+    redundancy as the other multi-strategy charts; the winner
+    gets the heavier stroke and is drawn last (handled by
+    `_add_strategy_lines`).
+    """
+    if not strategies:
+        return empty_figure("Run the simulator to populate strategies")
+
+    from .runner import deserialize_strategy_df  # local import
+
+    # Compute the derived columns once per strategy so
+    # `_add_strategy_lines` can read them by name.
+    enriched: dict[str, pd.DataFrame] = {}
+    for name, s in strategies.items():
+        df = s["df"] if isinstance(s.get("df"), pd.DataFrame) else (
+            deserialize_strategy_df(s["df"])
+        )
+        if df is None or len(df) == 0:
+            continue
+        # Defensive copy so we don't mutate caller-owned frames
+        # (the runner caches DataFrames and would propagate the
+        # extra columns on re-renders).
+        df = df.copy()
+        from tax_optimizer.metrics import nw_after_tax_series  # local import
+        nw = nw_after_tax_series(df, heir_marginal_rate=heir_marginal_rate)
+        df["_nw_after_tax"] = nw
+        # `pct_change()` on the first row is NaN — Plotly skips
+        # NaN points, which is exactly what we want (no spurious
+        # "infinite growth in year 0" spike).
+        df["_nw_yoy_pct"] = nw.pct_change() * 100.0
+        enriched[name] = df
+
+    if not enriched:
+        return empty_figure("No simulated balances available for growth chart")
+
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True,
+        # Match the conversions panel: the "headline" trace gets
+        # slightly more vertical room than the derivative.
+        row_heights=[0.58, 0.42],
+        vertical_spacing=0.10,
+    )
+
+    light_payload = {n: {"df": df} for n, df in enriched.items()}
+
+    _add_strategy_lines(
+        fig, light_payload,
+        column="_nw_after_tax", metric_label="After-tax NW",
+        row=1, col=1,
+        y_format="$%{y:,.0f}",
+        showlegend_for_first_row=True,
+        winner_name=winner_name,
+    )
+    _add_strategy_lines(
+        fig, light_payload,
+        column="_nw_yoy_pct", metric_label="YoY growth",
+        row=2, col=1,
+        y_format="%{y:+.1f}%",
+        showlegend_for_first_row=False,
+        winner_name=winner_name,
+    )
+
+    # 0% reference line for the YoY panel — separates accumulation
+    # (positive) from decumulation (negative). Drawn as a shape so
+    # it doesn't pollute the legend.
+    fig.add_hline(
+        y=0,
+        line=dict(color="#94a3b8", width=1, dash="dot"),
+        row=2, col=1,
+    )
+
+    fig.update_yaxes(
+        title_text="Liquid NW after tax ($)", **_AXIS_DOLLAR, row=1, col=1
+    )
+    fig.update_yaxes(
+        title_text="YoY growth (%)", **_AXIS_PCT, row=2, col=1,
+    )
+    fig.update_xaxes(title_text="Spouse A age", row=2, col=1)
+    # `cliponaxis=False` on every trace so end-of-horizon points
+    # don't get clipped at the panel edge — matters when the YoY
+    # values trend toward zero late in the plan and we want the
+    # final marker visible.
+    fig.update_traces(cliponaxis=False)
+    layout = {**_LAYOUT, "margin": dict(l=80, r=20, t=60, b=60)}
+    fig.update_layout(title=title, height=640, **layout)
+    return fig
+
+
 # ---------------------------------------------------------------------
 # Strategy comparison
 # ---------------------------------------------------------------------
@@ -1010,27 +1120,83 @@ def mc_fan_chart(mc_payload: dict[str, Any] | None) -> go.Figure:
 
 def overview_kpis(
     summary: dict[str, Any], mc_payload: dict[str, Any] | None
-) -> list[tuple[str, str]]:
-    """Returns a list of (label, value-string) for the Overview KPI tiles."""
-    tiles: list[tuple[str, str]] = []
-    tiles.append(("Terminal after-tax NW",
-                  _fmt_dollars(summary.get("terminal_after_tax"))))
-    tiles.append(("Lifetime federal tax (NPV)",
-                  _fmt_dollars(summary.get("lifetime_tax_npv"))))
-    tiles.append(("Lifetime IRMAA (NPV)",
-                  _fmt_dollars(summary.get("lifetime_irmaa_npv"))))
+) -> list[tuple[str, list[tuple[str, str]]]]:
+    """Sectioned KPI data for the Overview tab.
+
+    Returns ``[(section_label, [(tile_label, tile_value), ...]), ...]``.
+
+    **Outcomes** — bottom-line plan results: terminal after-tax NW,
+    lifetime tax / IRMAA NPV, peak marginal, MC stats. The
+    "Terminal after-tax NW" tile reflects the bequest-tax-aware
+    formula in `tax_optimizer.metrics.terminal_after_tax_nw`:
+
+        pretax × (1 - heir_marginal_rate)   # heirs pay ordinary tax
+        + roth                                # tax-free
+        + taxable                             # step-up basis at death
+        + hsa × (1 - heir_marginal_rate)      # ordinary tax to heirs
+
+    **Growth** — how the plan got from `Starting NW` to `Terminal
+    NW`: total growth multiplier, effective (nominal) and real
+    CAGRs, and the accumulation-vs-decumulation phase split. The
+    CAGR tiles use the household's full balance-sheet timeline,
+    so they bundle market returns + contributions + withdrawals +
+    tax drag — they're an effective compounding rate, not a pure
+    investment return. Decumulation CAGR is often negative (the
+    plan is meant to draw down).
+    """
+    outcomes: list[tuple[str, str]] = []
+    outcomes.append(
+        ("Terminal after-tax NW",
+         _fmt_dollars(summary.get("terminal_after_tax")))
+    )
+    outcomes.append(
+        ("Lifetime federal tax (NPV)",
+         _fmt_dollars(summary.get("lifetime_tax_npv")))
+    )
+    outcomes.append(
+        ("Lifetime IRMAA (NPV)",
+         _fmt_dollars(summary.get("lifetime_irmaa_npv")))
+    )
     pm = summary.get("peak_marginal")
-    tiles.append(("Peak marginal rate",
-                  f"{pm * 100:.0f}%" if pm is not None else "-"))
+    outcomes.append(
+        ("Peak marginal rate",
+         f"{pm * 100:.0f}%" if pm is not None else "-")
+    )
     yi = summary.get("years_irmaa")
-    tiles.append(("Years with IRMAA",
-                  f"{int(yi)}" if yi is not None else "-"))
+    outcomes.append(
+        ("Years with IRMAA", f"{int(yi)}" if yi is not None else "-")
+    )
     if mc_payload:
-        tiles.append(("Probability of success",
-                      f"{mc_payload['prob_success']:.0%}"))
-        tiles.append(("CVaR (10%)",
-                      _fmt_dollars(mc_payload["cvar_terminal"])))
-    return tiles
+        outcomes.append(
+            ("Probability of success",
+             f"{mc_payload['prob_success']:.0%}")
+        )
+        outcomes.append(
+            ("CVaR (10%)", _fmt_dollars(mc_payload["cvar_terminal"]))
+        )
+
+    growth: list[tuple[str, str]] = []
+    growth.append(
+        ("Starting after-tax NW",
+         _fmt_dollars(summary.get("starting_after_tax")))
+    )
+    growth.append(
+        ("Total growth", _fmt_multiplier(summary.get("total_growth_mult")))
+    )
+    growth.append(
+        ("Effective CAGR", _fmt_cagr(summary.get("effective_cagr")))
+    )
+    growth.append(
+        ("Real CAGR", _fmt_cagr(summary.get("real_cagr")))
+    )
+    growth.append(
+        ("Accumulation CAGR", _fmt_cagr(summary.get("accumulation_cagr")))
+    )
+    growth.append(
+        ("Decumulation CAGR", _fmt_cagr(summary.get("decumulation_cagr")))
+    )
+
+    return [("Outcomes", outcomes), ("Growth", growth)]
 
 
 def _fmt_dollars(v: Any) -> str:
@@ -1040,6 +1206,32 @@ def _fmt_dollars(v: Any) -> str:
         return f"${float(v):,.0f}"
     except (TypeError, ValueError):
         return "-"
+
+
+def _fmt_multiplier(v: Any) -> str:
+    """Format a growth multiplier like 3.15 → "3.15×"."""
+    if v is None:
+        return "-"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "-"
+    if f != f:  # NaN check
+        return "-"
+    return f"{f:.2f}\u00d7"
+
+
+def _fmt_cagr(v: Any) -> str:
+    """Format a CAGR fraction like 0.042 → "+4.2%/yr"."""
+    if v is None:
+        return "-"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "-"
+    if f != f:  # NaN check
+        return "-"
+    return f"{f * 100:+.1f}%/yr"
 
 
 # ---------------------------------------------------------------------

@@ -391,8 +391,17 @@ def kpi_row_placeholder() -> html.Div:
 def overview_tab() -> dbc.Tab:
     return dbc.Tab(
         [
-            html.Div(id="overview-kpis", className="d-flex flex-wrap gap-2 my-3"),
-            dcc.Graph(id="fig-balance-stack", config={"displaylogo": False}),
+            html.Div(id="overview-kpis", className="my-3"),
+            dcc.Graph(
+                id="fig-balance-stack",
+                className="tax-figure my-3",
+                config={"displaylogo": False},
+            ),
+            dcc.Graph(
+                id="fig-overview-growth",
+                className="tax-figure my-3",
+                config={"displaylogo": False},
+            ),
         ],
         label="Overview", tab_id="tab-overview",
     )

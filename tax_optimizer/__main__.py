@@ -184,7 +184,13 @@ def _strategy_results(
             cfg=cfg,
             inputs=inputs,
             df=df,
-            summary=summarize(df, heir_marginal_rate=cfg.heir_marginal_rate),
+            summary=summarize(
+                df,
+                heir_marginal_rate=cfg.heir_marginal_rate,
+                starting_balances=inputs.starting,
+                inflation=cfg.inflation,
+                retire_age=inputs.spouse_a_retire_age,
+            ),
         )
     return out
 

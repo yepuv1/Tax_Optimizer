@@ -68,7 +68,13 @@ def _strategy_result(name: str, cfg: Config, inputs: Inputs) -> StrategyResult:
         cfg=cfg,
         inputs=inputs,
         df=df,
-        summary=summarize(df, heir_marginal_rate=cfg.heir_marginal_rate),
+        summary=summarize(
+            df,
+            heir_marginal_rate=cfg.heir_marginal_rate,
+            starting_balances=inputs.starting,
+            inflation=cfg.inflation,
+            retire_age=inputs.spouse_a_retire_age,
+        ),
     )
 
 
@@ -236,7 +242,12 @@ def _build_fan(mc: MonteCarloResult) -> dict[str, list[float]] | None:
 
 
 def _cfg_summary(cfg: Config, inputs: Inputs) -> dict[str, Any]:
-    """A few key knobs the Strategies tab surfaces in its callout."""
+    """A few key knobs the Strategies tab surfaces in its callout.
+
+    Also carries `heir_marginal_rate` and `inflation` so the
+    Overview-tab growth chart can derive its after-tax NW series
+    from a deserialized run payload without a fresh Config.
+    """
     return {
         "spouse_a_roth_401k_pct": float(inputs.spouse_a_roth_401k_pct),
         "spouse_b_roth_401k_pct": float(inputs.spouse_b_roth_401k_pct),
@@ -245,6 +256,8 @@ def _cfg_summary(cfg: Config, inputs: Inputs) -> dict[str, Any]:
         "spouse_b_after_tax_401k_pct": float(inputs.spouse_b_after_tax_401k_pct),
         "ss_start_age_a": int(inputs.ss.effective_start_age_a),
         "ss_start_age_b": int(inputs.ss.effective_start_age_b),
+        "heir_marginal_rate": float(cfg.heir_marginal_rate),
+        "inflation": float(cfg.inflation),
     }
 
 

@@ -32,6 +32,78 @@ Categories used:
 
 ## [Unreleased]
 
+### Added — Dash app: Overview tab — growth-rate metrics + multi-strategy growth chart
+
+**Why it matters:** the Overview tab used to show one bottom-line
+tile, "Terminal after-tax NW", with no context for *what's in
+that number* or *how the plan got there*. Two compounding gaps:
+
+1. The Terminal after-tax NW formula is **bequest-tax-aware**
+   (pretax + HSA discounted by `cfg.heir_marginal_rate`, Roth
+   tax-free, taxable face-value via step-up basis at death) but
+   that detail lived only in the metrics module's docstring.
+2. There was no growth surface at all — no starting-NW
+   comparison, no CAGR, no accumulation-vs-decumulation split,
+   no per-year wealth trajectory.
+
+This change adds:
+
+- **Five new metric helpers** in `tax_optimizer/metrics.py`:
+  `starting_after_tax_nw` (mirrors `terminal_after_tax_nw`
+  symmetrically against `StartingBalances` so growth ratios
+  aren't apples-to-oranges), `total_growth_multiplier`,
+  `effective_cagr` (handles negative growth via signed-power
+  root), `real_cagr` (Fisher-equation-based inflation
+  adjustment), `stage_cagr` (splits at `retire_age`,
+  matching `report.py`'s convention), and `nw_after_tax_series`
+  (vectorized per-row version of the bequest-tax-aware terminal
+  formula).
+- `summarize()` extended with three optional kwargs
+  (`starting_balances`, `inflation`, `retire_age`) and six new
+  result keys (`starting_after_tax`, `total_growth_mult`,
+  `effective_cagr`, `real_cagr`, `accumulation_cagr`,
+  `decumulation_cagr`). Legacy callers without the new kwargs
+  still work — the keys come back as `None`.
+- **Sectioned KPI tiles**: `figures.overview_kpis` now returns
+  `[(section_label, [(label, value), ...]), ...]` with two
+  sections — **Outcomes** (Terminal NW, lifetime tax / IRMAA,
+  peak marginal, MC stats) and **Growth** (Starting NW, Total
+  growth multiplier "3.15×", Effective / Real / Accumulation /
+  Decumulation CAGR with explicit `+` / `-` signs).
+- **New multi-strategy growth panel**
+  (`figures.multi_strategy_growth_panel`): two stacked
+  subplots — after-tax NW per year (top) + YoY growth %
+  (bottom, with a 0 % reference line) — for all four canonical
+  strategies overlaid. Reuses the existing `_add_strategy_lines`
+  helper so the chart inherits Okabe-Ito palette + marker +
+  dash redundancy + winner-line emphasis from the Taxes /
+  Conversions tabs.
+- Inline documentation in `overview_kpis`'s docstring spelling
+  out the bequest-tax-aware Terminal NW formula so a curious
+  user can trace the number end-to-end without diving into
+  `metrics.py`.
+- `_cfg_summary` now carries `heir_marginal_rate` + `inflation`
+  on the run payload so the Overview chart can reproduce the
+  Terminal-NW lens consistently from a deserialized payload.
+
+**Tests:**
+- `tests/test_metrics_growth.py` — pure-function regression for
+  every helper plus `summarize()` with full / partial / no
+  kwargs.
+- `tests/test_dash_overview_growth.py` — sectioned KPI shape,
+  six growth tiles in canonical order, `+`/`-` sign rendering,
+  NaN graceful fallback, palette / marker / dash redundancy on
+  the chart, winner-line thickness, 0 % reference line, and an
+  end-to-end `run_scenario` smoke test.
+
+**Caveat surfaced in the tile labels:** the "Effective CAGR"
+tile bundles market returns + contributions + withdrawals + tax
+drag into one effective compounding rate — it's the right
+answer to "at what rate did the plan compound?" but the wrong
+answer to "what return did my portfolio earn?". The
+accumulation-vs-decumulation split helps separate "growth from
+contributions + market" from "drawdown from withdrawals".
+
 ### Changed — Dash app: Year-by-year table reorganized into functional groups + per-group coloring
 
 **Why it matters:** the Year-by-year drill-down DataTable grew

@@ -85,20 +85,64 @@ from .state import (
 )
 
 
-def _build_kpi_tiles(tiles: list[tuple[str, str]]) -> list[Any]:
-    return [
-        dbc.Card(
-            dbc.CardBody(
+def _build_kpi_tiles(
+    sections: list[tuple[str, list[tuple[str, str]]]] | list[tuple[str, str]]
+) -> list[Any]:
+    """Render the Overview KPI sections.
+
+    Accepts the sectioned structure
+    ``[(section_label, [(tile_label, tile_value), ...]), ...]``
+    returned by `figures.overview_kpis`. For back-compat with any
+    legacy caller that still passes a flat ``[(label, value), ...]``
+    list, that shape is rendered as a single unlabeled section.
+    """
+    if not sections:
+        return []
+
+    # Detect legacy flat shape: a list of (str, str). The sectioned
+    # shape has a list as its second element.
+    is_legacy_flat = (
+        isinstance(sections[0], tuple)
+        and len(sections[0]) == 2
+        and isinstance(sections[0][1], str)
+    )
+    if is_legacy_flat:
+        sections = [("", sections)]  # type: ignore[list-item]
+
+    children: list[Any] = []
+    for idx, (section_label, tiles) in enumerate(sections):
+        if section_label:
+            children.append(
+                html.Div(
+                    section_label,
+                    className=(
+                        "text-uppercase small fw-semibold text-muted "
+                        "mt-3 mb-1 kpi-section-label"
+                        if idx > 0
+                        else "text-uppercase small fw-semibold text-muted "
+                             "mb-1 kpi-section-label"
+                    ),
+                )
+            )
+        children.append(
+            html.Div(
                 [
-                    html.Div(label, className="text-muted small"),
-                    html.Div(value, className="fs-5 fw-semibold"),
-                ]
-            ),
-            className="kpi-tile flex-grow-1",
-            style={"minWidth": "180px"},
+                    dbc.Card(
+                        dbc.CardBody(
+                            [
+                                html.Div(label, className="text-muted small"),
+                                html.Div(value, className="fs-5 fw-semibold"),
+                            ]
+                        ),
+                        className="kpi-tile flex-grow-1",
+                        style={"minWidth": "180px"},
+                    )
+                    for label, value in tiles
+                ],
+                className="d-flex flex-wrap gap-2",
+            )
         )
-        for label, value in tiles
-    ]
+    return children
 
 
 def _strategy_callout(strategies: dict[str, Any], winner_name: str | None) -> Any:
@@ -702,18 +746,36 @@ def make_app() -> dash.Dash:
     @app.callback(
         Output("overview-kpis", "children"),
         Output("fig-balance-stack", "figure"),
+        Output("fig-overview-growth", "figure"),
         Input("run-result", "data"),
     )
     def _render_overview(run_data):
         if not run_data or not run_data.get("strategies"):
-            return [], figures.empty_figure("Click 'Run' to populate the dashboard")
+            empty = figures.empty_figure("Click 'Run' to populate the dashboard")
+            return [], empty, empty
         winner_name = run_data.get("winner_name")
         strategies = run_data["strategies"]
         winner = strategies.get(winner_name) or next(iter(strategies.values()))
         df = deserialize_strategy_df(winner["df"])
         tiles = figures.overview_kpis(winner["summary"], run_data.get("mc"))
-        return _build_kpi_tiles(tiles), figures.balance_stack(
-            df, title=f"Account balances - {winner_name}"
+        # `heir_marginal_rate` rides on cfg_summary so the growth
+        # chart stays consistent with the Terminal-NW tile (same
+        # bequest-tax discount). Falls back to the metrics module
+        # default if a stale payload doesn't carry it.
+        cfg_summary = (winner.get("cfg_summary") or {})
+        heir_rate = float(cfg_summary.get("heir_marginal_rate", 0.22))
+        winner_suffix = f" — winner: {winner_name}" if winner_name else ""
+        return (
+            _build_kpi_tiles(tiles),
+            figures.balance_stack(
+                df, title=f"Account balances - {winner_name}"
+            ),
+            figures.multi_strategy_growth_panel(
+                strategies,
+                heir_marginal_rate=heir_rate,
+                title=f"Liquid NW after tax & YoY growth{winner_suffix}",
+                winner_name=winner_name or None,
+            ),
         )
 
     # ---- Taxes tab --------------------------------------------------
