@@ -20,6 +20,19 @@ class State:
     hsa: float
     pension_balance: float
     pension_annuity: float = 0.0
+    # Annuity contract bucket. Mirrors pension fields but driven by
+    # ``inputs.annuity`` rather than ``inputs.pension``. ``annuity_
+    # basis_remaining`` tracks IRC §72(b) un-recovered cost basis
+    # for non-qualified contracts; it stays 0.0 for qualified ones.
+    # Both ``*_lump_sum_done`` flags are one-shot latches: the
+    # simulator's lump-sum gate fires at most once per simulation,
+    # even if the user crosses ``start_age`` in a multi-year retiree
+    # scenario.
+    annuity_balance: float = 0.0
+    annuity_payment: float = 0.0
+    annuity_basis_remaining: float = 0.0
+    pension_lump_sum_done: bool = False
+    annuity_lump_sum_done: bool = False
     cumulative_basis: float = 0.0
     # IRA-only sub-balance of `spouse_*_pretax`. Tracked separately for
     # the **backdoor Roth pro-rata rule** (IRC §408(d)(2)) which
@@ -61,5 +74,11 @@ def initial_state(cfg: Config, inputs: Inputs) -> State:
         hsa=s.hsa,
         pension_balance=s.pension_balance,
         pension_annuity=0.0,
+        annuity_balance=inputs.annuity.balance_today,
+        annuity_basis_remaining=(
+            inputs.annuity.cost_basis
+            if inputs.annuity.tax_kind == "non_qualified"
+            else 0.0
+        ),
         cumulative_basis=taxable * cfg.cap_gains_basis_fraction,
     )

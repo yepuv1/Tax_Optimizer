@@ -18,6 +18,7 @@ import math
 import numpy as np
 import pandas as pd
 
+from .annuity import exclusion_ratio
 from .config import Config
 from .conversion import planned_roth_conversion
 from .inputs import Inputs, claim_age_factor
@@ -490,16 +491,62 @@ def simulate(
         )
         sdi_total = sdi_a + sdi_b
 
+        # ---- Pension lump-sum gate (fires once at NRD) -----------
+        # If the user elected `lump_sum_mode != "none"`, the entire
+        # pension cash-balance is liquidated AT `start_age` instead
+        # of starting the monthly annuity. Two flavors:
+        #
+        #   * "rollover_pretax" — direct rollover into the
+        #     participant's pretax IRA (IRC §402(c)). No current-
+        #     year tax. Future RMDs / ordinary withdrawals apply
+        #     automatically via the existing pretax pipeline.
+        #   * "cash" — full balance distributed as ordinary income
+        #     in the start_age year. Adds to `pension_income` for
+        #     this single year so the income flows through the
+        #     standard tax + cash-surplus path. Below, we also
+        #     inject the 10% IRC §72(t) additional tax via
+        #     `early_distribution_taxable` if `a_age < 60`.
+        #
+        # The `pension_lump_sum_done` flag latches the event so
+        # later years see `pension_balance == 0` and don't re-run
+        # the monthly-annuity initializer below.
+        pension_lump_sum_taxable = 0.0
+        pension_lump_sum_amount = 0.0
+        pension_lump_sum_event = ""
+        if (
+            a_age >= inputs.pension.start_age
+            and alive_a
+            and inputs.pension.lump_sum_mode != "none"
+            and not state.pension_lump_sum_done
+            and state.pension_balance > 0.0
+        ):
+            lump = state.pension_balance
+            if inputs.pension.lump_sum_mode == "rollover_pretax":
+                state.spouse_a_pretax += lump
+                state.spouse_a_pretax_ira += lump
+                pension_lump_sum_event = "rollover_pretax"
+            elif inputs.pension.lump_sum_mode == "cash":
+                pension_lump_sum_taxable = lump
+                pension_lump_sum_event = "cash"
+            state.pension_balance = 0.0
+            state.pension_annuity = 0.0
+            state.pension_lump_sum_done = True
+            pension_lump_sum_amount = lump
+
         # Initialize the pension annuity the first time we see spouse A
         # at-or-above NRD. The guard used to be a strict `==`, which
         # silently dropped the pension for households whose simulation
         # starts *at* or *past* NRD (already-retired-with-pension
         # scenarios — `state.pension_annuity` stayed 0 forever).
+        # Skipped entirely once a lump-sum has already fired
+        # (`pension_lump_sum_done`) — otherwise the floor below would
+        # re-create the monthly annuity from the user's `monthly_at_nrd`.
         if (
             a_age >= inputs.pension.start_age
             and state.pension_annuity == 0.0
             and alive_a
             and inputs.pension.annual_at_nrd > 0
+            and not state.pension_lump_sum_done
         ):
             scale = state.pension_balance / max(test_balance, 1.0)
             # If the simulation starts at-or-after NRD, the cash-balance
@@ -516,6 +563,109 @@ def simulate(
             pension_income = state.pension_annuity * cfg.mortality.pension_survivor_pct
         else:
             pension_income = 0.0
+        # Lump-sum cash distribution joins ordinary income via the
+        # `pension` kwarg (taxed at marginal) and the cash side via
+        # `cash_inflow` further down. Roll-over has no current-year
+        # income side — the rollover itself is tax-free.
+        pension_income += pension_lump_sum_taxable
+
+        # ---- Annuity contract (separate bucket from pension) -----
+        # Pre-payout: balance grows at `inputs.annuity.growth_rate`
+        # (defaults to `cfg.inflation` so the contract grows in real
+        # terms at zero). No cash-balance / pay-credit accrual —
+        # this is a passive contract the user already owns.
+        if (
+            a_age < inputs.annuity.start_age
+            and not state.annuity_lump_sum_done
+            and state.annuity_balance > 0
+        ):
+            ann_growth = (
+                inputs.annuity.growth_rate
+                if inputs.annuity.growth_rate is not None
+                else cfg.inflation
+            )
+            state.annuity_balance *= 1.0 + ann_growth
+
+        # Annuity lump-sum gate (parallels pension above).
+        annuity_lump_sum_taxable = 0.0
+        annuity_lump_sum_basis_returned = 0.0
+        annuity_lump_sum_amount = 0.0
+        annuity_lump_sum_event = ""
+        if (
+            a_age >= inputs.annuity.start_age
+            and alive_a
+            and inputs.annuity.lump_sum_mode != "none"
+            and not state.annuity_lump_sum_done
+            and state.annuity_balance > 0.0
+        ):
+            bal = state.annuity_balance
+            if inputs.annuity.lump_sum_mode == "rollover_pretax":
+                # Validation forbids non_qualified + rollover_pretax,
+                # so this branch is only reachable for qualified.
+                state.spouse_a_pretax += bal
+                state.spouse_a_pretax_ira += bal
+                annuity_lump_sum_event = "rollover_pretax"
+            elif inputs.annuity.lump_sum_mode == "cash":
+                if inputs.annuity.tax_kind == "non_qualified":
+                    # IRC §72: basis returns tax-free, gain is
+                    # ordinary. Surrender exhausts whatever basis
+                    # remains; if some was already recovered via
+                    # exclusion-ratio payments, only the residue
+                    # is tax-free here.
+                    tax_free = min(bal, state.annuity_basis_remaining)
+                    taxable_part = bal - tax_free
+                    state.annuity_basis_remaining -= tax_free
+                    annuity_lump_sum_taxable = taxable_part
+                    annuity_lump_sum_basis_returned = tax_free
+                else:
+                    annuity_lump_sum_taxable = bal
+                annuity_lump_sum_event = "cash"
+            state.annuity_balance = 0.0
+            state.annuity_payment = 0.0
+            state.annuity_lump_sum_done = True
+            annuity_lump_sum_amount = bal
+
+        # Monthly annuity income (only when no lump-sum elected and
+        # the contract hasn't already been liquidated).
+        annuity_taxable_inc = 0.0
+        annuity_tax_free_inc = 0.0
+        if (
+            a_age >= inputs.annuity.start_age
+            and inputs.annuity.lump_sum_mode == "none"
+            and not state.annuity_lump_sum_done
+            and inputs.annuity.annual_at_start > 0.0
+            and state.annuity_balance > 0.0
+        ):
+            # Initialize once; payments stay nominal-fixed (matches
+            # pension convention — no COLA built in).
+            if state.annuity_payment == 0.0:
+                state.annuity_payment = inputs.annuity.annual_at_start
+            payment = min(state.annuity_payment, state.annuity_balance)
+            state.annuity_balance = max(0.0, state.annuity_balance - payment)
+
+            # Survivor scaling matches the pension: surviving spouse
+            # keeps `pension_survivor_pct` of the contract payment.
+            if not alive_a and alive_b:
+                payment *= cfg.mortality.pension_survivor_pct
+            elif not alive_a and not alive_b:
+                payment = 0.0
+
+            if inputs.annuity.tax_kind == "non_qualified":
+                ratio = exclusion_ratio(
+                    inputs.annuity.cost_basis,
+                    inputs.annuity.annual_at_start,
+                    inputs.annuity.expected_payout_years,
+                )
+                tax_free = min(payment * ratio, state.annuity_basis_remaining)
+                state.annuity_basis_remaining -= tax_free
+                annuity_taxable_inc = payment - tax_free
+                annuity_tax_free_inc = tax_free
+            else:
+                annuity_taxable_inc = payment
+        annuity_cash_in = (
+            annuity_taxable_inc + annuity_tax_free_inc
+            + annuity_lump_sum_taxable + annuity_lump_sum_basis_returned
+        )
 
         # Social Security: per-spouse claim age, actuarial scaling on
         # FRA-PIA, and an annual COLA. The household-level `monthly_*`
@@ -638,6 +788,27 @@ def simulate(
             calendar_year=calendar_year_y,
         )
 
+        # Annuity income: taxable portion routes through its own
+        # `annuity_taxable` kwarg (joins the ordinary stack) so the
+        # output DataFrame can show pension and annuity separately
+        # even though both tax at marginal ordinary rates.
+        annuity_taxable_total = annuity_taxable_inc + annuity_lump_sum_taxable
+
+        # IRC §72(t) (qualified plans) / §72(q) (non-qualified
+        # annuities): a 10% additional tax on the *taxable* portion
+        # of an early distribution, on top of regular ordinary tax.
+        # We use `a_age < 60` as the integer-age proxy for "before
+        # 59½" — both match in practice for annual mid-year ages.
+        # Rollovers are exempt by statute (no current-year tax at
+        # all), as is the basis-return portion of a non-qualified
+        # surrender (IRC §72(q) only hits the gain).
+        early_distribution_taxable = 0.0
+        if a_age < 60:
+            if pension_lump_sum_event == "cash":
+                early_distribution_taxable += pension_lump_sum_taxable
+            if annuity_lump_sum_event == "cash":
+                early_distribution_taxable += annuity_lump_sum_taxable
+
         base_kwargs = dict(
             wages=wages_box1,
             interest=interest_inc,
@@ -645,8 +816,10 @@ def simulate(
             qualified_div=qdiv_inc,
             ltcg=ltcg_inc,
             pension=pension_income,
+            annuity_taxable=annuity_taxable_total,
             social_security=ssn_income,
             deduction=deduction_y,
+            early_distribution_taxable=early_distribution_taxable,
         )
         # Backdoor's taxable conversion (the pro-rata-taxable portion
         # of the same-year Roth conversion) lands as ordinary income.
@@ -975,7 +1148,15 @@ def simulate(
             ordinary_div=final_kwargs.get("ordinary_div", 0.0),
             qualified_div=final_kwargs.get("qualified_div", 0.0),
             ltcg=final_kwargs.get("ltcg", 0.0),
-            pension=final_kwargs.get("pension", 0.0),
+            # Roll annuity_taxable into the `pension` kwarg for state
+            # tax purposes. Existing retirement-income exclusions
+            # (IL full / NY $20k / etc.) treat annuity income the
+            # same as pension; lumping the two together gives the
+            # right state tax treatment without a new kwarg.
+            pension=(
+                final_kwargs.get("pension", 0.0)
+                + final_kwargs.get("annuity_taxable", 0.0)
+            ),
             pretax_withdrawal=final_kwargs.get("pretax_withdrawal", 0.0),
             roth_conversion=final_kwargs.get("roth_conversion", 0.0),
             social_security=final_kwargs.get("social_security", 0.0),
@@ -1078,12 +1259,18 @@ def simulate(
                 wages_box1
                 + extra_interest + extra_qdiv + extra_ltcg
                 + gross_cash_in
+                + annuity_cash_in
                 - fica_total
                 - sdi_total
                 - a_roth_contrib - b_roth_contrib
             )
         else:
-            cash_inflow = pension_income + ssn_income + gross_cash_in
+            # `pension_income` already includes any current-year cash
+            # lump-sum amount (added above); rollover-mode contributes
+            # zero current-year cash, which is correct.
+            cash_inflow = (
+                pension_income + ssn_income + gross_cash_in + annuity_cash_in
+            )
 
         delta = (
             cash_inflow
@@ -1307,6 +1494,16 @@ def simulate(
                 "spousal_rollover": rollover_event,
                 "wages": wages,
                 "pension": pension_income,
+                "pension_lump_sum": pension_lump_sum_amount,
+                "pension_lump_sum_event": pension_lump_sum_event,
+                "annuity_taxable": annuity_taxable_total,
+                "annuity_tax_free": annuity_tax_free_inc + annuity_lump_sum_basis_returned,
+                "annuity_payment": state.annuity_payment,
+                "annuity_lump_sum": annuity_lump_sum_amount,
+                "annuity_lump_sum_event": annuity_lump_sum_event,
+                "early_distribution_penalty": tax_result.get(
+                    "early_distribution_penalty", 0.0
+                ),
                 "ssn": ssn_income,
                 "rmd": rmd_total,
                 "rmd_a": a_rmd,
@@ -1380,6 +1577,8 @@ def simulate(
                 "cumulative_basis": state.cumulative_basis,
                 "hsa_balance": state.hsa,
                 "pension_balance": state.pension_balance,
+                "annuity_balance": state.annuity_balance,
+                "annuity_basis_remaining": state.annuity_basis_remaining,
             }
         )
     return pd.DataFrame(rows)

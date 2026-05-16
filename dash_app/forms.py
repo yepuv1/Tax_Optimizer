@@ -72,6 +72,17 @@ _HOUSEHOLD_KINDS: tuple[tuple[str, str], ...] = (
     ("single", "Single (one filer)"),
 )
 
+_LUMP_SUM_MODES: tuple[tuple[str, str], ...] = (
+    ("none", "None (monthly payments)"),
+    ("rollover_pretax", "Rollover to pretax IRA (tax-free)"),
+    ("cash", "Cash lump sum (ordinary tax + 10% if pre-59.5)"),
+)
+
+_ANNUITY_TAX_KINDS: tuple[tuple[str, str], ...] = (
+    ("qualified", "Qualified (pretax-funded; fully taxable)"),
+    ("non_qualified", "Non-qualified (after-tax basis; §72 exclusion ratio)"),
+)
+
 _TAX_REGIMES: tuple[tuple[str, str], ...] = (
     ("tcja", "TCJA (current law, 2018-2025)"),
     ("sunset", "Sunset / 2026 brackets"),
@@ -311,6 +322,33 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
        group="Pension", tier="simple", min=50, max=80,
        help="Age at which the pension starts paying. Often called Normal "
             "Retirement Date (NRD); typically 65 for most plans."),
+    _f("inputs.pension.lump_sum_mode", "Pension lump-sum election", "select",
+       options=_LUMP_SUM_MODES,
+       group="Pension", tier="simple",
+       help="At NRD, instead of starting monthly payments: 'rollover' moves "
+            "the balance to a pretax IRA tax-free; 'cash' distributes the "
+            "full balance as ordinary income (with 10% IRC §72(t) surtax "
+            "if you're under 59½)."),
+
+    # --- Household: annuity (Simple) ---
+    _f("inputs.annuity.balance_today", "Annuity balance today",
+       "number", group="Annuity", tier="simple", step=1000,
+       help="Current contract value of an annuity you already own. Grows "
+            "at the configured rate until payments start."),
+    _f("inputs.annuity.monthly_at_start", "Annuity monthly payment ($/mo)",
+       "number", group="Annuity", tier="simple", step=50,
+       help="Fixed monthly payment once the annuity begins paying. No COLA "
+            "(matching pension convention)."),
+    _f("inputs.annuity.start_age", "Annuity start age", "int",
+       group="Annuity", tier="simple", min=50, max=85,
+       help="Age at which the annuity begins paying (or, with lump-sum "
+            "election, the year the contract is liquidated)."),
+    _f("inputs.annuity.lump_sum_mode", "Annuity lump-sum election", "select",
+       options=_LUMP_SUM_MODES,
+       group="Annuity", tier="simple",
+       help="At start age, take monthly payments ('none'), do a tax-free "
+            "rollover to pretax IRA (qualified contracts only), or cash out "
+            "the contract (10% surtax if pre-59½)."),
 
     # --- Macro / horizon (Simple) ---
     _f("config.start_year", "Start year", "int",
@@ -708,6 +746,31 @@ FIELD_SCHEMA: tuple[FormField, ...] = (
        group="Pension (advanced)", tier="advanced", step=1000,
        help="IRS §415(c) annual compensation limit for the start year. "
             "$345k for 2024. Caps pension-eligible salary."),
+
+    # --- Annuity (Advanced) ---
+    _f("inputs.annuity.tax_kind", "Annuity tax kind", "select",
+       options=_ANNUITY_TAX_KINDS,
+       group="Annuity (advanced)", tier="advanced",
+       help="Qualified = funded with pretax dollars (fully ordinary income "
+            "on distribution). Non-qualified = funded with after-tax dollars "
+            "and tracks a cost basis; payments are split via the IRC §72(b) "
+            "exclusion ratio until basis is recovered."),
+    _f("inputs.annuity.cost_basis", "Annuity cost basis $",
+       "number", group="Annuity (advanced)", tier="advanced", step=1000,
+       help="Original after-tax investment in a non-qualified contract. "
+            "Returned tax-free over time via the exclusion ratio. Ignored "
+            "for qualified contracts."),
+    _f("inputs.annuity.expected_payout_years",
+       "Expected payout years", "int",
+       group="Annuity (advanced)", tier="advanced", min=1, max=60,
+       help="Denominator for the §72(b) exclusion ratio: total years over "
+            "which payments are expected. Shorter = faster basis recovery, "
+            "longer = more tax-free dollars per payment but for more years."),
+    _f("inputs.annuity.growth_rate",
+       "Annuity growth rate (blank = inflation)", "percent",
+       group="Annuity (advanced)", tier="advanced",
+       help="Pre-payout balance growth rate. Blank = use cfg.inflation "
+            "(zero real growth, conservative default)."),
 
     # --- Health premiums (Advanced) ---
     _f("inputs.health_premiums.spouse_a_medical",

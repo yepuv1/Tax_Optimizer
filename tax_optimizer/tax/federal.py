@@ -135,10 +135,12 @@ def federal_tax(
     qualified_div: float = 0.0,
     ltcg: float = 0.0,
     pension: float = 0.0,
+    annuity_taxable: float = 0.0,
     pretax_withdrawal: float = 0.0,
     roth_conversion: float = 0.0,
     social_security: float = 0.0,
     deduction: float | None = None,
+    early_distribution_taxable: float = 0.0,
 ) -> dict:
     """Compute federal tax liability for one year.
 
@@ -146,6 +148,24 @@ def federal_tax(
     All income items are in nominal dollars. Returns a dict containing
     `tax`, `ordinary_tax`, `ltcg_tax`, `niit`, `agi`, `taxable_income`,
     `ss_taxable`, and `marginal`.
+
+    ``annuity_taxable`` carries the taxable portion of annuity
+    contract distributions (qualified: full payment; non-qualified:
+    payment minus the IRC §72(b) excluded portion). Routed into the
+    same ordinary-income stack as wages / pension / pretax draws.
+    Kept as its own kwarg (rather than rolled into ``pension``) so
+    the simulator output can split the two streams in reporting.
+
+    ``early_distribution_taxable`` is the portion of a current-year
+    distribution that triggers the IRC §72(t) / §72(q) 10%
+    additional tax (e.g. a pension or annuity lump-sum at
+    ``a_age < 59.5``). The 10% surtax is computed on this argument
+    and added into the returned ``total_tax`` via the new
+    ``early_distribution_penalty`` line. The principal itself is
+    NOT added by this kwarg — the simulator passes the same dollars
+    through ``pension`` / ``pretax_withdrawal`` / ``annuity_taxable``
+    on top of this so the income side and the penalty side are both
+    accounted for.
     """
     ord_brackets = regime.ord_brackets(filing_status)
     ltcg_brackets = regime.ltcg_brackets(filing_status)
@@ -156,13 +176,13 @@ def federal_tax(
 
     other = (
         wages + interest + ordinary_div + qualified_div + ltcg
-        + pension + pretax_withdrawal + roth_conversion
+        + pension + annuity_taxable + pretax_withdrawal + roth_conversion
     )
     provisional = other + 0.5 * social_security
     ss_taxable = social_security_taxable(provisional, social_security, base1=base1, base2=base2)
 
     ordinary_income = (
-        wages + interest + ordinary_div + pension
+        wages + interest + ordinary_div + pension + annuity_taxable
         + pretax_withdrawal + roth_conversion + ss_taxable
     )
     preferential = qualified_div + ltcg
@@ -207,7 +227,15 @@ def federal_tax(
     )
     amt = amt_result["amt"]
 
-    total = ord_tax + ltcg_tax + niit + amt
+    # IRC §72(t) / §72(q) 10% additional tax on early distributions
+    # from qualified plans / annuity contracts. The simulator passes
+    # the principal through the usual income kwargs (``pension``,
+    # ``annuity_taxable``, ``pretax_withdrawal``) so it shows up in
+    # AGI; the 10% surtax is the *extra* component on top, isolated
+    # here for reporting clarity.
+    early_distribution_penalty = 0.10 * max(0.0, early_distribution_taxable)
+
+    total = ord_tax + ltcg_tax + niit + amt + early_distribution_penalty
     marginal = _marginal_rate(taxable_ordinary, ord_brackets)
 
     return {
@@ -218,6 +246,7 @@ def federal_tax(
         "amt": amt,
         "amti": amt_result["amti"],
         "tmt": amt_result["tmt"],
+        "early_distribution_penalty": early_distribution_penalty,
         "agi": agi,
         "taxable_income": taxable_total,
         "ss_taxable": ss_taxable,

@@ -39,6 +39,7 @@ import pytest
 
 from tax_optimizer.config import Config
 from tax_optimizer.inputs import (
+    AnnuityInputs,
     CurrentContrib,
     CurrentIncome,
     HealthPremiums,
@@ -182,6 +183,7 @@ class TestInputsCoverage:
             ("income", CurrentIncome),
             ("contrib", CurrentContrib),
             ("pension", PensionInputs),
+            ("annuity", AnnuityInputs),
             ("ss", SocialSecurity),
             ("health_premiums", HealthPremiums),
         ],
@@ -282,8 +284,8 @@ class TestTemplateValuesMatchDefaults:
         inp = Inputs()
         for f in fields(Inputs):
             if f.name in {
-                "starting", "income", "contrib", "pension", "ss",
-                "health_premiums",
+                "starting", "income", "contrib", "pension", "annuity",
+                "ss", "health_premiums",
                 "annual_expenses",  # deliberately omitted (deprecated)
             }:
                 continue
@@ -302,6 +304,7 @@ class TestTemplateValuesMatchDefaults:
             ("income", CurrentIncome),
             ("contrib", CurrentContrib),
             ("pension", PensionInputs),
+            ("annuity", AnnuityInputs),
             ("ss", SocialSecurity),
             ("health_premiums", HealthPremiums),
         ],

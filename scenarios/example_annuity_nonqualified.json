@@ -1,0 +1,135 @@
+{
+  "config": {
+    "start_year": 2026,
+    "horizon_age": 92,
+
+    "nominal_growth_rate": 0.06,
+    "inflation": 0.025,
+    "wage_growth": 0.030,
+    "taxable_drag": 0.005,
+
+    "withdrawal_strategy": "conventional",
+    "bracket_fill_target": 0.22,
+    "roth_conversion_target_bracket": 0.0,
+    "roth_conversion_amount": 0.0,
+
+    "cap_conversion_by_liquidity": true,
+    "conversion_taxable_use_ratio": 0.5,
+    "protect_roth_in_conversion_years": true,
+
+    "rmd_start_age": 75,
+    "cap_gains_basis_fraction": 0.5,
+    "annual_expenses_today": 80000,
+
+    "heir_marginal_rate": 0.22,
+
+    "taxable_equity_div_yield": 0.016,
+    "taxable_bond_interest_yield": 0.035,
+    "taxable_equity_qualified_fraction": 0.85,
+
+    "tax_regime": "tcja",
+    "regime_change_year_offset": null,
+    "regime_change_target": null,
+
+    "state_regime": "stateless",
+
+    "medicare_base_b_d_premium": 2500,
+    "health_pre65_today": 0,
+    "irmaa_lookback_years": 2,
+
+    "aca_enabled": false,
+    "aca_benchmark_premium_per_adult": 14000,
+    "aca_max_contrib_pct": 0.085,
+
+    "stepup_at_first_death": false,
+    "optimize_ss_claim_age": false,
+
+    "market": {
+      "kind": "deterministic",
+      "equity": 0.06,
+      "bond": 0.04
+    },
+    "spending": {
+      "kind": "smile",
+      "base_spending": 80000,
+      "inflation": 0.025,
+      "ltc_years": 4,
+      "ltc_annual_today": 100000
+    },
+    "mortality": {
+      "year_of_death_a": null,
+      "year_of_death_b": null,
+      "pension_survivor_pct": 0.5,
+      "ss_survivor_keeps_higher": true
+    },
+    "asset_location": {
+      "uniform_equity_pct": 0.7
+    }
+  },
+
+  "inputs": {
+    "household_kind": "mfj",
+
+    "spouse_a_age_start": 60,
+    "spouse_b_age_start": 60,
+    "spouse_a_retire_age": 65,
+    "spouse_b_retire_age": 65,
+
+    "spouse_a_total_contrib_pct": 0.10,
+    "spouse_b_total_contrib_pct": 0.10,
+    "spouse_a_roth_401k_pct": 0.0,
+    "spouse_b_roth_401k_pct": 0.0,
+
+    "starting": {
+      "spouse_a_pretax_401k": 600000,
+      "spouse_b_pretax_401k": 400000,
+      "spouse_a_roth_ira": 80000,
+      "spouse_b_roth_ira": 60000,
+      "hsa": 20000,
+      "taxable_brokerage": 200000,
+      "pension_balance": 0
+    },
+    "income": {
+      "spouse_a_gross": 150000,
+      "spouse_b_gross": 100000,
+      "spouse_a_bonus": 0,
+      "interest": 0,
+      "capital_gains": 0,
+      "dividends": 0
+    },
+    "contrib": {
+      "hsa_family": 8550
+    },
+    "ss": {
+      "monthly_spouse_a": 2700,
+      "monthly_spouse_b": 2200,
+      "start_age": 67,
+      "fra_a": 67,
+      "fra_b": 67
+    },
+    "pension": {
+      "balance_today": 0,
+      "monthly_at_nrd": 0,
+      "start_age": 65,
+      "lump_sum_mode": "none"
+    },
+    "annuity": {
+      "balance_today": 200000,
+      "monthly_at_start": 1000,
+      "start_age": 65,
+      "growth_rate": 0.04,
+      "tax_kind": "non_qualified",
+      "cost_basis": 50000,
+      "expected_payout_years": 20,
+      "lump_sum_mode": "none"
+    },
+    "health_premiums": {
+      "spouse_a_medical": 4800,
+      "spouse_a_dental": 360,
+      "spouse_a_vision": 120,
+      "spouse_b_medical": 4200,
+      "spouse_b_dental": 360,
+      "spouse_b_vision": 120
+    }
+  }
+}

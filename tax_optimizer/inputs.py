@@ -188,6 +188,26 @@ class PensionInputs:
       * ``irs_comp_limit_today`` — IRS §401(a)(17) cap in today's
         dollars (defaults to 2025's $350k). Indexed forward with
         wage growth.
+
+    Lump-sum knob (v7.x):
+
+      * ``lump_sum_mode`` — at ``start_age``, instead of starting
+        the monthly annuity:
+
+          * ``"none"``           — default. Monthly annuity behaves
+            as before (existing scenarios unchanged).
+          * ``"rollover_pretax"`` — direct rollover into the
+            participant's pretax IRA (IRC §402(c)). No current-year
+            tax. Future RMDs and ordinary-income withdrawals then
+            apply automatically via the existing pretax pipeline.
+          * ``"cash"``           — full balance distributed as a
+            single ordinary-income event in the ``start_age`` year.
+            Plus the IRC §72(t) 10% additional tax if
+            ``a_age < 59.5``. Net cash lands in the taxable
+            brokerage.
+
+    Pensions are always qualified plans, so there is no
+    ``tax_kind`` knob here (cf. ``AnnuityInputs``).
     """
 
     balance_today: float = 0.0
@@ -200,10 +220,78 @@ class PensionInputs:
     pre_2016_participant: bool = False
     interest_rate: float | None = None
     irs_comp_limit_today: float = 350_000.0
+    lump_sum_mode: Literal["none", "rollover_pretax", "cash"] = "none"
 
     @property
     def annual_at_nrd(self) -> float:
         return self.monthly_at_nrd * 12
+
+
+@dataclass
+class AnnuityInputs:
+    """Inputs for a (separate) annuity contract.
+
+    Models a passive annuity bucket — distinct from the
+    employer-cash-balance pension above. The user is assumed to
+    already own the contract; we don't model premium accumulation
+    during a working career. Pre-payout the balance grows at a
+    flat ``growth_rate`` (or ``cfg.inflation`` when ``None``);
+    post-payout the contract pays a fixed monthly amount
+    (``monthly_at_start * 12`` annually, no COLA — matching the
+    pension's nominal-fixed convention).
+
+    Tax treatment is controlled by ``tax_kind``:
+
+      * ``"qualified"`` — funded with pretax dollars (IRA / 401(k)
+        / 403(b) inside the contract). Distributions are 100%
+        ordinary income, identical to the existing pension model.
+      * ``"non_qualified"`` — funded with after-tax dollars; the
+        contract has a ``cost_basis``. Per IRC §72(b), monthly
+        payments are split via an *exclusion ratio* — a tax-free
+        return of investment until the basis is recovered, then
+        100% taxable. Lump-sum surrender taxes only the gain
+        (balance minus basis), and the §72(q) 10% additional tax
+        applies to the gain (not the basis) when ``a_age < 59.5``.
+
+    The exclusion ratio uses ``expected_payout_years`` rather than
+    IRS life-expectancy tables — see ``tax_optimizer.annuity``.
+    Setting ``expected_payout_years`` to a value much shorter than
+    the true payout horizon front-loads the basis recovery (faster
+    tax-free start, abrupt jump to 100% taxable later).
+
+    Lump-sum knob:
+
+      * ``"none"``           — default. Monthly annuity payments.
+      * ``"rollover_pretax"`` — only valid for qualified annuities
+        (forbidden for non-qualified by ``__post_init__`` per IRC
+        §408 prohibition on rolling non-qualified contracts into
+        qualified IRAs). Balance moves into pretax IRA at
+        ``start_age``; future RMDs and ordinary withdrawals apply.
+      * ``"cash"``           — full balance distributed at
+        ``start_age``. Qualified: full balance ordinary, plus 10%
+        if under 59.5. Non-qualified: only ``balance - cost_basis``
+        is ordinary (basis returned tax-free); 10% applies to the
+        gain only.
+    """
+
+    balance_today: float = 0.0
+    monthly_at_start: float = 0.0
+    start_age: int = 65
+    # ``None`` defers to ``cfg.inflation`` so the contract grows in
+    # real terms at zero by default — a conservative assumption for
+    # a fixed-rate annuity. Set explicitly to model a contract
+    # crediting at, say, 4% per year.
+    growth_rate: float | None = None
+    tax_kind: Literal["qualified", "non_qualified"] = "qualified"
+    cost_basis: float = 0.0
+    # Used to compute the §72(b) exclusion ratio for non-qualified
+    # contracts. Has no effect when ``tax_kind == "qualified"``.
+    expected_payout_years: int = 20
+    lump_sum_mode: Literal["none", "rollover_pretax", "cash"] = "none"
+
+    @property
+    def annual_at_start(self) -> float:
+        return self.monthly_at_start * 12
 
 
 @dataclass
@@ -377,6 +465,7 @@ class Inputs:
     income: CurrentIncome = field(default_factory=CurrentIncome)
     contrib: CurrentContrib = field(default_factory=CurrentContrib)
     pension: PensionInputs = field(default_factory=PensionInputs)
+    annuity: AnnuityInputs = field(default_factory=AnnuityInputs)
     ss: SocialSecurity = field(default_factory=SocialSecurity)
     health_premiums: HealthPremiums = field(default_factory=HealthPremiums)
 
@@ -396,6 +485,54 @@ class Inputs:
                 f"this discriminator through tax / FICA / IRMAA / SS "
                 f"selection, so a typo would silently fall through to "
                 f"the wrong tax tables."
+            )
+        # Lump-sum / tax-kind validation for the pension + annuity
+        # buckets. These ``Literal`` types are advisory at runtime; we
+        # check explicitly here so a typo in a JSON scenario file
+        # raises immediately rather than silently falling through to
+        # the wrong (likely "none") branch in the simulator.
+        _LUMP_SUM_MODES = {"none", "rollover_pretax", "cash"}
+        if self.pension.lump_sum_mode not in _LUMP_SUM_MODES:
+            raise ValueError(
+                f"inputs.pension.lump_sum_mode must be one of "
+                f"{sorted(_LUMP_SUM_MODES)!r}, got "
+                f"{self.pension.lump_sum_mode!r}."
+            )
+        if self.annuity.tax_kind not in ("qualified", "non_qualified"):
+            raise ValueError(
+                f"inputs.annuity.tax_kind must be 'qualified' or "
+                f"'non_qualified', got {self.annuity.tax_kind!r}."
+            )
+        if self.annuity.lump_sum_mode not in _LUMP_SUM_MODES:
+            raise ValueError(
+                f"inputs.annuity.lump_sum_mode must be one of "
+                f"{sorted(_LUMP_SUM_MODES)!r}, got "
+                f"{self.annuity.lump_sum_mode!r}."
+            )
+        # Non-qualified annuities can't be rolled to a qualified IRA
+        # (IRC §408 / §402(c) only authorize rollovers among
+        # qualified plans + IRAs). Catch the configuration error
+        # here so the simulator never has to think about it.
+        if (
+            self.annuity.tax_kind == "non_qualified"
+            and self.annuity.lump_sum_mode == "rollover_pretax"
+        ):
+            raise ValueError(
+                "Non-qualified annuity cannot use lump_sum_mode="
+                "'rollover_pretax': IRC §408 / §402(c) prohibit "
+                "rolling a non-qualified annuity into a qualified "
+                "IRA. Use 'cash' (taxable surrender) instead."
+            )
+        if self.annuity.expected_payout_years <= 0:
+            raise ValueError(
+                f"inputs.annuity.expected_payout_years must be > 0 "
+                f"(used as the §72(b) exclusion-ratio denominator); "
+                f"got {self.annuity.expected_payout_years!r}."
+            )
+        if self.annuity.cost_basis < 0:
+            raise ValueError(
+                f"inputs.annuity.cost_basis must be >= 0; got "
+                f"{self.annuity.cost_basis!r}."
             )
         if self.annual_expenses != _ANNUAL_EXPENSES_LEGACY_DEFAULT:
             warnings.warn(

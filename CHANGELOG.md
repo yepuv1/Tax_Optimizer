@@ -32,6 +32,128 @@ Categories used:
 
 ## [Unreleased]
 
+### Added — Annuity account type + lump-sum knob (pension and annuity)
+
+**Why it matters:** the simulator already modeled a cash-balance
+pension that converts to a fixed monthly annuity at NRD, but
+users had no way to (a) elect the IRS-allowed alternatives —
+direct rollover into an IRA, or a lump-sum cash distribution —
+or (b) model a **separately-purchased annuity contract**
+(qualified or non-qualified) that lives outside the employer
+plan. This release adds both, sharing one consistent UX.
+
+**New knobs:**
+
+- **`inputs.annuity`** (new top-level dataclass mirroring
+  `inputs.pension`'s shape) with:
+    - `balance_today`, `monthly_at_start`, `start_age`,
+      `growth_rate` — the contract's pre-payout balance, monthly
+      payment after start, and pre-payout balance growth rate
+      (defaults to `cfg.inflation` for zero real growth).
+    - `tax_kind: "qualified" | "non_qualified"` — qualified =
+      pretax-funded, fully ordinary income. Non-qualified =
+      after-tax cost basis with the IRC §72(b) exclusion ratio
+      splitting each payment into a tax-free return-of-basis
+      portion and an ordinary-taxable gain portion.
+    - `cost_basis`, `expected_payout_years` — used as the
+      exclusion-ratio numerator/denominator. We use the user's
+      `expected_payout_years` rather than IRS Treas. Reg. §1.72-9
+      life-expectancy tables to keep the model transparent and
+      tweakable.
+- **`inputs.pension.lump_sum_mode`** and
+  **`inputs.annuity.lump_sum_mode`** — both accept
+  `"none" | "rollover_pretax" | "cash"`:
+    - `"none"` — default; existing scenarios behave identically.
+    - `"rollover_pretax"` — at `start_age`, the entire balance
+      moves into `state.spouse_a_pretax_ira` tax-free per IRC
+      §402(c). Future RMDs and ordinary withdrawals apply
+      automatically via the existing pretax pipeline. Forbidden
+      for non-qualified annuities (validated up front per the
+      IRS prohibition on rolling non-qualified contracts into
+      qualified IRAs).
+    - `"cash"` — full balance distributed as a single ordinary-
+      income event at `start_age`. For non-qualified annuities,
+      only the `balance - cost_basis` gain is ordinary; basis
+      returns tax-free. Plus the IRC §72(t) (qualified) /
+      §72(q) (non-qualified) **10% additional tax** if the
+      participant is under 59½ — applied to the gain only for
+      non-qualified contracts.
+
+**Federal-tax surface:** `federal_tax()` gains two new kwargs:
+
+- `annuity_taxable` — joins the ordinary-income stack alongside
+  `pension`. Kept as a separate kwarg (rather than rolled into
+  `pension`) so the simulator output can show the two streams
+  side-by-side in reports.
+- `early_distribution_taxable` — the *taxable* portion of an
+  early lump-sum distribution; the function returns a new
+  `early_distribution_penalty` line that adds to `total_tax`
+  without changing AGI (the principal flows through the regular
+  income kwargs).
+
+**State tax:** annuity income is rolled into the existing `pension`
+kwarg passed to `state_tax`, so retirement-income exclusions
+(IL full / NY $20k / etc.) treat annuities the same as pensions.
+
+**Output columns:** the simulator's per-year DataFrame gains
+`annuity_balance`, `annuity_basis_remaining`, `annuity_payment`,
+`annuity_taxable`, `annuity_tax_free`, `annuity_lump_sum`,
+`annuity_lump_sum_event`, `pension_lump_sum`,
+`pension_lump_sum_event`, and `early_distribution_penalty`.
+
+**Where it lives in code:**
+
+- `tax_optimizer/inputs.py` — new `AnnuityInputs` dataclass +
+  `lump_sum_mode` on `PensionInputs`. Validation in
+  `Inputs.__post_init__` rejects bad enum strings, negative
+  basis, zero `expected_payout_years`, and non-qualified +
+  rollover combinations.
+- `tax_optimizer/state.py` — new `annuity_balance`,
+  `annuity_payment`, `annuity_basis_remaining`,
+  `pension_lump_sum_done`, `annuity_lump_sum_done` fields on
+  `State`. `initial_state` seeds them from inputs.
+- `tax_optimizer/annuity.py` (new) — `exclusion_ratio` helper
+  with full §72(b) docstring including our deviation from the
+  IRS life-expectancy tables.
+- `tax_optimizer/simulator.py` — single new section in the
+  year-loop, right after the existing pension monthly-annuity
+  initializer: pension lump-sum gate, annuity lump-sum gate,
+  pre-payout balance growth, monthly annuity payment with
+  exclusion-ratio split, and threading into `base_kwargs`.
+- `tax_optimizer/tax/federal.py` — new `annuity_taxable` and
+  `early_distribution_taxable` kwargs; new
+  `early_distribution_penalty` return field rolled into
+  `total_tax`.
+- `scenarios/template.json` — adds the `annuity` block and
+  `pension.lump_sum_mode`.
+- `scenarios/example_annuity_nonqualified.json`,
+  `scenarios/example_pension_lump_sum.json` (new) — narrative
+  examples.
+- `dash_app/forms.py` — new "Annuity" simple-tier group
+  (`balance_today`, `monthly_at_start`, `start_age`,
+  `lump_sum_mode`), new "Annuity (advanced)" group (`tax_kind`,
+  `cost_basis`, `expected_payout_years`, `growth_rate`), and a
+  new `inputs.pension.lump_sum_mode` selector under the existing
+  Pension group.
+- `tests/test_annuity_helpers.py` (new) — exclusion-ratio math.
+- `tests/test_simulator_annuity.py` (new) — 17 golden tests
+  covering qualified/non-qualified × monthly/rollover/cash,
+  validation, and pre-payout growth.
+- `tests/test_simulator_pension_lump_sum.py` (new) — 9 tests
+  for pension rollover/cash modes and the one-shot lump-sum
+  latch.
+- `tests/test_scenario_template.py` — extended to cover the
+  new `annuity` nested block.
+
+**Out of scope (deliberate):**
+
+- IRS §72 life-expectancy tables (Treas. Reg. §1.72-9).
+- Variable / index-linked annuity returns (fixed `growth_rate`
+  only).
+- Net Unrealized Appreciation (NUA) on employer-stock lump sums.
+- The IRS aggregation rule for multiple non-qualified annuity
+  contracts (we model a single contract).
+
 ### Added — Single-filer households (`inputs.household_kind`)
 
 **Why it matters:** the simulator was previously

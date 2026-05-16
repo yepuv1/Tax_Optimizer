@@ -149,7 +149,19 @@
       "years_of_service_today": null,
       "pre_2016_participant": false,
       "interest_rate": null,
-      "irs_comp_limit_today": 350000.0
+      "irs_comp_limit_today": 350000.0,
+      "lump_sum_mode": "none"
+    },
+
+    "annuity": {
+      "balance_today": 0.0,
+      "monthly_at_start": 0.0,
+      "start_age": 65,
+      "growth_rate": null,
+      "tax_kind": "qualified",
+      "cost_basis": 0.0,
+      "expected_payout_years": 20,
+      "lump_sum_mode": "none"
     },
 
     "ss": {
