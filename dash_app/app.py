@@ -586,6 +586,7 @@ def make_app() -> dash.Dash:
 
     @app.callback(
         Output({"type": "form-input", "path": ALL}, "value"),
+        Output("scenario-loaded-name", "children"),
         Output("run-status", "children", allow_duplicate=True),
         Input("scenario-upload", "contents"),
         State("scenario-upload", "filename"),
@@ -593,8 +594,13 @@ def make_app() -> dash.Dash:
         prevent_initial_call=True,
     )
     def _load_scenario(upload_contents, upload_filename, ids):
+        # The "currently loaded" indicator (`scenario-loaded-name`) is
+        # a *separate* output from `run-status` — without that split,
+        # the run callback would overwrite the filename text the
+        # next time the user clicks Run, and they'd lose track of
+        # which scenario they're currently working with.
         if not upload_contents:
-            return [no_update] * len(ids), no_update
+            return [no_update] * len(ids), no_update, no_update
         try:
             _header, _, b64 = upload_contents.partition(",")
             raw = base64.b64decode(b64).decode("utf-8")
@@ -606,16 +612,37 @@ def make_app() -> dash.Dash:
                 cfg, inputs = apply_scenario(Config(), Inputs(), payload)
             values = cfg_inputs_to_form_values(cfg, inputs)
         except (ScenarioError, json.JSONDecodeError, ValueError) as e:
-            return [no_update] * len(ids), html.Span(
-                f"Failed to load scenario: {e}", className="text-danger"
+            return (
+                [no_update] * len(ids),
+                no_update,
+                html.Span(
+                    f"Failed to load scenario: {e}",
+                    className="text-danger",
+                ),
             )
 
         new_values = []
         for ident in ids:
             v = values.get(ident["path"])
             new_values.append("" if v is None else v)
-        return new_values, html.Span(
-            f"Loaded scenario from {source}.", className="text-success"
+        loaded_label = html.Span(
+            [
+                html.Span(
+                    "\U0001F4C4 ",  # 📄
+                    style={"marginRight": "0.25rem"},
+                ),
+                "Loaded: ",
+                html.Span(source, className="fw-semibold"),
+            ],
+            className="text-success",
+        )
+        return (
+            new_values,
+            loaded_label,
+            html.Span(
+                f"Loaded scenario from {source}.",
+                className="text-success",
+            ),
         )
 
     # ---- Save scenario --------------------------------------------

@@ -336,3 +336,32 @@ span.strategy-cell-optimized {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
         "Helvetica Neue", Arial, sans-serif;
 }
+
+/* ---- Run-control card -------------------------------------------- */
+/* "Loaded: foo.json" indicator that sits below the upload widget.
+ * Empty when no scenario has been loaded yet — collapse the
+ * vertical space so the run-mode section above doesn't bounce
+ * down when a file is dropped. The :empty selector covers the
+ * initial render before any callback has fired. */
+.scenario-loaded-name:empty {
+    display: none;
+}
+
+.scenario-loaded-name {
+    /* Slight indent so the icon + filename hangs visually
+     * aligned with the contents of the upload box above. */
+    padding-left: 0.25rem;
+    word-break: break-all;
+}
+
+/* Horizontal radio strip for "Run mode" — keep the three
+ * options on one line and bump the row to ~28px so it lines up
+ * with the input baseline below. */
+.run-mode-radios label {
+    /* Bootstrap's default checkbox label leaves no breathing
+     * room between the dot and the text; the inline style on
+     * `inputStyle` handles that, but we add a tiny bottom
+     * margin so any wrap (very narrow viewports) stays
+     * readable. */
+    margin-bottom: 0.15rem;
+}

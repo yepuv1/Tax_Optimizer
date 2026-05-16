@@ -32,6 +32,70 @@ Categories used:
 
 ## [Unreleased]
 
+### Fixed — Dash app: Monte Carlo histogram P50 callout overlapping the chart title
+
+**Why it matters:** the `mc_terminal_histogram` figure pushed
+the median (P50) percentile callout up by ``yshift=22`` to give
+it a separate vertical row from the side labels (P10 / P90).
+The intent was anti-overlap protection in the pathological
+"P10 ≈ P50" case — but the side effect was that the P50 box
+landed inside the chart-title margin band, where it visibly
+collided with the title text on every typical run (see the
+screenshot in the conversation thread).
+
+**Fix:** drop ``yshift`` to 0 for all three callouts. The
+existing horizontal-anchor differentiation (P10 anchored
+LEFT, P50 CENTER, P90 RIGHT) is sufficient overlap protection
+on its own — the three callouts land in three different
+horizontal zones for any plausible percentile set, so the
+extra vertical staggering was redundant. The 80 px top margin
+is retained so the title still has comfortable breathing room
+above the top-of-plot callout row.
+
+**Tests:** `test_dash_mc_histogram.py` —
+`test_p50_label_is_vertically_offset` (which previously pinned
+``yshifts["P50"] > yshifts["P10"]``) renamed to
+`test_no_callout_pierces_the_title_margin` and rewritten as
+the *opposite* assertion: every callout's ``yshift`` must be
+``<= 0`` so a future change can't reintroduce the
+title-overlap regression. The top-margin test had its rationale
+comment updated to reflect the new design.
+
+### Fixed — Dash app: run-control card layout + persistent loaded-scenario filename
+
+**Why it matters:** the run-control card at the top of the
+sidebar had two related UX defects:
+
+1. **Filename was overwritten.** The "Loaded scenario from
+   foo.json" message was written to the shared ``run-status``
+   div, which the Run callback then clobbered with the run
+   summary ("Ran 'four_plus_mc' in 1.5s. Winner: …"). After
+   one click of Run the user lost track of which scenario was
+   currently loaded into the form.
+2. **Inconsistent column heights.** The run-mode radios sat
+   in a single ``md=5`` column with vertically-stacked labels.
+   "Four + Monte Carlo (~10-30s)" wrapped onto two lines on
+   typical viewports, making that column visually taller than
+   the MC paths / Seed / Run column to its right. The Run
+   button ended up wedged mid-height, which read as a layout
+   bug.
+
+**Fix:**
+
+- Added a new ``scenario-loaded-name`` div directly below the
+  upload widget, with its own callback output. The filename
+  ("📄 Loaded: foo.json") persists there independently of
+  ``run-status``, so subsequent runs no longer overwrite it.
+- Reorganized ``top_bar()`` into three rows: scenario I/O
+  (upload + download + the new loaded-name indicator), a
+  full-width horizontal run-mode radio strip (no more wrap),
+  and a balanced ``md=4 / md=4 / md=4`` row for MC paths /
+  Seed / Run with shared baseline alignment.
+- New CSS: ``.scenario-loaded-name:empty { display: none; }``
+  collapses the indicator's vertical space until a file is
+  loaded, and ``.run-mode-radios label`` keeps the horizontal
+  radio strip readable on narrow viewports.
+
 ### Fixed — Dash app: duplicate hint tooltips on hover (Overview tiles + form fields)
 
 **Why it matters:** every hint surface in the dashboard

@@ -11,9 +11,8 @@ These tests pin the anti-overlap layout:
 * abbreviated dollar formatting (`$5.8M` not `$5,826,124`),
 * three different ``xanchor`` values so the labels land in three
   different horizontal zones,
-* a non-zero ``yshift`` on the middle (P50) callout so even if
-  P10 and P50 lines are close in x, the labels sit in different
-  vertical rows,
+* every callout sits *inside* the plot area (``yshift <= 0``) so
+  none of them encroach on the chart title's margin band,
 * the chart title also uses the abbreviated formatter so the
   CVaR readout stays compact.
 """
@@ -139,23 +138,31 @@ class TestPercentileAnnotations:
         assert anchors_by_tag["P50"] == "center"
         assert anchors_by_tag["P90"] == "left"
 
-    def test_p50_label_is_vertically_offset(
+    def test_no_callout_pierces_the_title_margin(
         self, mc_payload_with_skewed_distribution
     ) -> None:
-        """Anti-overlap layout pin #2: even with horizontal
-        anchoring fixed, in pathological cases (e.g. P10 ≈ P50)
-        the labels could still collide. Bumping P50 up by
-        `yshift>0` puts it in a different vertical row from the
-        side labels so the worst case stays readable.
+        """Anti-overlap layout pin #2: every percentile callout
+        must sit at or below the top of the plot area
+        (``yshift <= 0``). A previous version pushed the P50
+        callout up by ``yshift=22`` to give it a separate
+        vertical row from the side labels, but that placed it
+        squarely inside the chart-title margin band where it
+        visibly collided with the title text.
+
+        With horizontal anchor differentiation already in place
+        (P10 left / P50 center / P90 right), all three callouts
+        can safely share the top-of-plot row without overlapping
+        each other for any plausible percentile set.
         """
         fig = mc_terminal_histogram(mc_payload_with_skewed_distribution)
-        yshifts: dict[str, int] = {}
         for ann in fig.layout.annotations:
             tag = (ann.text or "").split(":")[0]
-            yshifts[tag] = ann.yshift or 0
-        # P50 sits in a higher row than the side labels.
-        assert yshifts["P50"] > yshifts["P10"]
-        assert yshifts["P50"] > yshifts["P90"]
+            yshift = ann.yshift or 0
+            assert yshift <= 0, (
+                f"{tag} callout has yshift={yshift} (> 0) — that "
+                "would push it into the chart-title margin band "
+                "and cause the title-overlap regression."
+            )
 
     def test_annotations_have_background_for_legibility(
         self, mc_payload_with_skewed_distribution
@@ -185,11 +192,11 @@ class TestPercentileAnnotations:
     def test_top_margin_is_extended(
         self, mc_payload_with_skewed_distribution
     ) -> None:
-        """Bumping P50 up by `yshift=22` pushes it close to the
-        chart title. Extra top margin keeps them from crashing
-        into each other.
+        """Even with the percentile callouts pinned inside the plot
+        area, the title needs breathing room above the top row of
+        callouts. Default ``_LAYOUT.margin.t`` is 50; this builder
+        overrides it to 80 so the title can't crowd the topmost
+        callout.
         """
         fig = mc_terminal_histogram(mc_payload_with_skewed_distribution)
-        # Default `_LAYOUT.margin.t` is 50; this builder overrides
-        # it to 80.
         assert (fig.layout.margin.t or 0) >= 70

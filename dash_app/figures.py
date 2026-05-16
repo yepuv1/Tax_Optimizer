@@ -1006,27 +1006,34 @@ def mc_terminal_histogram(mc_payload: dict[str, Any] | None) -> go.Figure:
     # bluish-green (best case). Okabe-Ito hues, all three
     # CB-distinguishable and luminance-distinct.
     #
-    # Anti-overlap layout: we anchor the leftmost label (P10)
-    # to the LEFT of its line, the rightmost (P90) to the
-    # RIGHT, and the middle (P50) ABOVE its line bumped up by
-    # `yshift=22` so it sits in a higher row than the side
-    # labels. This way the three callouts land in three
-    # different visual zones and never collide even when the
-    # P10/P50 lines are close in x (the common case for skewed
-    # terminal-NW distributions where the median sits well
-    # below the mean).
+    # Anti-overlap layout: the leftmost label (P10) anchors to
+    # the LEFT of its line, the rightmost (P90) to the RIGHT,
+    # and the middle (P50) is CENTERED above its line. The
+    # three different horizontal anchor directions push the
+    # labels into three different visual zones, so the
+    # callouts never collide for any plausible percentile
+    # set.
+    #
+    # **Title clearance**: every callout sits at the top of
+    # the plot area (``yshift=0``) — INSIDE the chart, not
+    # above it. An earlier version pushed the P50 callout up
+    # by ``yshift=22`` to give it a separate "row" from the
+    # side labels, but that put it in the chart-title margin
+    # band where it visibly collided with the title text. We
+    # rely on the horizontal-anchor scheme alone for overlap
+    # protection now.
     #
     # We also abbreviate the dollar values via
-    # `_abbrev_dollars` ("$5.8M" instead of "$5,826,124") —
+    # ``_abbrev_dollars`` ("$5.8M" instead of "$5,826,124") —
     # cuts label width by ~60% and gives the layout extra
     # headroom for unusually-clustered percentile sets.
     #
-    # `bgcolor` at 88% white on each annotation prevents the
-    # text from disappearing into the histogram bars or into
-    # the chart title above.
+    # ``bgcolor`` at 88 % white on each annotation prevents
+    # the text from disappearing into the histogram bars
+    # behind it.
     percentile_styles = (
         ("p10", _OKABE_ITO["vermillion"],   "top left",   0),
-        ("p50", _OKABE_ITO["black"],        "top",        22),
+        ("p50", _OKABE_ITO["black"],        "top",        0),
         ("p90", _OKABE_ITO["bluish_green"], "top right",  0),
     )
     for tag, color, position, yshift in percentile_styles:
@@ -1043,8 +1050,9 @@ def mc_terminal_histogram(mc_payload: dict[str, Any] | None) -> go.Figure:
             annotation_borderpad=3,
             annotation_font=dict(size=11, color=color),
         )
-    # Extra top margin so the bumped-up P50 callout doesn't
-    # crash into the chart title.
+    # Extra top margin so the percentile callouts at the top
+    # of the plot area have visible breathing room beneath the
+    # chart title.
     layout = {**_LAYOUT, "margin": dict(l=60, r=20, t=80, b=50)}
     fig.update_layout(
         title=(

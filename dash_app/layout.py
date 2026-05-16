@@ -220,9 +220,34 @@ def render_form(values: dict[str, Any], tier: str) -> dbc.Accordion:
 
 
 def top_bar() -> dbc.Card:
+    """Run-control card pinned above the main tabs.
+
+    Three vertically-stacked sections, each in its own row so the
+    columns stay consistent regardless of viewport width:
+
+    1. **Scenario I/O** — upload + download controls plus a
+       persistent "currently loaded" badge so the filename stays
+       visible even after the user kicks off a run (the run-status
+       area below would otherwise overwrite it).
+    2. **Run mode** — a horizontal radio strip across the full
+       width. Horizontal layout keeps the three options on a
+       single line without wrapping the longest label
+       ("Four + Monte Carlo (~10-30s)") onto a second row, which
+       was the source of the inconsistent heights in the previous
+       layout.
+    3. **Run options + execute** — the MC-only knobs (paths /
+       seed) sit on the left, with a generous Run button on the
+       right. All three controls share the same row height so the
+       baseline stays clean.
+
+    The ``run-status`` div at the bottom is intentionally
+    *separate* from the "scenario loaded" badge — runs can
+    overwrite it freely without touching the filename indicator.
+    """
     return dbc.Card(
         dbc.CardBody(
             [
+                # ---- Section 1: scenario I/O ---------------------
                 dbc.Row(
                     [
                         dbc.Col(
@@ -260,12 +285,24 @@ def top_bar() -> dbc.Card:
                                         "cursor": "pointer",
                                     },
                                 ),
+                                # Persistent indicator of the
+                                # currently-loaded scenario. Sits
+                                # right below the upload box so the
+                                # filename never gets clobbered by
+                                # later run-status writes.
+                                html.Div(
+                                    id="scenario-loaded-name",
+                                    className="small text-muted mt-1 scenario-loaded-name",
+                                ),
                             ],
                             md=8,
                         ),
                         dbc.Col(
                             [
-                                html.Label("Save scenario", className="form-label small"),
+                                html.Label(
+                                    "Save scenario",
+                                    className="form-label small",
+                                ),
                                 dbc.Button(
                                     "Download JSON",
                                     id="scenario-save-btn",
@@ -276,36 +313,54 @@ def top_bar() -> dbc.Card:
                                 dcc.Download(id="scenario-download"),
                             ],
                             md=4,
-                            className="d-flex flex-column justify-content-end",
+                            className="d-flex flex-column",
                         ),
                     ],
-                    className="g-2 align-items-end",
+                    className="g-2",
                 ),
                 html.Hr(className="my-2"),
+                # ---- Section 2: run mode -------------------------
+                html.Div(
+                    [
+                        html.Label(
+                            "Run mode",
+                            className="form-label small mb-1",
+                        ),
+                        dcc.RadioItems(
+                            id="run-mode",
+                            options=[
+                                {"label": " Single sim (~1s)",
+                                 "value": "single"},
+                                {"label": " Four strategies (~5-10s)",
+                                 "value": "four_strategies"},
+                                {"label": " Four + Monte Carlo (~10-30s)",
+                                 "value": "four_plus_mc"},
+                            ],
+                            value="four_strategies",
+                            # Horizontal layout — `inline-block` per
+                            # label keeps the three on one line and
+                            # prevents the longest label from
+                            # wrapping into a second visual row.
+                            labelStyle={
+                                "display": "inline-block",
+                                "marginRight": "1.25rem",
+                                "fontSize": "0.85rem",
+                            },
+                            inputStyle={"marginRight": "6px"},
+                            className="run-mode-radios",
+                        ),
+                    ],
+                    className="mb-2",
+                ),
+                # ---- Section 3: run options + execute ------------
                 dbc.Row(
                     [
                         dbc.Col(
                             [
-                                html.Label("Run mode", className="form-label small"),
-                                dcc.RadioItems(
-                                    id="run-mode",
-                                    options=[
-                                        {"label": " Single sim (~1s)", "value": "single"},
-                                        {"label": " Four strategies (~5-10s)",
-                                         "value": "four_strategies"},
-                                        {"label": " Four + Monte Carlo (~10-30s)",
-                                         "value": "four_plus_mc"},
-                                    ],
-                                    value="four_strategies",
-                                    labelStyle={"display": "block", "fontSize": "0.85rem"},
-                                    inputStyle={"marginRight": "6px"},
+                                html.Label(
+                                    "MC paths",
+                                    className="form-label small",
                                 ),
-                            ],
-                            md=5,
-                        ),
-                        dbc.Col(
-                            [
-                                html.Label("MC paths", className="form-label small"),
                                 dcc.Input(
                                     id="mc-paths",
                                     type="number",
@@ -316,11 +371,14 @@ def top_bar() -> dbc.Card:
                                     className="form-control form-control-sm",
                                 ),
                             ],
-                            md=3,
+                            md=4,
                         ),
                         dbc.Col(
                             [
-                                html.Label("Seed", className="form-label small"),
+                                html.Label(
+                                    "Seed",
+                                    className="form-label small",
+                                ),
                                 dcc.Input(
                                     id="mc-seed",
                                     type="number",
@@ -329,11 +387,17 @@ def top_bar() -> dbc.Card:
                                     className="form-control form-control-sm",
                                 ),
                             ],
-                            md=2,
+                            md=4,
                         ),
                         dbc.Col(
                             [
-                                html.Label(html.Span("\u00a0"), className="form-label small"),
+                                # Empty label spacer — keeps the
+                                # button baseline aligned with the
+                                # two inputs to its left.
+                                html.Label(
+                                    html.Span("\u00a0"),
+                                    className="form-label small",
+                                ),
                                 dbc.Button(
                                     "Run",
                                     id="run-btn",
@@ -342,12 +406,15 @@ def top_bar() -> dbc.Card:
                                     className="w-100",
                                 ),
                             ],
-                            md=2,
+                            md=4,
                         ),
                     ],
                     className="g-2 align-items-end",
                 ),
-                html.Div(id="run-status", className="small text-muted mt-2"),
+                html.Div(
+                    id="run-status",
+                    className="small text-muted mt-2",
+                ),
             ]
         ),
         className="mb-3",
