@@ -8,7 +8,9 @@ tooltips. This page covers everything you need to run it.
 
 > Looking for the Python API or the CLI? See the
 > [main README](../README.md). For the scenario JSON schema, see
-> [`docs/scenario_guide.md`](scenario_guide.md).
+> [`docs/scenario_guide.md`](scenario_guide.md). For an end-to-end
+> "how do I model X?" walkthrough, see
+> [`docs/modeling_guide.md`](modeling_guide.md).
 
 ## Contents
 

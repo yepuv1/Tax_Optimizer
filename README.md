@@ -50,8 +50,10 @@ The deterministic engine models federal brackets, LTCG, NIIT, IRMAA, Social-Secu
 │   └── figures.py                    # pure Plotly figure builders
 ├── docs/
 │   ├── architecture.md               # per-module reference + cross-cutting diagrams
+│   ├── modeling_guide.md             # end-to-end "how do I model X" task guide
 │   ├── roth_conversion.md            # how Roth conversion sizing + liquidity guards work
 │   ├── scenario_guide.md             # reference for every scenario JSON field
+│   ├── annuity_guide.md              # annuity + pension lump-sum: Dash, JSON, CLI
 │   └── market_models.md              # market-model landscape & design rationale
 ├── CHANGELOG.md                      # feature / fix log (update on every change)
 ├── tax_optimizer_standalone.ipynb    # canonical demo notebook (imports from the package)
@@ -644,6 +646,8 @@ Federal bracket numbers, IRS Uniform Lifetime divisors, pension-formula coeffici
 | [`docs/architecture.md`](docs/architecture.md) | Per-module deep dive: what each `tax_optimizer/*.py` file does, how the modules layer together, and Mermaid diagrams for the cross-cutting flows (year-loop sequence, contribution cascade, withdrawal cascade, tax pipeline, Roth-conversion liquidity guard, optimizer/MC relationship). Start here when extending or auditing the package. |
 | [`docs/roth_conversion.md`](docs/roth_conversion.md) | Mechanism-focused walkthrough of Roth conversion sizing (fixed vs bracket-fill), the v6.5 liquidity guard (`tax_paying_capacity` formula + bisection), Roth protection in the deficit cascade, and the seven knobs that control it all. Includes a numerical worked example and audit recipes for the diagnostic columns. |
 | [`docs/scenario_guide.md`](docs/scenario_guide.md) | Reference for every field in a scenario JSON — `config.*`, `inputs.*`, all knobs and their defensible ranges. |
+| [`docs/modeling_guide.md`](docs/modeling_guide.md) | End-to-end task-oriented modeling guide: starts from a fresh scenario, walks through all 17 modeling areas (household, taxes, SS, pension/annuity, healthcare, market, withdrawals, conversions, RMDs, optimizer), explains the four run modes, and tells you which deeper doc to read for the math. Read this first if you're new to the package. |
+| [`docs/annuity_guide.md`](docs/annuity_guide.md) | End-user guide for the annuity account type and the pension/annuity `lump_sum_mode` knob: how to configure from the Dash app, scenario JSON, and the CLI / Python API. Covers qualified vs non-qualified contracts, the §72(b) exclusion ratio, the rollover/cash/none modes, validation errors, and FAQ. |
 | [`docs/market_models.md`](docs/market_models.md) | Landscape of retirement Monte Carlo market models, the industry segments that use each one, and the design rationale behind which models we ship (vs. deliberately skip). Includes the v6 `cross_model_check` API for surfacing model-choice risk in the action report. |
 
 ## What's not modeled (yet)

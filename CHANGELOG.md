@@ -32,6 +32,48 @@ Categories used:
 
 ## [Unreleased]
 
+### Added — Production-grade Dash launcher (`tax-optimizer-app-prod`)
+
+**Why it matters:** the default `tax-optimizer-app` boots the Dash
+app on Flask / Werkzeug's development server, which prints the
+familiar "Do not use it in a production deployment" warning on
+every start. For local single-user planning that warning is
+harmless, but anyone exposing the app on a LAN, sharing it across
+a small team, or pointing automation at it should run a real WSGI
+server. This release adds an opt-in production launcher that
+serves the same `app.server` Flask object through
+[`waitress`](https://github.com/Pylons/waitress) — pure-Python,
+cross-platform (works on Windows too), no system dependencies.
+
+**Usage:**
+
+```
+pip install -e ".[prod]"
+tax-optimizer-app-prod                         # 127.0.0.1:8050
+tax-optimizer-app-prod --host 0.0.0.0 --port 9000
+tax-optimizer-app-prod --threads 8
+```
+
+`DASH_HOST` / `DASH_PORT` env vars are honored as defaults
+(matching the dev entry point). If the user runs the prod
+launcher without installing the `[prod]` extra, they get a
+friendly install-the-extra message and exit code 1 instead of
+an opaque `ImportError`.
+
+`gunicorn` was deliberately not chosen — it's POSIX-only (fork-
+based), which would have made the prod path silently broken on
+Windows. `waitress` is the right "small self-hosted planner"
+default.
+
+**Where it lives in code:**
+- `dash_app/prod.py` (new) — argparse CLI + waitress launcher.
+- `pyproject.toml` — new `[project.optional-dependencies] prod`
+  extra (`waitress>=3.0`); new `tax-optimizer-app-prod` console
+  script mapped to `dash_app.prod:main`.
+- `tests/test_dash_prod_entrypoint.py` (new) — smoke tests for
+  `--help`, the missing-`waitress` friendly-error path, and the
+  callable surface that `[project.scripts]` depends on.
+
 ### Added — Annuity account type + lump-sum knob (pension and annuity)
 
 **Why it matters:** the simulator already modeled a cash-balance

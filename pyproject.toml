@@ -49,6 +49,12 @@ pdf = [
     # See https://doc.courtbouillon.org/weasyprint/stable/first_steps.html
     "weasyprint>=60",
 ]
+prod = [
+    # Production WSGI server for `tax-optimizer-app-prod`. Pure Python,
+    # cross-platform, no system dependencies — picked over gunicorn so
+    # the prod path also works on Windows.
+    "waitress>=3.0",
+]
 dev = [
     "ruff>=0.4",
     "black>=24.3",
@@ -67,6 +73,7 @@ include = ["tax_optimizer*", "dash_app*"]
 [project.scripts]
 tax-optimizer = "tax_optimizer.__main__:main"
 tax-optimizer-app = "dash_app.__main__:main"
+tax-optimizer-app-prod = "dash_app.prod:main"
 
 [tool.ruff]
 line-length = 100

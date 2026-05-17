@@ -2,6 +2,8 @@
 
 A field-by-field reference for `scenarios/*.json` files (the input format consumed by `tax-optimizer --scenario PATH` and `apply_scenario(...)`), assembled from the running explanations in this project's chat history.
 
+> **New here?** Read [`docs/modeling_guide.md`](modeling_guide.md) first — it's the task-oriented "how do I model X?" walkthrough. This file is the field reference you'll come back to once you know which knob to look up.
+
 > Use this alongside `tax_optimizer/scenario.py` (the loader / validator) and `scenarios/example01.json` / `scenarios/example02.json` (worked examples).
 
 ---
@@ -572,6 +574,15 @@ When one spouse dies, the survivor switches to the **survivor benefit**: keeps t
   }
 }
 ```
+
+> **Lump-sum election + annuity contracts.** `inputs.pension`
+> also accepts a `lump_sum_mode` field (`"none"` /
+> `"rollover_pretax"` / `"cash"`), and there's a separate
+> `inputs.annuity` block for modeling a privately-owned annuity
+> contract (qualified or non-qualified). Both are documented in
+> [`docs/annuity_guide.md`](annuity_guide.md), including the
+> §72(b) exclusion ratio and the IRC §72(t) / §72(q) 10%
+> early-distribution surtax rules.
 
 | Field | Type | Default | Means |
 |---|---|---:|---|
