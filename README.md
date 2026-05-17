@@ -70,7 +70,7 @@ Python **3.10+** on macOS, Linux, or Windows.
 ## Setup
 
 ```bash
-git clone https://github.com/vijayyepuri/Tax_Optimizer.git
+git clone https://github.com/yepuv1/Tax_Optimizer.git
 cd Tax_Optimizer
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate

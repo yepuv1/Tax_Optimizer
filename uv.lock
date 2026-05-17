@@ -3482,6 +3482,28 @@ prod = [
     { name = "waitress" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "black" },
+    { name = "mypy" },
+    { name = "nbqa" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+notebook = [
+    { name = "ipykernel" },
+    { name = "jupyter" },
+    { name = "jupyterlab" },
+    { name = "notebook" },
+]
+pdf = [
+    { name = "weasyprint" },
+]
+prod = [
+    { name = "waitress" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.3" },
@@ -3509,6 +3531,24 @@ requires-dist = [
     { name = "weasyprint", marker = "extra == 'pdf'", specifier = ">=60" },
 ]
 provides-extras = ["notebook", "pdf", "prod", "dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "black", specifier = ">=24.3" },
+    { name = "mypy", specifier = ">=1.10" },
+    { name = "nbqa", specifier = ">=1.8" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-cov", specifier = ">=5.0" },
+    { name = "ruff", specifier = ">=0.4" },
+]
+notebook = [
+    { name = "ipykernel", specifier = ">=6.29" },
+    { name = "jupyter", specifier = ">=1.0" },
+    { name = "jupyterlab", specifier = ">=4.0" },
+    { name = "notebook", specifier = ">=7.0" },
+]
+pdf = [{ name = "weasyprint", specifier = ">=60" }]
+prod = [{ name = "waitress", specifier = ">=3.0" }]
 
 [[package]]
 name = "terminado"

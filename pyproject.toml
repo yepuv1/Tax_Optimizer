@@ -37,6 +37,16 @@ dependencies = [
     "plotly>=5.18",
 ]
 
+# `[project.optional-dependencies]` keeps the public-facing extras
+# wiring intact, so downstream consumers can still do
+# `pip install tax-optimizer[notebook,pdf,prod,dev]` exactly as
+# before. They are mirrored into `[dependency-groups]` below so
+# `uv sync` can default-include them — see the `[tool.uv]`
+# `default-groups` setting at the bottom of the file. Editing
+# either copy alone will drift; the `dev` / `notebook` / `pdf` /
+# `prod` lists are deliberately duplicated so each installer
+# (pip-with-extras vs. uv-sync-with-groups) sees a single source
+# of truth in its own idiom.
 [project.optional-dependencies]
 notebook = [
     "jupyter>=1.0",
@@ -64,8 +74,36 @@ dev = [
     "nbqa>=1.8",
 ]
 
+# PEP 735 dependency-groups. Mirrors `[project.optional-dependencies]`
+# above so `uv sync` (without `--extra`/`--all-extras` flags) installs
+# everything declared here in one shot, including the `prod` WSGI
+# server needed by the `tax-optimizer-app-prod` console script. The
+# `[tool.uv] default-groups = "all"` line at the bottom of this file
+# is what makes `uv sync` pick all of these up by default.
+[dependency-groups]
+dev = [
+    "ruff>=0.4",
+    "black>=24.3",
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "nbqa>=1.8",
+]
+notebook = [
+    "jupyter>=1.0",
+    "jupyterlab>=4.0",
+    "notebook>=7.0",
+    "ipykernel>=6.29",
+]
+pdf = [
+    "weasyprint>=60",
+]
+prod = [
+    "waitress>=3.0",
+]
+
 [project.urls]
-Repository = "https://github.com/vijayyepuri/Tax_Optimizer"
+Repository = "https://github.com/yepuv1/Tax_Optimizer"
 
 [tool.setuptools.packages.find]
 include = ["tax_optimizer*", "dash_app*"]
@@ -74,6 +112,21 @@ include = ["tax_optimizer*", "dash_app*"]
 tax-optimizer = "tax_optimizer.__main__:main"
 tax-optimizer-app = "dash_app.__main__:main"
 tax-optimizer-app-prod = "dash_app.prod:main"
+
+# Make `uv sync` install every dependency-group (dev tooling +
+# notebook kernels + WeasyPrint + waitress) without requiring
+# `--all-extras` or per-group flags. After cloning the repo a single
+# `uv sync` call leaves all three console scripts immediately usable:
+#
+#   * `tax-optimizer`           (CLI; needs only base dependencies)
+#   * `tax-optimizer-app`       (Dash dev server; base dependencies)
+#   * `tax-optimizer-app-prod`  (waitress; needs the `prod` group)
+#
+# Plus the dev toolchain (ruff / black / mypy / pytest / pytest-cov)
+# and a Jupyter kernel for the bundled `retirement_planning_demo.ipynb`.
+# Override on a one-off basis with `uv sync --no-default-groups`.
+[tool.uv]
+default-groups = "all"
 
 [tool.ruff]
 line-length = 100

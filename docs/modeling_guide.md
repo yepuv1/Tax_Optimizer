@@ -1082,4 +1082,4 @@ By goal:
   [`CHANGELOG.md`](../CHANGELOG.md).
 
 Feedback / bugs / new feature requests:
-[github.com/vijayyepuri/Tax_Optimizer](https://github.com/vijayyepuri/Tax_Optimizer)/issues.
+[github.com/yepuv1/Tax_Optimizer](https://github.com/yepuv1/Tax_Optimizer)/issues.

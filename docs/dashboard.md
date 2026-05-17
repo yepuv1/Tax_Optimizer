@@ -41,7 +41,7 @@ tooltips. This page covers everything you need to run it.
 ## Quickstart
 
 ```bash
-git clone https://github.com/vijayyepuri/Tax_Optimizer.git
+git clone https://github.com/yepuv1/Tax_Optimizer.git
 cd Tax_Optimizer
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
@@ -478,7 +478,7 @@ itself — Python module resolution needs the parent directory on
 ---
 
 For dashboard-specific bugs, open an issue on
-<https://github.com/vijayyepuri/Tax_Optimizer/issues> with:
+<https://github.com/yepuv1/Tax_Optimizer/issues> with:
 
 - Your OS + Python version (`python --version`).
 - The output of `pip show dash dash-bootstrap-components plotly`.
