@@ -511,7 +511,9 @@ def simulate(
         #     this single year so the income flows through the
         #     standard tax + cash-surplus path. Below, we also
         #     inject the 10% IRC §72(t) additional tax via
-        #     `early_distribution_taxable` if `a_age < 60`.
+        #     `early_distribution_taxable` if the distribution falls
+        #     before 59½ (with mid-year proration in the boundary
+        #     year — see the §72(t) block below).
         #
         # The `pension_lump_sum_done` flag latches the event so
         # later years see `pension_balance == 0` and don't re-run
@@ -808,17 +810,37 @@ def simulate(
         # IRC §72(t) (qualified plans) / §72(q) (non-qualified
         # annuities): a 10% additional tax on the *taxable* portion
         # of an early distribution, on top of regular ordinary tax.
-        # We use `a_age < 60` as the integer-age proxy for "before
-        # 59½" — both match in practice for annual mid-year ages.
+        # The statutory boundary is 59½, not 60. With integer ages
+        # (`a_age` = age at start of simulation year), three cases:
+        #   * a_age <= 58  → spouse is below 59½ for the entire year
+        #     (turns 59 next year), full penalty applies.
+        #   * a_age == 59  → spouse crosses 59½ midway through the
+        #     year; pre-fix this attracted full penalty, which over-
+        #     taxes a typical year-end lump. We prorate at 0.5 so the
+        #     simulator approximates a mid-year crossing without
+        #     requiring a month-of-birth input.
+        #   * a_age >= 60  → spouse is past 59½ for the entire year.
         # Rollovers are exempt by statute (no current-year tax at
         # all), as is the basis-return portion of a non-qualified
-        # surrender (IRC §72(q) only hits the gain).
+        # surrender (IRC §72(q) only hits the gain). SEPP / first-
+        # time-home / disability / medical exceptions are not
+        # modeled (see `docs/references.md` open questions).
+        if a_age <= 58:
+            pre59_factor = 1.0
+        elif a_age == 59:
+            pre59_factor = 0.5
+        else:
+            pre59_factor = 0.0
         early_distribution_taxable = 0.0
-        if a_age < 60:
+        if pre59_factor > 0.0:
             if pension_lump_sum_event == "cash":
-                early_distribution_taxable += pension_lump_sum_taxable
+                early_distribution_taxable += (
+                    pre59_factor * pension_lump_sum_taxable
+                )
             if annuity_lump_sum_event == "cash":
-                early_distribution_taxable += annuity_lump_sum_taxable
+                early_distribution_taxable += (
+                    pre59_factor * annuity_lump_sum_taxable
+                )
 
         base_kwargs = dict(
             wages=wages_box1,

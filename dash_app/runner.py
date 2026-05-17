@@ -78,7 +78,36 @@ def _strategy_result(name: str, cfg: Config, inputs: Inputs) -> StrategyResult:
     )
 
 
-def _build_four(cfg: Config, inputs: Inputs, *, seed: int) -> dict[str, StrategyResult]:
+_VALID_OBJECTIVES = ("terminal", "cvar", "p_success")
+
+
+def _build_four(
+    cfg: Config,
+    inputs: Inputs,
+    *,
+    seed: int,
+    objective: str = "terminal",
+    maxiter: int = 20,
+    popsize: int = 10,
+) -> dict[str, StrategyResult]:
+    """Construct the canonical four strategies (S0–S3).
+
+    ``objective`` / ``maxiter`` / ``popsize`` flow into the
+    differential-evolution optimizer that builds S3. Pre-fix these
+    were hard-coded at runner level so the Dash UI couldn't surface
+    them; the Dash run controls now expose all three.
+    """
+    if objective not in _VALID_OBJECTIVES:
+        raise ValueError(
+            f"Unknown optimizer objective {objective!r}. "
+            f"Expected one of {_VALID_OBJECTIVES}."
+        )
+    if maxiter < 1:
+        raise ValueError("maxiter must be >= 1")
+    if popsize < 4:
+        # SciPy's differential_evolution requires popsize >= 4.
+        raise ValueError("popsize must be >= 4")
+
     s0 = (cfg, inputs)
     s1 = (
         cfg,
@@ -87,9 +116,9 @@ def _build_four(cfg: Config, inputs: Inputs, *, seed: int) -> dict[str, Strategy
     s2 = (replace(cfg, roth_conversion_target_bracket=0.22), inputs)
     s3_cfg, s3_inputs, _x = optimize_household(
         cfg, inputs,
-        objective="terminal",
-        maxiter=20,
-        popsize=10,
+        objective=objective,
+        maxiter=maxiter,
+        popsize=popsize,
         seed=seed,
     )
     pairs = [
@@ -108,11 +137,22 @@ def run_scenario(
     mode: str = "single",
     n_paths: int = 200,
     seed: int = 0,
+    objective: str = "terminal",
+    maxiter: int = 20,
+    popsize: int = 10,
 ) -> RunResult:
     """Dispatch on `mode` and return a populated `RunResult`.
 
     `mode` must be one of "single", "four_strategies", "four_plus_mc".
     Anything else raises ValueError.
+
+    `objective` / `maxiter` / `popsize` control the differential-
+    evolution optimizer inside ``four_strategies`` / ``four_plus_mc``
+    (ignored in ``single`` mode). They were previously hard-coded at
+    the runner level (``terminal`` / 20 / 10); the Dash run controls
+    now surface them so users can pick CVaR or probability-of-
+    success objectives and tune optimizer cost vs. solution
+    quality.
     """
     import time
 
@@ -128,7 +168,13 @@ def run_scenario(
         )
 
     if mode in ("four_strategies", "four_plus_mc"):
-        strategies = _build_four(cfg, inputs, seed=seed)
+        strategies = _build_four(
+            cfg, inputs,
+            seed=seed,
+            objective=objective,
+            maxiter=maxiter,
+            popsize=popsize,
+        )
         winner_name = max(
             strategies, key=lambda n: strategies[n].summary["terminal_after_tax"]
         )

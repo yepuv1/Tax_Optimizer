@@ -167,6 +167,37 @@ class TestStateTaxRegimes:
         assert out["state_tax"] > 10_000.0
         assert out["state_marginal"] >= 0.093
 
+    def test_marginal_at_zero_income_returns_first_slab(self):
+        # Pre-fix: zero ordinary income returned 0.0 for the marginal
+        # rate (loop seeded at 0.0 and `>` excluded `lo == 0.0`),
+        # silently mis-pricing the *next* dollar of pretax / Roth
+        # conversion in early-retirement gap years. Post-fix: seed
+        # with the first slab's rate and use `>=`.
+        out = state_tax(regime=CA, **self._kw(wages_box1=0.0))
+        # CA's first ordinary slab starts at 1%.
+        assert out["state_marginal"] == pytest.approx(0.01, rel=1e-6)
+        assert out["state_tax"] == pytest.approx(0.0, abs=1.0)
+
+    def test_marginal_at_exact_bracket_boundary(self):
+        # Income that lands exactly on a CA bracket lower bound
+        # should report the *next-dollar* rate. The state standard
+        # deduction is subtracted before bracket lookup, so we drive
+        # ordinary income to (lo + std_deduction) so taxable_ordinary
+        # lands exactly on the boundary.
+        from tax_optimizer.tax.state import CA as _CA
+
+        brackets = _CA.ord_brackets("mfj")
+        # Pick a mid-stack bracket boundary (avoid the open-ended top
+        # bracket whose `lo` is the prior bracket's `hi`, and avoid
+        # the first slab whose `lo` is 0).
+        lo, _hi, rate = brackets[3]
+        std = _CA.std_deduction("mfj")
+        out = state_tax(regime=CA, **self._kw(wages_box1=lo + std))
+        # On exact-boundary, marginal must reflect the slab the next
+        # dollar would land in. Pre-fix this returned the slab below
+        # (the `>` test excluded the boundary value).
+        assert out["state_marginal"] == pytest.approx(rate, rel=1e-9)
+
     def test_california_hsa_addback(self):
         # CA does NOT conform to HSA. $4k HSA contrib should ADD BACK
         # to state income → higher state tax than without addback.

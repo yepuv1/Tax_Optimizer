@@ -70,6 +70,7 @@ from .report_builder import (
     build_html_payload,
     build_inline_html,
     cache_run,
+    fingerprint_form_values,
     get_cached,
 )
 from .runner import (
@@ -737,9 +738,15 @@ def make_app() -> dash.Dash:
         State("run-mode", "value"),
         State("mc-paths", "value"),
         State("mc-seed", "value"),
+        State("opt-objective", "value"),
+        State("opt-maxiter", "value"),
+        State("opt-popsize", "value"),
         prevent_initial_call=True,
     )
-    def _run(_clicks, values, mode, n_paths, seed):
+    def _run(
+        _clicks, values, mode, n_paths, seed,
+        objective, maxiter, popsize,
+    ):
         if not values:
             return no_update, html.Span(
                 "No scenario loaded.", className="text-warning"
@@ -757,6 +764,9 @@ def make_app() -> dash.Dash:
                 mode=mode or "single",
                 n_paths=int(n_paths or 200),
                 seed=int(seed or 0),
+                objective=objective or "terminal",
+                maxiter=int(maxiter or 20),
+                popsize=int(popsize or 10),
             )
         except Exception as e:  # noqa: BLE001 - surface any sim error to the UI
             return no_update, html.Span(
@@ -767,8 +777,16 @@ def make_app() -> dash.Dash:
         # simulator. The Store carries only the run_id (UUID) plus the
         # JSON-safe figure data; the actual `RunResult` (with its
         # embedded `Config`, `Inputs`, and per-year DataFrames) lives
-        # in `report_builder._RUN_CACHE` keyed by `run_id`.
-        run_id = cache_run(cfg, inputs, rr)
+        # in `report_builder._RUN_CACHE` keyed by `run_id`. We also
+        # snapshot a SHA-256 of the form-values that produced this run
+        # so the report-download / iframe callbacks can warn the user
+        # if they edited the form after running (otherwise the
+        # downloaded HTML report silently reflects the prior
+        # snapshot — surprising and easy to miss).
+        run_id = cache_run(
+            cfg, inputs, rr,
+            form_values_fingerprint=fingerprint_form_values(values),
+        )
         payload = serialize_run_result(rr)
         payload["run_id"] = run_id
         msg = (
@@ -784,9 +802,10 @@ def make_app() -> dash.Dash:
         Output("run-status", "children", allow_duplicate=True),
         Input("report-download-btn", "n_clicks"),
         State("run-result", "data"),
+        State("form-values", "data"),
         prevent_initial_call=True,
     )
-    def _download_report(_clicks, run_data):
+    def _download_report(_clicks, run_data, current_form_values):
         """Save the action-plan report as a self-contained HTML file.
 
         Iframe rendering is owned by ``_render_report_tab`` (which fires
@@ -796,6 +815,12 @@ def make_app() -> dash.Dash:
         share the same memoized ``CachedRun._html_cache`` so the work
         of building the markdown + tornado sweep happens at most once
         per run.
+
+        We additionally compare the *current* form-values fingerprint
+        against the one snapshotted at run time and surface a stale-
+        report warning in the run-status banner when they diverge,
+        rather than silently handing back a report that no longer
+        reflects what the user sees in the form.
         """
         if not run_data or not run_data.get("strategies"):
             return no_update, html.Span(
@@ -815,9 +840,29 @@ def make_app() -> dash.Dash:
             return no_update, html.Span(
                 f"Report build failed: {e}", className="text-danger"
             )
-        return payload, html.Span(
-            f"Report ready: {payload['filename']}.", className="text-success"
-        )
+        current_fp = fingerprint_form_values(current_form_values)
+        if (
+            cached.form_values_fingerprint
+            and current_fp
+            and current_fp != cached.form_values_fingerprint
+        ):
+            # The user has edited the form since the last Run. The
+            # cached report still reflects the old snapshot — let
+            # them download it, but warn so they know to click Run
+            # again if they wanted the current form's numbers.
+            status = html.Span(
+                f"Report ready: {payload['filename']}. "
+                "**Warning:** form has been edited since the last "
+                "run; this report reflects the *previous* scenario. "
+                "Click Run again to regenerate.",
+                className="text-warning",
+            )
+        else:
+            status = html.Span(
+                f"Report ready: {payload['filename']}.",
+                className="text-success",
+            )
+        return payload, status
 
     # ---- Render the Report tab (auto on tab activation) -------------
 

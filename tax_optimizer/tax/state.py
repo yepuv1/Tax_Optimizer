@@ -376,10 +376,21 @@ def state_tax(
     total = ord_tax + ltcg_tax
     # State marginal rate at the top of the ordinary stack (the rate
     # the next dollar of pretax withdrawal or Roth conversion would
-    # face).
-    marginal = 0.0
+    # face). Mirror the federal helper (`tax/federal._marginal_rate`):
+    # seed with the first slab's rate so that zero ordinary income
+    # returns the first non-zero state rate (CA's 1%, NY's 4%, ...)
+    # instead of 0.0, and use ``>=`` on the lower bound so an income
+    # that lands *exactly* on a bracket boundary reports the rate the
+    # next dollar would face. Pre-fix `taxable_ordinary == 0` returned
+    # 0.0 regardless of state, which silently underestimated the
+    # marginal cost of the *next* dollar in zero-income gap years
+    # (e.g. an early-retirement bracket-fill conversion year).
+    if regime.ord_brackets(filing_status):
+        marginal = regime.ord_brackets(filing_status)[0][2]
+    else:
+        marginal = 0.0
     for lo, _hi, rate in regime.ord_brackets(filing_status):
-        if taxable_ordinary > lo:
+        if taxable_ordinary >= lo:
             marginal = rate
 
     return {

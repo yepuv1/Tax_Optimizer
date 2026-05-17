@@ -353,6 +353,85 @@ def top_bar() -> dbc.Card:
                     className="mb-2",
                 ),
                 # ---- Section 3: run options + execute ------------
+                #
+                # Layout note: row 1 holds the optimizer controls
+                # (objective + maxiter + popsize), row 2 holds the MC
+                # paths + seed + Run button. Pre-fix the optimizer
+                # objective and DE knobs were hard-coded at the
+                # ``runner._build_four`` level (terminal / 20 / 10);
+                # exposing them here lets advanced users target CVaR
+                # or probability-of-success and trade optimizer cost
+                # against solution quality.
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                html.Label(
+                                    "Optimizer objective",
+                                    className="form-label small",
+                                ),
+                                dcc.Dropdown(
+                                    id="opt-objective",
+                                    options=[
+                                        {
+                                            "label": "Terminal NW (default)",
+                                            "value": "terminal",
+                                        },
+                                        {
+                                            "label": "CVaR (downside risk)",
+                                            "value": "cvar",
+                                        },
+                                        {
+                                            "label": "Probability of success",
+                                            "value": "p_success",
+                                        },
+                                    ],
+                                    value="terminal",
+                                    clearable=False,
+                                    className="form-control-sm",
+                                ),
+                            ],
+                            md=6,
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label(
+                                    "Optimizer maxiter",
+                                    className="form-label small",
+                                ),
+                                dcc.Input(
+                                    id="opt-maxiter",
+                                    type="number",
+                                    value=20,
+                                    min=1,
+                                    max=200,
+                                    step=1,
+                                    className="form-control form-control-sm",
+                                ),
+                            ],
+                            md=3,
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label(
+                                    "Optimizer popsize",
+                                    className="form-label small",
+                                ),
+                                dcc.Input(
+                                    id="opt-popsize",
+                                    type="number",
+                                    value=10,
+                                    min=4,
+                                    max=60,
+                                    step=1,
+                                    className="form-control form-control-sm",
+                                ),
+                            ],
+                            md=3,
+                        ),
+                    ],
+                    className="g-2 align-items-end mb-2",
+                ),
                 dbc.Row(
                     [
                         dbc.Col(

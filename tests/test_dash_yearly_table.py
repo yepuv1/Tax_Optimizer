@@ -110,7 +110,7 @@ class TestColumnGroups:
 
     @pytest.mark.parametrize("group_id, expected", [
         ("identity",  ["year", "spouse_a_age", "filing_status"]),
-        ("income",    ["wages", "pension", "ssn",
+        ("income",    ["wages", "pension", "ssn", "annuity_taxable",
                        "qualified_dividends", "interest_income"]),
         ("pretax",    ["rmd", "roth_conversion"]),
         ("withdraw",  ["pretax_withdrawal", "roth_withdrawal",
@@ -154,9 +154,9 @@ class TestDetailColumns:
         """
         group_total = sum(len(cols) for _g, _c, cols in _YEARLY_COLUMN_GROUPS)
         assert len(detail_columns()) == group_total
-        # 26 = 3 identity + 5 income + 2 pretax + 3 withdraw +
-        #      2 spending + 5 tax + 2 medicare + 4 balances.
-        assert group_total == 26
+        # 27 = 3 identity + 6 income (added annuity_taxable) + 2 pretax
+        #      + 3 withdraw + 2 spending + 5 tax + 2 medicare + 4 balances.
+        assert group_total == 27
 
     def test_year_first_balances_last(self) -> None:
         """Identity → income → ... → balances ordering."""
@@ -221,6 +221,7 @@ class TestFilterToDetailCols:
             "wages": np.full(n, 250_000.49),
             "pension": np.zeros(n),
             "ssn": np.zeros(n),
+            "annuity_taxable": np.zeros(n),
             "qualified_dividends": np.full(n, 4_500.7),
             "interest_income": np.full(n, 1_200.3),
             # Pretax events
@@ -331,10 +332,10 @@ class TestYearlyTableStyles:
             if color_key is None:
                 continue
             colored_cols.extend(cols)
-        # 23 = 26 total - 3 identity.
-        assert len(colored_cols) == 23
-        assert len(styles["style_header_conditional"]) == 23
-        assert len(styles["style_data_conditional"]) == 23
+        # 24 = 27 total - 3 identity.
+        assert len(colored_cols) == 24
+        assert len(styles["style_header_conditional"]) == 24
+        assert len(styles["style_data_conditional"]) == 24
 
         header_targets = {
             r["if"]["column_id"]

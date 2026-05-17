@@ -34,11 +34,13 @@ system libraries.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from tax_optimizer.config import Config
 from tax_optimizer.inputs import Inputs
@@ -71,6 +73,13 @@ class CachedRun:
     cfg: Config
     inputs: Inputs
     rr: RunResult
+    # SHA-256 of the form-values dict that produced this run, used by
+    # the report download / iframe callbacks to detect "the user
+    # edited the form after running" so the UI can warn that the
+    # report is stale relative to what the form currently shows. Set
+    # at `cache_run` time; ``""`` (empty) means "fingerprint not
+    # tracked" (legacy / programmatic callers).
+    form_values_fingerprint: str = ""
     # Lazy: built on first request via `_build_markdown`.
     _markdown_cache: dict[tuple[str, Optional[str]], str] = field(
         default_factory=dict
@@ -87,7 +96,29 @@ class CachedRun:
 _RUN_CACHE: "OrderedDict[str, CachedRun]" = OrderedDict()
 
 
-def cache_run(cfg: Config, inputs: Inputs, rr: RunResult) -> str:
+def fingerprint_form_values(values: Optional[dict[str, Any]]) -> str:
+    """Stable SHA-256 hash of a form-values dict.
+
+    Used to detect that the user has edited the form after the last
+    Run so the report-download / iframe callbacks can surface a
+    "stale" warning instead of silently handing back the prior
+    snapshot. Returns an empty string for ``None`` / empty dicts so
+    the call sites can treat absence-of-fingerprint as "tracking
+    disabled" without a separate sentinel.
+    """
+    if not values:
+        return ""
+    canonical = json.dumps(values, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def cache_run(
+    cfg: Config,
+    inputs: Inputs,
+    rr: RunResult,
+    *,
+    form_values_fingerprint: str = "",
+) -> str:
     """Register a finished run and return a fresh ``run_id`` for it.
 
     The Dash run-result ``dcc.Store`` carries this id alongside the
@@ -95,13 +126,25 @@ def cache_run(cfg: Config, inputs: Inputs, rr: RunResult) -> str:
     and the Report-tab renderer use the id to recover the original
     Python objects.
 
+    ``form_values_fingerprint`` is an optional SHA-256 of the form-
+    values dict that produced this run; when supplied, the report
+    callbacks use it to detect "user edited the form after running"
+    and warn the user that the downloaded / displayed report no
+    longer matches what the form shows. See
+    :func:`fingerprint_form_values`.
+
     LRU bound: when the cache exceeds :data:`_MAX_CACHED_RUNS`, the
     oldest entry is evicted. That keeps memory bounded in long-lived
     app sessions while still letting the user jump back to a few
     recent runs.
     """
     run_id = uuid.uuid4().hex
-    _RUN_CACHE[run_id] = CachedRun(cfg=cfg, inputs=inputs, rr=rr)
+    _RUN_CACHE[run_id] = CachedRun(
+        cfg=cfg,
+        inputs=inputs,
+        rr=rr,
+        form_values_fingerprint=form_values_fingerprint,
+    )
     while len(_RUN_CACHE) > _MAX_CACHED_RUNS:
         _RUN_CACHE.popitem(last=False)
     return run_id
@@ -245,6 +288,7 @@ def build_inline_html(
 
 __all__ = [
     "cache_run",
+    "fingerprint_form_values",
     "get_cached",
     "clear_cache",
     "build_html_payload",

@@ -220,6 +220,48 @@ def taxes_panel(df: pd.DataFrame, *, title: str = "Taxes & marginal bracket") ->
             ),
             row=1, col=1,
         )
+    # FICA + SDI — surfaced on the same Dollars axis so the reader
+    # sees the *full* tax bill (federal + state + IRMAA + payroll),
+    # not just the income-tax stack. Pre-fix the simulator already
+    # emitted `fica_oasdi`, `fica_medicare`, `fica_additional_medicare`,
+    # and `state_sdi` columns but no chart surfaced them.
+    fica_components = [
+        c for c in (
+            "fica_oasdi",
+            "fica_medicare",
+            "fica_additional_medicare",
+        ) if c in df.columns
+    ]
+    if fica_components:
+        fica_total = sum(df[c] for c in fica_components)
+        if (fica_total != 0).any():
+            fig.add_trace(
+                go.Scatter(
+                    x=x, y=fica_total, name="FICA (OASDI + Medicare)",
+                    mode="lines",
+                    line=dict(
+                        color=_OKABE_ITO["bluish_green"],
+                        width=2,
+                        dash="dashdot",
+                    ),
+                    hovertemplate="FICA: $%{y:,.0f}<extra></extra>",
+                ),
+                row=1, col=1,
+            )
+    if "state_sdi" in df.columns and (df["state_sdi"] != 0).any():
+        fig.add_trace(
+            go.Scatter(
+                x=x, y=df["state_sdi"], name="State SDI",
+                mode="lines",
+                line=dict(
+                    color=_OKABE_ITO["yellow"],
+                    width=2,
+                    dash="longdash",
+                ),
+                hovertemplate="SDI: $%{y:,.0f}<extra></extra>",
+            ),
+            row=1, col=1,
+        )
 
     if "marginal" in df.columns:
         fig.add_trace(
@@ -1428,6 +1470,7 @@ def _fmt_cagr(v: Any) -> str:
 _YEARLY_COLUMN_GROUPS: list[tuple[str, str | None, list[str]]] = [
     ("identity",  None,             ["year", "spouse_a_age", "filing_status"]),
     ("income",    "blue",           ["wages", "pension", "ssn",
+                                     "annuity_taxable",
                                      "qualified_dividends", "interest_income"]),
     ("pretax",    "orange",         ["rmd", "roth_conversion"]),
     ("withdraw",  "yellow",         ["pretax_withdrawal", "roth_withdrawal",

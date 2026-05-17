@@ -32,6 +32,88 @@ Categories used:
 
 ## [Unreleased]
 
+### Added — Medium-priority correctness + Dash UX
+
+- **`early-dist-age`** — IRC §72(t) / §72(q) early-distribution
+  boundary now prorates the year a spouse turns 59½ at 50% of the
+  10% surtax (`a_age == 59` → half-year mid-life crossing), instead
+  of the prior `a_age < 60` cliff that attracted the full penalty
+  for a typical year-end lump. `a_age <= 58` keeps the full
+  penalty; `a_age >= 60` attracts none. Three new tests in
+  `tests/test_simulator_pension_lump_sum.py` pin the boundary
+  behavior.
+- **`state-marginal`** — `state_tax`'s reported `state_marginal` now
+  uses `>=` on the lower bound (mirroring the federal helper) and
+  seeds with the first slab's rate, so zero ordinary income returns
+  the *next-dollar* marginal (1% in CA, 4% in NY, ...) instead of
+  silently 0.0. Pre-fix, gap-year bracket-fill conversions could
+  see the wrong marginal cost of the next dollar. New tests in
+  `tests/test_tier_b.py::TestStateTaxRegimes`.
+- **`report-annuity`** — `tax_optimizer.report.build_action_report`
+  now surfaces a "Major lifetime income / lump-sum events" table in
+  §6 summarizing pension / annuity lump-sum events, the year an
+  annuity begins paying, and any §72(t)/(q) penalties — pre-fix
+  these were tracked in the simulator's DataFrame columns but
+  invisible in the action-plan markdown. New
+  `tests/test_report_lifetime_events.py`.
+- **`dash-figures-annuity`** — `dash_app.figures.taxes_panel` now
+  charts FICA (OASDI + Medicare + Additional-Medicare) and state
+  SDI on the Dollars subplot, alongside AGI / federal / state /
+  IRMAA. The year-by-year DataTable's `income` column group adds
+  `annuity_taxable` so non-qualified annuity income is no longer
+  invisible in the table. New
+  `tests/test_dash_figures_annuity_fica.py`.
+- **`dash-report-stale`** — the Dash app now snapshots a SHA-256
+  fingerprint of the form-values dict at run time. The
+  report-download callback compares the current form-values
+  fingerprint against the cached one and prepends a stale-warning
+  to the run-status banner when they diverge, instead of silently
+  handing back a report that no longer reflects the form. New
+  `fingerprint_form_values` helper exported from
+  `dash_app.report_builder`; tests in
+  `tests/test_dash_report_download.py::TestFormValuesFingerprint`.
+- **`dash-objective-knobs`** — the Dash run-controls card now
+  exposes the optimizer objective (Terminal NW / CVaR / Probability
+  of success), the differential-evolution `maxiter`, and `popsize`
+  as form fields. `dash_app.runner.run_scenario` and
+  `_build_four` accept the new kwargs and validate them
+  (`objective` ∈ `{"terminal", "cvar", "p_success"}`, `maxiter ≥ 1`,
+  `popsize ≥ 4`). Pre-fix all three were hard-coded at the runner
+  level. New `tests/test_dash_runner_objective.py`.
+
+### Tests — Drift coverage
+
+- **`field-schema-drift`** — new
+  `tests/test_dash_field_schema_drift.py` enforces that every public
+  field on `StartingBalances`, `CurrentIncome`, `CurrentContrib`,
+  `PensionInputs`, `AnnuityInputs`, `SocialSecurity`, and
+  `HealthPremiums` is reachable from `dash_app.forms.FIELD_SCHEMA`,
+  and that every `FormField.path` resolves to a real dataclass
+  field. A small `_INPUTS_FORM_EXEMPT` allow-list (deprecated
+  legacy fields and `ss.start_age` superseded by per-spouse
+  variants) keeps the test honest. Mirrors the existing
+  `tests/test_scenario_template.py` template-vs-dataclass contract.
+
+### Deferred — Missing features (out of scope this round)
+
+The audit identified ~25 "missing feature" items (Joint Life RMD
+divisor table, inherited-IRA 10-year rule, half step-up basis,
+§72(t)(2)/§72(q)(2) exception flags, MFS/HoH filing statuses, QCD,
+tax-loss harvesting, MA millionaire / CA mental-health surtaxes,
+state-residence-change UI, custom spending editor in Dash, etc.).
+These were explicitly carved out of the recommended fix sequence
+in the audit plan because they require either product / scope
+decisions, longer implementation timelines, or both. The decision
+this round: **defer all of them to follow-up sessions**. The 12
+correctness fixes plus the 6 UX / coverage items in this release
+move the model from "silently wrong on annuity / cash-flow / SDI /
+SS provisional" to "the math is right and the Dash surface tracks
+the simulator output"; the missing features are additive
+enhancements rather than bug fixes. Each item is tracked in
+`docs/references.md` with its statutory citation so the next
+session can pick a subset and land them with the same testing
+discipline.
+
 ### Fixed — Critical tax/cash-flow correctness
 
 - **`state-tax-annuity-routing`** — `annuity_taxable` is now threaded

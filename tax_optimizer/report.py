@@ -586,6 +586,148 @@ def _this_year_actions(
     return out
 
 
+def _lifetime_events(
+    cfg: Config, inputs: Inputs, w_df: pd.DataFrame
+) -> list[str]:
+    """Render any one-time / pay-period income events the simulator
+    recorded in the year-by-year DataFrame.
+
+    The action-plan markdown previously walked the optimized strategy's
+    contributions, RMDs, and Roth conversions but ignored the
+    pension-lump-sum / annuity-payout / annuity-lump / §72(t) early-
+    distribution events even though the simulator tracks them in
+    explicit columns (`pension_lump_sum`, `annuity_lump_sum`,
+    `annuity_payment`, `annuity_taxable`, `early_distribution_penalty`).
+    We surface them here so the reader sees:
+
+      * which year the pension lump fires (cash vs rollover) and how
+        much of the cash mode is hit by the 10% IRC §72(t) penalty,
+      * which year the deferred annuity starts paying (and any annuity
+        lump in cash or rollover mode), and
+      * any year where the early-distribution penalty exceeds zero
+        (catches partial-year mid-59½ cases too).
+
+    Returns an empty list when none of those events fire — most
+    households see nothing here, and that's correct behavior.
+    """
+    if w_df.empty:
+        return []
+
+    out: list[str] = []
+    rows: list[str] = []
+
+    pen_lump_rows = w_df[w_df.get("pension_lump_sum", 0) > 0]
+    for _, row in pen_lump_rows.iterrows():
+        cal_year = int(row["year"])
+        a_age = int(row["spouse_a_age"])
+        amt = float(row["pension_lump_sum"])
+        event = str(row.get("pension_lump_sum_event", "") or "")
+        penalty = float(row.get("early_distribution_penalty", 0) or 0)
+        if event == "rollover_pretax":
+            note = "direct rollover into pretax IRA — no current-year tax"
+        elif event == "cash":
+            if penalty > 0:
+                note = (
+                    f"taxable lump-sum distribution; **§72(t) 10% "
+                    f"surtax applies** (${penalty:,.0f})"
+                )
+            else:
+                note = "taxable lump-sum distribution (post-59½, no penalty)"
+        else:
+            note = "pension lump-sum event"
+        rows.append(
+            f"| {cal_year} | A age {a_age} | Pension lump-sum "
+            f"({event or 'event'}) | ${amt:,.0f} | {note} |"
+        )
+
+    ann_lump_rows = w_df[w_df.get("annuity_lump_sum", 0) > 0]
+    for _, row in ann_lump_rows.iterrows():
+        cal_year = int(row["year"])
+        a_age = int(row["spouse_a_age"])
+        amt = float(row["annuity_lump_sum"])
+        event = str(row.get("annuity_lump_sum_event", "") or "")
+        penalty = float(row.get("early_distribution_penalty", 0) or 0)
+        if event == "rollover_pretax":
+            note = "direct rollover into pretax IRA — no current-year tax"
+        elif event == "cash":
+            if penalty > 0:
+                note = (
+                    f"non-qualified surrender; **§72(q) 10% surtax "
+                    f"applies on the gain** (${penalty:,.0f})"
+                )
+            else:
+                note = "annuity surrender (post-59½, no penalty)"
+        else:
+            note = "annuity lump-sum event"
+        rows.append(
+            f"| {cal_year} | A age {a_age} | Annuity lump-sum "
+            f"({event or 'event'}) | ${amt:,.0f} | {note} |"
+        )
+
+    payment_col = w_df.get("annuity_payment")
+    if payment_col is not None:
+        positive = (payment_col.fillna(0) > 0)
+        if positive.any():
+            first_idx = positive.idxmax()
+            first_row = w_df.loc[first_idx]
+            cal_year = int(first_row["year"])
+            a_age = int(first_row["spouse_a_age"])
+            amt = float(first_row["annuity_payment"])
+            taxable = float(first_row.get("annuity_taxable", 0) or 0)
+            tax_free = float(first_row.get("annuity_tax_free", 0) or 0)
+            if tax_free > 0:
+                note = (
+                    f"first scheduled payment; ${taxable:,.0f} taxable "
+                    f"+ ${tax_free:,.0f} tax-free basis return"
+                )
+            else:
+                note = "first scheduled payment (fully taxable)"
+            rows.append(
+                f"| {cal_year} | A age {a_age} | Annuity payments begin "
+                f"| ${amt:,.0f} | {note} |"
+            )
+
+    penalty_col = w_df.get("early_distribution_penalty")
+    if penalty_col is not None:
+        for idx, val in penalty_col.items():
+            if not (val and val > 0):
+                continue
+            row = w_df.loc[idx]
+            # Skip rows already explained by the pension-lump or
+            # annuity-lump branch above (their note covers the
+            # penalty); only surface stand-alone penalty years.
+            already_covered = (
+                float(row.get("pension_lump_sum", 0) or 0) > 0
+                or float(row.get("annuity_lump_sum", 0) or 0) > 0
+            )
+            if already_covered:
+                continue
+            cal_year = int(row["year"])
+            a_age = int(row["spouse_a_age"])
+            rows.append(
+                f"| {cal_year} | A age {a_age} | §72(t)/(q) penalty "
+                f"| ${float(val):,.0f} | early-distribution surtax |"
+            )
+
+    if not rows:
+        return []
+
+    out.append("### Major lifetime income / lump-sum events")
+    out.append("")
+    out.append(
+        "_One-time pension and annuity events in the optimized plan, "
+        "with their tax treatment. §72(t) (qualified plans) and §72(q) "
+        "(non-qualified annuities) impose a 10% surtax on the taxable "
+        "portion of distributions before age 59½._"
+    )
+    out.append("")
+    out.append("| Year | Spouse | Event | Amount | Tax treatment |")
+    out.append("|---|---|---|---:|---|")
+    out.extend(rows)
+    out.append("")
+    return out
+
+
 def _widow_paragraph(
     cfg: Config, inputs: Inputs, w_df: pd.DataFrame
 ) -> list[str]:
@@ -1104,6 +1246,7 @@ def build_action_report(
     md.append("## 6. Year-by-year action timeline")
     md.append("")
     md.extend(_this_year_actions(w_cfg, w_inputs, w_df))
+    md.extend(_lifetime_events(w_cfg, w_inputs, w_df))
     md.append("### Multi-decade phases")
     md.append("")
     md.append("| Phase | Ages (Spouse A) | What to do |")

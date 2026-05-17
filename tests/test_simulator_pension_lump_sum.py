@@ -160,6 +160,69 @@ class TestCash:
             0.10 * r55["pension_lump_sum"], rel=1e-6
         )
 
+    def test_age59_year_is_prorated_at_50_percent(self):
+        # IRC §72(t) boundary: spouse hits 59½ midway through the
+        # year `a_age == 59`. Pre-fix this attracted full 10%
+        # penalty (`a_age < 60`); post-fix the simulator prorates
+        # to 50% in the boundary year.
+        inp = Inputs(
+            household_kind="single",
+            spouse_a_age_start=50,
+            starting=StartingBalances(pension_balance=300_000),
+            pension=PensionInputs(
+                balance_today=300_000,
+                monthly_at_nrd=2_000,
+                start_age=59,
+                lump_sum_mode="cash",
+            ),
+        )
+        df = simulate(Config(horizon_age=70), inp)
+        r59 = _row(df, 59)
+        assert r59["pension_lump_sum"] > 0
+        # Half-year proration: penalty is 0.5 × 10% × lump.
+        assert r59["early_distribution_penalty"] == pytest.approx(
+            0.05 * r59["pension_lump_sum"], rel=1e-6
+        )
+
+    def test_age60_no_penalty(self):
+        # The year `a_age == 60` is fully post-59½ — no penalty,
+        # confirming the boundary moved correctly.
+        inp = Inputs(
+            household_kind="single",
+            spouse_a_age_start=50,
+            starting=StartingBalances(pension_balance=300_000),
+            pension=PensionInputs(
+                balance_today=300_000,
+                monthly_at_nrd=2_000,
+                start_age=60,
+                lump_sum_mode="cash",
+            ),
+        )
+        df = simulate(Config(horizon_age=70), inp)
+        r60 = _row(df, 60)
+        assert r60["pension_lump_sum"] > 0
+        assert r60["early_distribution_penalty"] == 0.0
+
+    def test_age58_full_penalty(self):
+        # Below the boundary year: full 10% penalty on the lump.
+        inp = Inputs(
+            household_kind="single",
+            spouse_a_age_start=50,
+            starting=StartingBalances(pension_balance=300_000),
+            pension=PensionInputs(
+                balance_today=300_000,
+                monthly_at_nrd=2_000,
+                start_age=58,
+                lump_sum_mode="cash",
+            ),
+        )
+        df = simulate(Config(horizon_age=70), inp)
+        r58 = _row(df, 58)
+        assert r58["pension_lump_sum"] > 0
+        assert r58["early_distribution_penalty"] == pytest.approx(
+            0.10 * r58["pension_lump_sum"], rel=1e-6
+        )
+
     def test_no_subsequent_pension_income(self):
         inp = Inputs(
             household_kind="single",

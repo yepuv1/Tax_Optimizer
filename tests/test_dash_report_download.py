@@ -50,6 +50,7 @@ from dash_app.report_builder import (  # noqa: E402  - import after skip
     build_inline_html,
     cache_run,
     clear_cache,
+    fingerprint_form_values,
     get_cached,
 )
 from dash_app.runner import run_scenario  # noqa: E402
@@ -357,6 +358,59 @@ class TestEndToEnd:
         # Four-strategy reports surface the verdict block.
         assert "S0_baseline" in html
         assert "S3_optimized" in html
+
+
+# ---------------------------------------------------------------------
+# Form-values fingerprint (stale-report detection)
+# ---------------------------------------------------------------------
+
+
+class TestFormValuesFingerprint:
+    """The Dash run-result Store carries a SHA-256 of the form-values
+    used at run time, so the report-download callback can detect the
+    user has edited the form afterwards. Pre-fix the download silently
+    handed back the prior snapshot; post-fix the run-status banner
+    prepends a stale-warning when the current form differs.
+    """
+
+    def test_fingerprint_is_stable_for_same_dict(self) -> None:
+        a = fingerprint_form_values({"x": 1, "y": "hello"})
+        b = fingerprint_form_values({"y": "hello", "x": 1})  # reorder
+        assert a == b, "fingerprint must be order-insensitive"
+
+    def test_fingerprint_changes_for_different_dict(self) -> None:
+        a = fingerprint_form_values({"x": 1})
+        b = fingerprint_form_values({"x": 2})
+        assert a != b
+
+    def test_fingerprint_empty_for_none_or_empty(self) -> None:
+        assert fingerprint_form_values(None) == ""
+        assert fingerprint_form_values({}) == ""
+
+    def test_cache_run_records_fingerprint(self, small_scenario) -> None:
+        cfg, inputs = small_scenario
+        rr = run_scenario(cfg, inputs, mode="single")
+        run_id = cache_run(
+            cfg, inputs, rr,
+            form_values_fingerprint="abc123",
+        )
+        cached = get_cached(run_id)
+        assert cached is not None
+        assert cached.form_values_fingerprint == "abc123"
+
+    def test_cache_run_default_fingerprint_is_empty(
+        self, small_scenario
+    ) -> None:
+        # Legacy / programmatic callers that don't pass the new kwarg
+        # must keep working — the fingerprint just defaults to empty
+        # so the report-download callback falls back to the legacy
+        # "no warning" behavior.
+        cfg, inputs = small_scenario
+        rr = run_scenario(cfg, inputs, mode="single")
+        run_id = cache_run(cfg, inputs, rr)
+        cached = get_cached(run_id)
+        assert cached is not None
+        assert cached.form_values_fingerprint == ""
 
 
 # ---------------------------------------------------------------------
