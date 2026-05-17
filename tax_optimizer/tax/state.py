@@ -101,6 +101,16 @@ class StateTaxRegime:
     sdi_rate: float = 0.0
     sdi_wage_cap: float = math.inf
 
+    # Optional per-year SDI rate schedule (calendar year → rate). When
+    # provided, the simulator looks up the rate by `cfg.start_year +
+    # year_offset` and falls back to the closest earlier year (or to
+    # ``sdi_rate`` if the calendar year predates the schedule). CA's
+    # EDD-published schedule diverges from the static 1.1% default
+    # by ±10 bps annually (1.1% / 1.2% / 0.9% for 2024 / 2025 / 2026
+    # — see CA EDD DB-1101) so this matters for households who care
+    # about a specific year's withholding.
+    sdi_rate_schedule: dict[int, float] | None = None
+
     def ord_brackets(self, filing_status: str) -> Sequence[Bracket]:
         return (
             self.ord_brackets_mfj
@@ -124,6 +134,23 @@ class StateTaxRegime:
 
     def has_tax(self) -> bool:
         return bool(self.ord_brackets_mfj or self.ord_brackets_single)
+
+    def effective_sdi_rate(self, calendar_year: int) -> float:
+        """Resolve the SDI rate for a given calendar year.
+
+        When ``sdi_rate_schedule`` is set, picks the schedule entry for
+        ``calendar_year`` (or the largest year ≤ ``calendar_year`` if
+        the exact year is missing — i.e. the published rate "carries
+        forward" until a future year publishes its own value). Falls
+        back to the static ``sdi_rate`` if the calendar year predates
+        every scheduled year.
+        """
+        if not self.sdi_rate_schedule:
+            return self.sdi_rate
+        eligible = [y for y in self.sdi_rate_schedule if y <= calendar_year]
+        if not eligible:
+            return self.sdi_rate
+        return self.sdi_rate_schedule[max(eligible)]
 
     def inflated(self, factor: float) -> "StateTaxRegime":
         """Mirror of `TaxRegime.inflated`. Scales brackets + std deduction
@@ -184,6 +211,7 @@ def state_tax(
     roth_conversion: float,
     social_security: float,
     ss_taxable_federal: float,
+    annuity_taxable: float = 0.0,
     hsa_contrib: float = 0.0,
     age_a: int = 0,
     age_b: int = 0,
@@ -197,6 +225,7 @@ def state_tax(
     pension_per_spouse: tuple[float, float] | None = None,
     pretax_per_spouse: tuple[float, float] | None = None,
     roth_conv_per_spouse: tuple[float, float] | None = None,
+    annuity_per_spouse: tuple[float, float] | None = None,
 ) -> dict:
     """Compute state income tax for one year.
 
@@ -215,10 +244,18 @@ def state_tax(
         the federal `ss_taxable` figure by `regime.ss_taxable_fraction`
         and rebate the rest from ordinary income.
       * **Retirement exclusion.** IL fully exempts pension + IRA +
-        Roth conversion + SS. NY exempts $20k per filer at 59½+ —
-        applied per-spouse against each spouse's own distributions
-        when ``pension_per_spouse`` / ``pretax_per_spouse`` /
-        ``roth_conv_per_spouse`` are provided.
+        Roth conversion + SS + annuity. NY exempts $20k per filer at
+        59½+ against each spouse's own pension + IRA + Roth-conv +
+        annuity income (per IRC §61(a)(9) annuity is gross income;
+        NY Tax Law §612(c)(3-a) treats commercial annuity income
+        identically to pension for the $20k retirement exclusion).
+        Per-spouse exclusion is applied against the supplied
+        ``pension_per_spouse`` / ``pretax_per_spouse`` /
+        ``roth_conv_per_spouse`` / ``annuity_per_spouse`` tuples.
+      * **Annuity income (`annuity_taxable`).** Treated as ordinary
+        income at the state level (matches federal §61(a)(9) /
+        §72(b) treatment). Eligible for the IL full exclusion and
+        the NY per-filer exclusion.
       * **LTCG.** Most states tax LTCG as ordinary; if the regime
         provides explicit LTCG brackets, we honor them.
     """
@@ -232,24 +269,33 @@ def state_tax(
     state_ss_taxable = ss_taxable_federal * regime.ss_taxable_fraction
 
     if regime.retirement_full_exclusion:
-        # IL: pension + IRA / Roth-conv + SS all excluded from state
-        # taxable income at any age. (IL allows this without a
-        # minimum-age gate; the others we ship require 59½+.)
-        # We exclude `state_ss_taxable` (the amount we'd have added
-        # to ord_income), not `ss_taxable_federal`, so a regime that
-        # combines `retirement_full_exclusion=True` with a non-zero
-        # `ss_taxable_fraction` zeros out cleanly without double-
-        # counting.
+        # IL: pension + IRA / Roth-conv + annuity + SS all excluded
+        # from state taxable income at any age. (IL allows this
+        # without a minimum-age gate; the others we ship require
+        # 59½+.) We exclude `state_ss_taxable` (the amount we'd have
+        # added to ord_income), not `ss_taxable_federal`, so a
+        # regime that combines `retirement_full_exclusion=True` with
+        # a non-zero `ss_taxable_fraction` zeros out cleanly without
+        # double-counting. Annuity income is included per IL
+        # 35 ILCS 5/203(a)(2)(F): "any amount of distribution…from a
+        # qualified retirement plan…or from an annuity contract."
         retirement_excluded = (
-            pension + pretax_withdrawal + roth_conversion + state_ss_taxable
+            pension
+            + pretax_withdrawal
+            + roth_conversion
+            + annuity_taxable
+            + state_ss_taxable
         )
     elif regime.retirement_exclusion_per_filer > 0:
         # NY-style: $X per spouse at age min_age+, applied per-spouse
-        # against each spouse's own pension + IRA + Roth-conv (NOT SS).
-        # Per §612(c)(3-a): the exclusion is granted to each filer
-        # against their own distributions — a spouse with $0 of
-        # qualifying distributions cannot pass their unused $20k to
-        # the higher-earner spouse.
+        # against each spouse's own pension + IRA + Roth-conv +
+        # annuity (NOT SS). Per NY Tax Law §612(c)(3-a) the exclusion
+        # is granted to each filer against their own distributions —
+        # a spouse with $0 of qualifying distributions cannot pass
+        # their unused $20k to the higher-earner spouse. Commercial
+        # annuity income is eligible (the statute lists "pensions and
+        # annuities…received…from a private employer" as one of the
+        # qualifying categories alongside IRA distributions).
         #
         # When per-spouse breakdowns are supplied, apply the cap
         # per-recipient and sum. When omitted, fall back to the
@@ -261,17 +307,21 @@ def state_tax(
             pension_per_spouse is not None
             or pretax_per_spouse is not None
             or roth_conv_per_spouse is not None
+            or annuity_per_spouse is not None
         ):
             pa, pb = pension_per_spouse or (0.0, 0.0)
             wa, wb = pretax_per_spouse or (0.0, 0.0)
             ra, rb = roth_conv_per_spouse or (0.0, 0.0)
-            a_pool = pa + wa + ra if a_eligible else 0.0
-            b_pool = pb + wb + rb if b_eligible else 0.0
+            aa, ab = annuity_per_spouse or (0.0, 0.0)
+            a_pool = pa + wa + ra + aa if a_eligible else 0.0
+            b_pool = pb + wb + rb + ab if b_eligible else 0.0
             retirement_excluded = min(per, a_pool) + min(per, b_pool)
         else:
             n_filers = int(a_eligible) + int(b_eligible)
             max_excl = per * n_filers
-            retirement_pool = pension + pretax_withdrawal + roth_conversion
+            retirement_pool = (
+                pension + pretax_withdrawal + roth_conversion + annuity_taxable
+            )
             retirement_excluded = min(max_excl, retirement_pool)
     else:
         retirement_excluded = 0.0
@@ -288,6 +338,7 @@ def state_tax(
         + interest
         + ordinary_div
         + pension
+        + annuity_taxable
         + pretax_withdrawal
         + roth_conversion
         + state_ss_taxable
@@ -388,9 +439,22 @@ CA: StateTaxRegime = StateTaxRegime(
     # CA does NOT conform to federal HSA — HSA contribs aren't
     # deductible at the state level.
     hsa_deductible=False,
-    # CA SDI: 1.1% of all wages, uncapped since 2024 (SB 951).
+    # CA SDI: 1.1% of all wages, uncapped since 2024 (SB 951). The
+    # year-by-year schedule below tracks the EDD-published rates;
+    # `sdi_rate` itself stays at 1.1% for back-compat with callers
+    # that don't pass a calendar year.
     sdi_rate=0.011,
     sdi_wage_cap=math.inf,
+    # CA EDD DB-1101 (and EDD's annual rate announcement letters):
+    #   2024: 1.1% (post-SB-951, uncapped)
+    #   2025: 1.2% (EDD 2024 announcement)
+    #   2026: 0.9% (EDD 2025 announcement)
+    # 2027+ defaults to the most recent published year.
+    sdi_rate_schedule={
+        2024: 0.011,
+        2025: 0.012,
+        2026: 0.009,
+    },
 )
 
 

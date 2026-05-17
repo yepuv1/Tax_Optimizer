@@ -138,6 +138,41 @@ class TestApplyScenario:
                 Config(), Inputs(), {"inputs": {"starting": {"bogus": 1}}}
             )
 
+    def test_invalid_household_kind_raises_scenario_error(self) -> None:
+        # Pre-fix `Inputs.__post_init__` raised a bare ``ValueError``
+        # for an unknown ``household_kind`` literal; `apply_scenario`
+        # did not wrap it, so the Dash run-banner couldn't recognize
+        # it as a user-facing scenario error vs. an internal bug.
+        # Post-fix any ``ValueError`` from dataclass validation flows
+        # through as ``ScenarioError`` (which is itself a
+        # ``ValueError`` subclass, so existing catch-all sites keep
+        # working).
+        with pytest.raises(ScenarioError, match="household_kind"):
+            apply_scenario(
+                Config(),
+                Inputs(),
+                {"inputs": {"household_kind": "married_joint"}},
+            )
+
+    def test_invalid_annuity_combo_raises_scenario_error(self) -> None:
+        # Non-qualified annuity + rollover_pretax is rejected by
+        # ``Inputs.__post_init__`` (IRC §408 / §402(c)). The ValueError
+        # is now wrapped as ScenarioError.
+        with pytest.raises(ScenarioError, match="Non-qualified annuity"):
+            apply_scenario(
+                Config(),
+                Inputs(),
+                {
+                    "inputs": {
+                        "annuity": {
+                            "tax_kind": "non_qualified",
+                            "cost_basis": 10_000,
+                            "lump_sum_mode": "rollover_pretax",
+                        }
+                    }
+                },
+            )
+
     def test_simple_scalar_overrides_apply(self) -> None:
         # `annual_expenses` is deprecated and emits a DeprecationWarning;
         # the value is still round-tripped through the loader for legacy

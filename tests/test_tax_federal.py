@@ -207,6 +207,44 @@ class TestFederalTax:
         # combined = 12_800; cap = 0.85*24_000 = 20_400 → not binding
         assert out["ss_taxable"] == pytest.approx(12_800.0)
 
+    def test_tax_exempt_interest_added_to_provisional_only(self) -> None:
+        # IRC §86(b)(2)(B): muni-bond interest counts toward SS
+        # provisional but stays out of AGI / taxable income.
+        # Reproduce the Pub 915 worksheet 1 line 3 add-back.
+        #
+        # Setup: $30k wages, $24k SS, no other income.
+        # Without muni interest: provisional = 30k + 12k = 42k.
+        #   42k is between 32k and 44k → tier1 only
+        #   tier1 = min(0.5*(42-32), 0.5*24) = min(5, 12) = 5
+        # With $5k muni interest: provisional = 30k + 5k + 12k = 47k.
+        #   47k > 44k → tier2 fires
+        #   tier1 = min(0.5*(44-32), 0.5*24) = 6
+        #   tier2 = 0.85*(47-44) = 2.55
+        #   combined = 8.55; cap = 0.85*24 = 20.4 → not binding
+        no_muni = federal_tax(
+            regime=TCJA_EXTENDED, wages=30_000, social_security=24_000
+        )
+        with_muni = federal_tax(
+            regime=TCJA_EXTENDED,
+            wages=30_000,
+            social_security=24_000,
+            tax_exempt_interest=5_000.0,
+        )
+        # Pre-fix `with_muni["ss_taxable"]` would have been the same
+        # as `no_muni` because the kwarg didn't exist; the muni
+        # would have to be passed via ``interest`` (which then
+        # incorrectly federalized the muni). Post-fix the muni only
+        # bumps the provisional line.
+        assert no_muni["ss_taxable"] == pytest.approx(5_000.0)
+        assert with_muni["ss_taxable"] == pytest.approx(8_550.0, abs=1.0)
+        # AGI is NOT affected by the muni: federal exemption preserved.
+        assert with_muni["agi"] == pytest.approx(
+            no_muni["agi"] + (with_muni["ss_taxable"] - no_muni["ss_taxable"]),
+            abs=1.0,
+        )
+        # The muni interest itself contributes $0 to ordinary AGI
+        # (the only delta vs no_muni is the SS taxable bump above).
+
 
 # ---------------------------------------------------------------------------
 # Regime switching

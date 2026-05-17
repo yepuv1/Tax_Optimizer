@@ -386,13 +386,16 @@ class TestCAStateSDI:
             ),
             starting=StartingBalances(taxable_brokerage=100_000.0),
         )
-        cfg_ca = Config(state_regime=CA, horizon_age=70)
-        cfg_none = Config(state_regime=STATELESS, horizon_age=70)
+        # Pin start_year to 2024 so the test runs against the SB 951
+        # baseline 1.1% rate (the regime's `sdi_rate_schedule` flips
+        # to 1.2% in 2025 and 0.9% in 2026 per EDD's published rates).
+        cfg_ca = Config(state_regime=CA, horizon_age=70, start_year=2024)
+        cfg_none = Config(state_regime=STATELESS, horizon_age=70, start_year=2024)
         df_ca = simulate(cfg_ca, inp)
         df_none = simulate(cfg_none, inp)
         row_ca = df_ca.iloc[0]
         row_none = df_none.iloc[0]
-        # SDI = 1.1% × ($150k + $80k) = $2,530.
+        # 2024 SDI = 1.1% × ($150k + $80k) = $2,530.
         assert row_ca["state_sdi"] == pytest.approx(
             0.011 * (150_000 + 80_000), abs=1.0
         )

@@ -168,6 +168,56 @@ class TestLiquidityGuardCapsAggressiveConversion:
             < df_half.iloc[0]["roth_conversion"]
         )
 
+    def test_negative_capacity_clamps_to_zero(self):
+        """Pre-fix `planned_roth_conversion` short-circuited the
+        liquidity guard whenever capacity was negative, letting the
+        full bracket-fill amount through. Post-fix any negative
+        capacity is clamped to zero — the conversion may still
+        absorb the household's "free" zero-tax band (up to the
+        standard deduction) but cannot extend into bracket-paying
+        territory.
+        """
+        inp, cfg = _liquidity_demo_setup()
+        # Direct API call so we control `tax_paying_capacity`.
+        from tax_optimizer.state import initial_state
+
+        state = initial_state(cfg, inp)
+        plan_neg = planned_roth_conversion(
+            cfg,
+            inp,
+            state,
+            base_kwargs=dict(
+                wages=0.0, interest=0.0, ordinary_div=0.0,
+                qualified_div=0.0, ltcg=0.0, pension=0.0,
+                pretax_withdrawal=0.0, roth_conversion=0.0,
+                social_security=0.0,
+            ),
+            regime=TCJA_EXTENDED,
+            filing_status="mfj",
+            rmd_total=0.0,
+            rmd_a=0.0,
+            rmd_b=0.0,
+            tax_paying_capacity=-50_000.0,
+            state_tax_fn=None,
+        )
+        # Negative capacity must yield a conversion strictly less than
+        # the bracket target (pre-fix the same negative input would
+        # let the FULL bracket-fill amount through).
+        total_neg = plan_neg.conv_a + plan_neg.conv_b
+        assert total_neg < plan_neg.bracket_target_total / 2.0, (
+            f"Negative capacity must materially shrink the conversion; "
+            f"got total={total_neg:,.0f} vs target={plan_neg.bracket_target_total:,.0f}"
+        )
+        # And the conversion must NOT exceed the household's standard
+        # deduction (the only zero-tax band when capacity is 0). MFJ
+        # 2026 std deduction is ~$30k; we use a generous bound.
+        assert total_neg < 50_000.0, (
+            f"Negative capacity must cap conversion at ~std-deduction; "
+            f"got total={total_neg:,.0f}"
+        )
+        # And the cap flag is set so the diagnostic surfaces.
+        assert plan_neg.capped_by_liquidity
+
 
 class TestRothProtectionInConversionYears:
     """When ``protect_roth_in_conversion_years=True`` (default) and a

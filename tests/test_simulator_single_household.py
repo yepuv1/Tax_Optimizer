@@ -267,16 +267,117 @@ class TestNoSpuriousRolloverInYearZero:
         cfg = Config()
         inputs = Inputs(household_kind="single")
         df = simulate(cfg, inputs)
-        # The simulator records rollover events in the `rollover_event`
-        # column when one spouse's pretax IRA/401(k) is moved to the
-        # survivor. For a single household this should NEVER happen.
-        if "rollover_event" in df.columns:
-            assert (df["rollover_event"] == "").all()
+        # The simulator records rollover events in the
+        # ``spousal_rollover`` column ("" / "a_to_b" / "b_to_a") when
+        # one spouse's pretax IRA/401(k) is moved to the survivor.
+        # For a single household this should NEVER happen.
+        assert "spousal_rollover" in df.columns
+        assert (df["spousal_rollover"] == "").all()
 
 
 # ---------------------------------------------------------------------------
 # Round-trip via summarize()
 # ---------------------------------------------------------------------------
+
+
+class TestSingleFilerZerosSpouseBFields:
+    """Regression: ``Inputs.__post_init__`` zeros every spouse_b_*
+    field when ``household_kind == "single"`` so the discriminator is
+    load-bearing rather than purely advisory. Pre-fix the spouse_b_*
+    starting balances and PIA leaked into household totals (net worth
+    calc, optimizer decision-vector building, summary panels) even
+    though the simulator's per-year code ignored them in tax/SS math.
+    """
+
+    def test_starting_balances_zeroed(self) -> None:
+        from tax_optimizer.inputs import StartingBalances
+
+        inp = Inputs(
+            household_kind="single",
+            starting=StartingBalances(
+                spouse_a_pretax_401k=300_000,
+                spouse_b_pretax_401k=200_000,  # should be zeroed
+                spouse_b_roth_ira=50_000,  # should be zeroed
+                spouse_b_pretax_ira=80_000,  # should be zeroed
+            ),
+        )
+        assert inp.starting.spouse_a_pretax_401k == 300_000
+        assert inp.starting.spouse_b_pretax_401k == 0.0
+        assert inp.starting.spouse_b_roth_ira == 0.0
+        assert inp.starting.spouse_b_pretax_ira == 0.0
+
+    def test_income_zeroed(self) -> None:
+        from tax_optimizer.inputs import CurrentIncome
+
+        inp = Inputs(
+            household_kind="single",
+            income=CurrentIncome(
+                spouse_a_gross=120_000,
+                spouse_b_gross=200_000,  # should be zeroed
+            ),
+        )
+        assert inp.income.spouse_a_gross == 120_000
+        assert inp.income.spouse_b_gross == 0.0
+
+    def test_ss_pia_zeroed(self) -> None:
+        from tax_optimizer.inputs import SocialSecurity
+
+        inp = Inputs(
+            household_kind="single",
+            ss=SocialSecurity(
+                monthly_spouse_a=2_500,
+                monthly_spouse_b=2_000,  # should be zeroed
+                start_age_b=62,  # falls back to start_age
+            ),
+        )
+        assert inp.ss.monthly_spouse_a == 2_500
+        assert inp.ss.monthly_spouse_b == 0.0
+        assert inp.ss.start_age_b is None
+
+    def test_health_premiums_zeroed(self) -> None:
+        from tax_optimizer.inputs import HealthPremiums
+
+        inp = Inputs(
+            household_kind="single",
+            health_premiums=HealthPremiums(
+                spouse_a_medical=2_000,
+                spouse_b_medical=2_500,
+                spouse_b_dental=300,
+            ),
+        )
+        assert inp.health_premiums.spouse_a_medical == 2_000
+        assert inp.health_premiums.spouse_b_medical == 0.0
+        assert inp.health_premiums.spouse_b_dental == 0.0
+
+    def test_contribution_pcts_zeroed(self) -> None:
+        inp = Inputs(
+            household_kind="single",
+            spouse_b_total_contrib_pct=0.30,
+            spouse_b_roth_401k_pct=0.50,
+            spouse_b_after_tax_401k_pct=0.20,
+            spouse_b_employer_match_rate=1.0,
+            spouse_b_employer_match_max_pct=0.06,
+            spouse_b_traditional_ira_contrib=7_000,
+        )
+        assert inp.spouse_b_total_contrib_pct == 0.0
+        assert inp.spouse_b_roth_401k_pct == 0.0
+        assert inp.spouse_b_after_tax_401k_pct == 0.0
+        assert inp.spouse_b_employer_match_rate == 0.0
+        assert inp.spouse_b_employer_match_max_pct == 0.0
+        assert inp.spouse_b_traditional_ira_contrib == 0.0
+
+    def test_mfj_default_keeps_spouse_b_inputs(self) -> None:
+        """Sanity: an MFJ household's spouse_b_* fields must NOT be
+        zeroed (the discriminator should only fire on "single")."""
+        from tax_optimizer.inputs import StartingBalances
+
+        inp = Inputs(
+            household_kind="mfj",
+            starting=StartingBalances(spouse_b_pretax_401k=200_000),
+            spouse_b_total_contrib_pct=0.10,
+        )
+        assert inp.starting.spouse_b_pretax_401k == 200_000
+        assert inp.spouse_b_total_contrib_pct == 0.10
 
 
 class TestSingleHouseholdSummarize:

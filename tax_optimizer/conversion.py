@@ -187,11 +187,15 @@ def planned_roth_conversion(
     # the deficit cascade — which (when `cfg.protect_roth_in_conversion_years`
     # is on) refuses to touch the Roth bucket, so it surfaces as
     # `unfunded` instead of silently raiding the just-converted dollars.
-    if (
-        cfg.cap_conversion_by_liquidity
-        and tax_paying_capacity is not None
-        and tax_paying_capacity >= 0.0
-    ):
+    #
+    # Negative capacity means the household has *no* liquidity for
+    # conversion-marginal tax (committed obligations exceed cash on
+    # hand). Pre-fix the guard short-circuited on `< 0` and let the
+    # full bracket-fill / fixed-amount conversion through, which is
+    # the opposite of safe. Clamp to zero so the bisection forces
+    # `total = 0` for the year.
+    if cfg.cap_conversion_by_liquidity and tax_paying_capacity is not None:
+        tax_paying_capacity = max(0.0, tax_paying_capacity)
         kwargs_with_rmd_no_conv = dict(base_kwargs)
         if rmd_total > 0:
             kwargs_with_rmd_no_conv["pretax_withdrawal"] = (

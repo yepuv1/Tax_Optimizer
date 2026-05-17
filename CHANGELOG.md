@@ -32,6 +32,99 @@ Categories used:
 
 ## [Unreleased]
 
+### Fixed — Critical tax/cash-flow correctness
+
+- **`state-tax-annuity-routing`** — `annuity_taxable` is now threaded
+  explicitly through `state_tax`, `_state_tax_fn`, and the post-
+  cascade state-tax recompute (previously the federal solver received
+  it but state tax did not, so CA / NY scenarios silently
+  under-taxed annuity income and the conversion-liquidity guard saw
+  the wrong marginal state rate). New CA / NY unit tests in
+  `tests/test_simulator_annuity.py` lock the routing.
+  *Refs:* IRC §61(a)(9); CA RTC §17071; NY Tax Law §612(c)(3-a);
+  Pub 575.
+- **`annuity-survivor-balance`** — after the first spouse's death the
+  contract balance now drains at the survivor-scaled payment
+  (`payment * pension_survivor_pct`) instead of the full pre-death
+  payment. Pre-fix a 50% J&S election silently halved the contract's
+  economic life. New `tests/test_simulator_annuity.py::
+  TestAnnuitySurvivorBalance` test.
+  *Refs:* IRC §72(b)(2); contract J&S terms.
+- **`working-year-cashflow`** — `pension_income`, `ssn_income`, and
+  `annuity_cash_in` now flow into both the working-year `cash_inflow`
+  and the conversion-capacity `guaranteed_cash_no_conv`, fixing
+  phased-retirement scenarios (still working W-2 + already drawing
+  SS / pension) where those streams silently dropped from the cash
+  ledger. New `tests/test_phased_retirement_cashflow.py`.
+- **`ny-pension-exclusion-per-spouse`** — the NY $20k per-filer
+  retirement exclusion now treats commercial-annuity income as
+  eligible alongside pension / IRA / Roth-conversion (per §612(c)
+  (3-a)), with per-spouse routing via the new `annuity_per_spouse`
+  kwarg on `state_tax`.
+
+### Fixed — High-priority correctness + UX
+
+- **`ltc-anchor`** — the LTC shock now anchors to the household's
+  *latest* end-of-life year (max of the two spouse death years; the
+  horizon when one spouse is alive-to-horizon; the single-spouse
+  death for `household_kind="single"`). Pre-fix an MFJ scenario
+  with only `year_of_death_a` set fired the shock at A's death,
+  ignoring B's continuing lifespan.
+- **`single-filer-balances`** — `Inputs.__post_init__` now zeros
+  every `spouse_b_*` numeric field (starting balances, salary,
+  contributions, employer match, IRA, health premiums, SS PIA,
+  ages) when `household_kind="single"`. The discriminator was
+  previously load-bearing only for the per-year tax / SS routing;
+  now it's enforced at construction time. New regression tests in
+  `tests/test_simulator_single_household.py::TestSingleFilerZerosSpouseBFields`.
+  Also fixes a stale column name (`rollover_event` → `spousal_rollover`)
+  in the existing rollover-detector test.
+- **`liquidity-guard-negative`** — `planned_roth_conversion` now
+  clamps any negative `tax_paying_capacity` to zero before sizing
+  the conversion. Pre-fix a negative-capacity argument
+  short-circuited the guard entirely and let the full bracket-fill
+  amount through.
+- **`scenarioerror-mapping`** — `apply_scenario` and
+  `apply_set_overrides` now wrap any `ValueError` raised by
+  `Inputs`/`Config` `__post_init__` validation as a `ScenarioError`.
+  Dash already catches `ScenarioError` in three places; the run
+  banner now surfaces "household_kind invalid" and similar
+  messages cleanly instead of bubbling up as a 500.
+- **`ca-sdi-refresh`** — `StateTaxRegime.sdi_rate_schedule` is a new
+  optional `dict[int, float]` field; CA's regime carries the
+  EDD-published 2024 / 2025 / 2026 rates (1.1% / 1.2% / 0.9%) and
+  the simulator looks up the correct rate by calendar year. Falls
+  back to the static `sdi_rate` for years before the schedule
+  starts. New `tests/test_payroll_sdi.py`.
+- **`ss-provisional-magi`** — `federal_tax` now accepts a
+  `tax_exempt_interest=` kwarg that adds to the §86 provisional-
+  income line (per IRC §86(b)(2)(B)) without polluting AGI or
+  taxable income. Reproduces the Pub 915 worksheet 1 line 3
+  add-back; muni-bond households see the correct SS taxability
+  tier without losing the federal exemption.
+- **`negative-balance-clamp`** — `state.roth` and `state.taxable`
+  are now clamped to >= 0 immediately after the cascade subtraction
+  (matching the existing clamps on `state.spouse_*_pretax` and
+  `cumulative_basis`), and a defensive end-of-year clamp catches
+  any rounding residue. New `tests/test_simulator.py::
+  TestNonNegativeBalances`.
+
+### Docs — Citation traceability page (`docs/references.md`)
+
+Adds a single-page reference map pinning every modeling assumption
+in `tax_optimizer` to its statutory / regulatory citation: federal
+income tax (IRC §1, §63, §86, §1411, §55–§59, §72, §401(a)(9),
+§3101 / §3121), state income tax (CA RTC §17041, NY Tax Law §612,
+IL 35 ILCS 5, MA Ch. 62), payroll (CA SDI / SB 951), Medicare /
+IRMAA (42 USC §1395r), ACA / HSA (§36B / §223), and SECURE 2.0.
+Includes a per-finding citation map for the open audit items
+(`state-tax-annuity-routing`, `annuity-survivor-balance`,
+`ny-pension-exclusion-per-spouse`, `ca-sdi-refresh`,
+`ss-provisional-magi`, etc.) and an explicit "Open questions and
+interpretive choices" section documenting the model's deliberate
+simplifications. Cross-linked from `docs/architecture.md` Further
+reading.
+
 ### Added — Production-grade Dash launcher (`tax-optimizer-app-prod`)
 
 **Why it matters:** the default `tax-optimizer-app` boots the Dash

@@ -139,6 +139,7 @@ def federal_tax(
     pretax_withdrawal: float = 0.0,
     roth_conversion: float = 0.0,
     social_security: float = 0.0,
+    tax_exempt_interest: float = 0.0,
     deduction: float | None = None,
     early_distribution_taxable: float = 0.0,
 ) -> dict:
@@ -166,6 +167,15 @@ def federal_tax(
     through ``pension`` / ``pretax_withdrawal`` / ``annuity_taxable``
     on top of this so the income side and the penalty side are both
     accounted for.
+
+    ``tax_exempt_interest`` is municipal-bond / private-activity-bond
+    interest that's federally tax-exempt. IRC §86(b)(2)(B) requires
+    adding this back when computing the SS provisional-income line
+    (i.e. tax-exempt-interest *does* count toward the threshold that
+    decides whether SS gets taxed at 0% / 50% / 85%). The amount is
+    NOT added to AGI / taxable income here — that would be a federal
+    tax on municipal bonds, which is the opposite of the intended
+    treatment. Routed *only* into the §86 provisional add-back.
     """
     ord_brackets = regime.ord_brackets(filing_status)
     ltcg_brackets = regime.ltcg_brackets(filing_status)
@@ -178,7 +188,13 @@ def federal_tax(
         wages + interest + ordinary_div + qualified_div + ltcg
         + pension + annuity_taxable + pretax_withdrawal + roth_conversion
     )
-    provisional = other + 0.5 * social_security
+    # IRC §86(b)(2)(B): tax-exempt interest is added back into the
+    # provisional-income calculation (but NOT into AGI or taxable
+    # income). The downstream `social_security_taxable` call uses
+    # `provisional` to decide the 0% / 50% / 85% tier, so a household
+    # holding muni bonds correctly sees a higher SS-taxable share
+    # without losing the federal exemption on the muni interest itself.
+    provisional = other + tax_exempt_interest + 0.5 * social_security
     ss_taxable = social_security_taxable(provisional, social_security, base1=base1, base2=base2)
 
     ordinary_income = (

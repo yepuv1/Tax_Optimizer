@@ -483,11 +483,17 @@ def simulate(
             if not math.isfinite(state_regime.sdi_wage_cap)
             else state_regime.sdi_wage_cap * (1 + cfg.inflation) ** year_offset
         )
+        # Year-indexed SDI rate (CA: 1.1% / 1.2% / 0.9% for
+        # 2024/25/26). Falls back to `state_regime.sdi_rate` for any
+        # regime without a published schedule.
+        sdi_rate_y = state_regime.effective_sdi_rate(
+            cfg.start_year + year_offset
+        )
         sdi_a = state_sdi(
-            a_w2_fica, rate=state_regime.sdi_rate, wage_cap=sdi_wage_cap_y
+            a_w2_fica, rate=sdi_rate_y, wage_cap=sdi_wage_cap_y
         )
         sdi_b = state_sdi(
-            b_w2_fica, rate=state_regime.sdi_rate, wage_cap=sdi_wage_cap_y
+            b_w2_fica, rate=sdi_rate_y, wage_cap=sdi_wage_cap_y
         )
         sdi_total = sdi_a + sdi_b
 
@@ -641,14 +647,19 @@ def simulate(
             if state.annuity_payment == 0.0:
                 state.annuity_payment = inputs.annuity.annual_at_start
             payment = min(state.annuity_payment, state.annuity_balance)
-            state.annuity_balance = max(0.0, state.annuity_balance - payment)
 
             # Survivor scaling matches the pension: surviving spouse
             # keeps `pension_survivor_pct` of the contract payment.
+            # Scale the payment BEFORE draining the balance — pre-fix
+            # the contract balance dropped by the full `payment` while
+            # the household only received the survivor-fraction share,
+            # so a 50% J&S election silently halved the contract's
+            # economic life.
             if not alive_a and alive_b:
                 payment *= cfg.mortality.pension_survivor_pct
             elif not alive_a and not alive_b:
                 payment = 0.0
+            state.annuity_balance = max(0.0, state.annuity_balance - payment)
 
             if inputs.annuity.tax_kind == "non_qualified":
                 ratio = exclusion_ratio(
@@ -865,6 +876,14 @@ def simulate(
         _alive_b_local = alive_b
 
         def _state_tax_fn(kw: dict, ss_taxable_federal: float) -> float:
+            # Pull `annuity_taxable` from the kwargs dict so the
+            # conversion-liquidity sizer and deficit-cascade solvers
+            # can see annuity income at the state level too. Without
+            # this, the marginal state tax on a Roth conversion in a
+            # year with a non-qualified annuity payment was off by
+            # `marginal_state_rate × annuity_taxable_inc` — a real
+            # dollar amount in CA / NY scenarios.
+            ann_a = kw.get("annuity_taxable", 0.0)
             return state_tax(
                 regime=_state_regime_local,
                 filing_status=_filing_local,
@@ -878,6 +897,11 @@ def simulate(
                 roth_conversion=kw.get("roth_conversion", 0.0),
                 social_security=kw.get("social_security", 0.0),
                 ss_taxable_federal=ss_taxable_federal,
+                annuity_taxable=ann_a,
+                # Annuity is currently a single contract owned by
+                # spouse A; the per-spouse split below routes the
+                # whole amount to spouse A's NY $20k exclusion pool.
+                annuity_per_spouse=(ann_a, 0.0),
                 hsa_contrib=_hsa_contrib_local,
                 age_a=_age_a_local,
                 age_b=_age_b_local,
@@ -892,17 +916,32 @@ def simulate(
         years_until_horizon = (n_years - 1) - year_offset
         # F6: anchor the LTC shock to the household's actual end-of-
         # life (latest spouse-death year) rather than to the simulation
-        # horizon. Falls back to horizon when neither spouse has a
-        # mortality date set.
+        # horizon. The household's "last year alive" is the LATEST of
+        # any spouse's known year_of_death; for a single-filer household
+        # we fall back to spouse A's death (spouse B never existed) and
+        # for an MFJ household where ONE spouse has a death set and the
+        # other is None (alive-to-horizon), the OTHER spouse defines
+        # the household's last year — which is the horizon, not the
+        # known death. Pre-fix the LTC shock fired against the dying
+        # spouse's lifeline in the latter case, anchoring nursing-home
+        # care to a year when the surviving spouse was still healthy.
         death_a = cfg.mortality.year_of_death_a
         death_b = cfg.mortality.year_of_death_b
+        is_single = inputs.household_kind == "single"
         end_of_life_offset: int | None
-        if death_a is not None and death_b is not None:
-            end_of_life_offset = max(death_a, death_b) - 1  # last year alive
-        elif death_a is not None:
-            end_of_life_offset = death_a - 1
-        elif death_b is not None:
-            end_of_life_offset = death_b - 1
+        if is_single:
+            # Single filer: only spouse A's death matters; spouse B is
+            # absent, not "alive to horizon".
+            if death_a is not None:
+                end_of_life_offset = death_a - 1
+            else:
+                end_of_life_offset = None
+        elif death_a is not None and death_b is not None:
+            end_of_life_offset = max(death_a, death_b) - 1
+        elif death_a is not None or death_b is not None:
+            # MFJ household with one death set, the other alive-to-
+            # horizon: the household's last year IS the horizon.
+            end_of_life_offset = n_years - 1
         else:
             end_of_life_offset = None
         years_until_death = (
@@ -1036,8 +1075,17 @@ def simulate(
             )
         else:
             earned_cash = 0.0
+        # Annuity cash flow (taxable + tax-free portions, plus any
+        # lump-sum cash this year) is real money in either working or
+        # retired years — pre-fix the capacity solver omitted it,
+        # silently shrinking the conversion sizer's headroom in any
+        # year a non-qualified annuity was paying out.
         guaranteed_cash_no_conv = (
-            earned_cash + pension_income + ssn_income + rmd_total
+            earned_cash
+            + pension_income
+            + ssn_income
+            + annuity_cash_in
+            + rmd_total
         )
         # Tax on (income line + RMD) but BEFORE any conversion. This is
         # the "background" tax the household owes regardless of the
@@ -1064,6 +1112,12 @@ def simulate(
         cash_surplus = max(0.0, guaranteed_cash_no_conv - committed_obligations)
         # Plus the share of taxable brokerage the user is willing to
         # spend on conversion tax (default 50% leaves a runway).
+        # `taxable_slice` is intentionally additive on top of the
+        # clamped cash_surplus: it's the user's preference knob for
+        # how much of brokerage they're willing to allocate to
+        # conversion tax, not a strict liquidity-net accounting (any
+        # operational shortfall flows through the deficit cascade
+        # which has its own bucket-priority logic).
         ratio = min(1.0, max(0.0, cfg.conversion_taxable_use_ratio))
         taxable_slice = max(0.0, state.taxable) * ratio
         tax_paying_capacity = cash_surplus + taxable_slice
@@ -1140,6 +1194,13 @@ def simulate(
         # Computed on the same income line as federal; differences are
         # handled inside `state_tax` (HSA add-back for CA, retirement
         # exclusions for IL / NY, SS taxability fraction, etc.).
+        # Annuity is a single-contract household input (no per-spouse
+        # split modeled), so we route 100% of `annuity_taxable_total`
+        # to spouse A — matching the convention used for pension
+        # (`pension_split = (pension_income, 0.0)`). NY's $20k per-
+        # filer exclusion in §612(c)(3-a) applies the cap against
+        # spouse A's pool only.
+        annuity_split = (final_kwargs.get("annuity_taxable", 0.0), 0.0)
         state_result = state_tax(
             regime=state_regime,
             filing_status=filing_status,
@@ -1148,15 +1209,8 @@ def simulate(
             ordinary_div=final_kwargs.get("ordinary_div", 0.0),
             qualified_div=final_kwargs.get("qualified_div", 0.0),
             ltcg=final_kwargs.get("ltcg", 0.0),
-            # Roll annuity_taxable into the `pension` kwarg for state
-            # tax purposes. Existing retirement-income exclusions
-            # (IL full / NY $20k / etc.) treat annuity income the
-            # same as pension; lumping the two together gives the
-            # right state tax treatment without a new kwarg.
-            pension=(
-                final_kwargs.get("pension", 0.0)
-                + final_kwargs.get("annuity_taxable", 0.0)
-            ),
+            pension=final_kwargs.get("pension", 0.0),
+            annuity_taxable=final_kwargs.get("annuity_taxable", 0.0),
             pretax_withdrawal=final_kwargs.get("pretax_withdrawal", 0.0),
             roth_conversion=final_kwargs.get("roth_conversion", 0.0),
             social_security=final_kwargs.get("social_security", 0.0),
@@ -1169,6 +1223,7 @@ def simulate(
             pension_per_spouse=pension_split,
             pretax_per_spouse=pretax_split,
             roth_conv_per_spouse=roth_split,
+            annuity_per_spouse=annuity_split,
         )
         state_income_tax = state_result["state_tax"]
 
@@ -1229,8 +1284,13 @@ def simulate(
         state.spouse_b_pretax = max(0.0, pre_w_b - withdraws["pretax_b"])
         _drain_pretax_ira("a", pre_w_a, withdraws["pretax_a"])
         _drain_pretax_ira("b", pre_w_b, withdraws["pretax_b"])
-        state.roth -= withdraws["roth"]
-        state.taxable -= withdraws["taxable"]
+        # Clamp post-withdrawal balances to >= 0. Rounding errors in
+        # the cascade gross-up can leave a small negative residue that
+        # the rest of the year-loop assumes away (e.g. portfolio yield
+        # multiplies `state.taxable`, deficit cascade clamps but
+        # subsequent code reads the value).
+        state.roth = max(0.0, state.roth - withdraws["roth"])
+        state.taxable = max(0.0, state.taxable - withdraws["taxable"])
         state.cumulative_basis = max(
             state.cumulative_basis - withdraws["taxable"] * current_basis_frac, 0.0
         )
@@ -1255,9 +1315,23 @@ def simulate(
             # 401(k) dollar (≈ deferral × marginal rate of free wealth
             # per year). Mirrors the same fix applied to `earned_cash`
             # in the tax-paying-capacity block above.
+            #
+            # `pension_income` and `ssn_income` are added explicitly
+            # because a household can be still working (one or both
+            # spouses earning W-2 wages) AND already drawing pension
+            # or claiming SS in the same year — the working-year
+            # branch had pre-fix omitted those streams entirely,
+            # silently understating cash inflow (and forcing a
+            # phantom deficit cascade) for any "phased retirement"
+            # scenario. `pension_income` includes the current-year
+            # cash component of any pension lump-sum already; the
+            # capacity solver above also receives the same streams,
+            # so the two stay in sync.
             cash_inflow = (
                 wages_box1
                 + extra_interest + extra_qdiv + extra_ltcg
+                + pension_income
+                + ssn_income
                 + gross_cash_in
                 + annuity_cash_in
                 - fica_total
@@ -1380,6 +1454,7 @@ def simulate(
                     qualified_div=final_kwargs.get("qualified_div", 0.0),
                     ltcg=final_kwargs.get("ltcg", 0.0),
                     pension=final_kwargs.get("pension", 0.0),
+                    annuity_taxable=final_kwargs.get("annuity_taxable", 0.0),
                     pretax_withdrawal=final_kwargs.get("pretax_withdrawal", 0.0),
                     roth_conversion=final_kwargs.get("roth_conversion", 0.0),
                     social_security=final_kwargs.get("social_security", 0.0),
@@ -1395,6 +1470,7 @@ def simulate(
                         withdraws["pretax_b"],
                     ),
                     roth_conv_per_spouse=roth_split,
+                    annuity_per_spouse=annuity_split,
                 )
                 state_income_tax = state_result["state_tax"]
                 # IRMAA in year T is based on MAGI from year T-2 under
@@ -1474,6 +1550,18 @@ def simulate(
 
         prev_alive_a = alive_a
         prev_alive_b = alive_b
+
+        # Defensive end-of-year clamp on liquid balances. The
+        # individual cascade legs already clamp at the call site, but
+        # a tiny rounding residue (e.g. `state.taxable = -0.0001`
+        # after a basis-fraction multiplication) can survive into the
+        # next year's portfolio-yield / cumulative-basis computation
+        # and pollute downstream tests (and surface as confusing
+        # negative values in CSV exports).
+        state.taxable = max(0.0, state.taxable)
+        state.cumulative_basis = max(0.0, state.cumulative_basis)
+        state.roth = max(0.0, state.roth)
+        state.hsa = max(0.0, state.hsa)
 
         # Roll the AGI lag chain forward (TC-5 + TC-11). At the start
         # of year T+1: `prior_agi` will equal AGI[T] and `agi_lag_2`

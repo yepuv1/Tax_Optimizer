@@ -1495,6 +1495,11 @@ the `maxiter`, `popsize`, and `n_paths` keyword arguments on
   every knob that shapes the year-by-year conversion plan.
 - [`docs/market_models.md`](market_models.md) — deep dive on the four
   `MarketModel` implementations and CMA preset selection.
+- [`docs/references.md`](references.md) — citation traceability map
+  pinning every modeling assumption (federal / state tax, annuity,
+  RMD, IRMAA, ACA, payroll) to its IRC section, regulation, or IRS
+  publication. Also contains the per-finding citation map for the
+  open audit items.
 - [`scenarios/README.md`](../scenarios/README.md) — top-level scenario
   directory README covering Roth-conversion + withdrawal knobs, §125
   health premiums, mega-backdoor auto-spillover, and the example

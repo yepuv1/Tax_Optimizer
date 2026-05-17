@@ -10,8 +10,9 @@ from __future__ import annotations
 import pytest
 
 from tax_optimizer import Config, Inputs
-from tax_optimizer.inputs import AnnuityInputs
+from tax_optimizer.inputs import AnnuityInputs, StartingBalances
 from tax_optimizer.simulator import simulate
+from tax_optimizer.tax.state import CA, NY, STATELESS
 
 
 def _row(df, age):
@@ -323,6 +324,254 @@ class TestCashNonQualified:
 # ---------------------------------------------------------------------------
 # Pre-payout growth
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# State-tax routing for annuity income (Critical fix:
+# `state-tax-annuity-routing`).
+#
+# Pre-fix the simulator routed `annuity_taxable` through the federal
+# solver but `_state_tax_fn` and the conversion-capacity / post-cascade
+# state-tax recomputes ignored it. CA's `state_regime` would therefore
+# under-tax a household whose only ordinary income that year was an
+# annuity payment; the marginal state rate also dropped out of the
+# Roth-conversion liquidity guard. NY's $20k per-filer exclusion
+# (§612(c)(3-a)) likewise excluded annuity from the eligible pool.
+# ---------------------------------------------------------------------------
+
+
+class TestAnnuityStateTaxRouting:
+    def test_ca_taxes_annuity_as_ordinary_income(self):
+        # Single filer, CA resident, no other income. A $12k qualified
+        # annuity payment is fully taxable as ordinary income at both
+        # the federal AND state level (CA RTC §17071 conformity to IRC
+        # §61(a)(9)). Pre-fix the state-tax line stayed at $0 because
+        # `annuity_taxable` was never threaded into `state_tax`.
+        inp = Inputs(
+            household_kind="single",
+            spouse_a_age_start=70,
+            annuity=AnnuityInputs(
+                balance_today=200_000,
+                monthly_at_start=1_000,
+                start_age=70,
+                tax_kind="qualified",
+            ),
+        )
+        cfg = Config(horizon_age=80, state_regime=CA)
+        df = simulate(cfg, inp)
+        r70 = _row(df, 70)
+        # Federal regression: annuity is recognized.
+        assert r70["annuity_taxable"] == pytest.approx(12_000)
+        # State tax must be > 0 for a CA resident with $12k of annuity
+        # income (after CA standard deduction the $12k - ~$5,540 ≈
+        # $6,460 of taxable ordinary; CA's 1% slab alone yields ~$65
+        # at minimum).
+        assert r70["state_tax"] > 0.0, (
+            "CA state tax must be non-zero on annuity income"
+        )
+
+    def test_stateless_unchanged(self):
+        # STATELESS regime is the no-tax control: state_tax stays at 0
+        # regardless of annuity income.
+        inp = Inputs(
+            household_kind="single",
+            spouse_a_age_start=70,
+            annuity=AnnuityInputs(
+                balance_today=200_000,
+                monthly_at_start=1_000,
+                start_age=70,
+                tax_kind="qualified",
+            ),
+        )
+        cfg = Config(horizon_age=80, state_regime=STATELESS)
+        df = simulate(cfg, inp)
+        r70 = _row(df, 70)
+        assert r70["state_tax"] == 0.0
+
+
+class TestNYRetirementExclusionWithAnnuity:
+    def test_ny_per_filer_exclusion_covers_annuity(self):
+        # Direct unit test of the state-tax engine with annuity
+        # routing. We call `state_tax` twice with identical income
+        # except for `annuity_taxable`; under NY's $20k exclusion the
+        # second call should return $0 of state tax (the entire
+        # annuity payment falls inside the per-filer cap), while
+        # the first call (no annuity) is also $0 — and a third call
+        # with $30k of annuity should owe NY tax on $10k (the
+        # un-excluded slice).
+        #
+        # This isolates the routing fix from spending-driven taxable
+        # withdrawals that pollute the simulator-level state tax in
+        # an end-to-end run.
+        from tax_optimizer.tax.state import state_tax
+
+        kw_common = dict(
+            regime=NY,
+            filing_status="single",
+            wages_box1=0.0,
+            interest=0.0,
+            ordinary_div=0.0,
+            qualified_div=0.0,
+            ltcg=0.0,
+            pension=0.0,
+            pretax_withdrawal=0.0,
+            roth_conversion=0.0,
+            social_security=0.0,
+            ss_taxable_federal=0.0,
+            age_a=70,
+            alive_a=True,
+        )
+        no_annuity = state_tax(annuity_taxable=0.0, **kw_common)
+        small_annuity = state_tax(
+            annuity_taxable=20_000.0,
+            annuity_per_spouse=(20_000.0, 0.0),
+            **kw_common,
+        )
+        big_annuity = state_tax(
+            annuity_taxable=30_000.0,
+            annuity_per_spouse=(30_000.0, 0.0),
+            **kw_common,
+        )
+        # No annuity → no state tax (only $0 of state taxable).
+        assert no_annuity["state_tax"] == 0.0
+        # $20k of annuity is fully excluded ($20k cap, age 70 ≥ 60).
+        assert small_annuity["state_tax"] == 0.0
+        # $30k of annuity → only $10k flows through the NY rate
+        # schedule. After the NY single-filer std-deduction ($8k)
+        # this lands at $2k of state-taxable income — taxed at the
+        # NY 4% slab → $80 of NY tax.
+        assert big_annuity["state_tax"] == pytest.approx(80.0, abs=5.0)
+
+    def test_ny_exclusion_per_spouse_independent(self):
+        # Two-filer (MFJ) sanity check: each spouse gets their own
+        # $20k cap. Spouse A gets $20k of annuity, spouse B gets
+        # $20k of pension — both should be fully excluded.
+        from tax_optimizer.tax.state import state_tax
+
+        result = state_tax(
+            regime=NY,
+            filing_status="mfj",
+            wages_box1=0.0,
+            interest=0.0,
+            ordinary_div=0.0,
+            qualified_div=0.0,
+            ltcg=0.0,
+            pension=20_000.0,
+            pension_per_spouse=(0.0, 20_000.0),
+            pretax_withdrawal=0.0,
+            roth_conversion=0.0,
+            social_security=0.0,
+            ss_taxable_federal=0.0,
+            annuity_taxable=20_000.0,
+            annuity_per_spouse=(20_000.0, 0.0),
+            age_a=70,
+            age_b=70,
+            alive_a=True,
+            alive_b=True,
+        )
+        # Both buckets fully sheltered → no NY tax (after std
+        # deduction the $0 of remaining ordinary income → $0 tax).
+        assert result["state_tax"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Survivor balance scaling (Critical fix: `annuity-survivor-balance`).
+#
+# Pre-fix, after spouse A's death the contract paid `payment *
+# pension_survivor_pct` (correct) but `state.annuity_balance` was
+# drained by the full `payment` (wrong). With a 50% J&S election the
+# contract balance silently exhausted twice as fast as the survivor
+# was actually receiving — a half-year mortality scenario could
+# misrepresent terminal contract value by tens of thousands of
+# dollars.
+# ---------------------------------------------------------------------------
+
+
+class TestAnnuitySurvivorBalance:
+    def test_balance_drains_at_survivor_pace(self):
+        # Joint household with spouse A dying at year_offset=2. The
+        # contract pays $12k/yr until A dies, then $6k/yr (50% J&S)
+        # thereafter. Pre-fix the balance dropped at $12k/yr in
+        # every post-death year too. We assert the balance drains
+        # at the post-death rate by comparing the year-over-year
+        # delta in the contract balance.
+        from tax_optimizer.mortality import Mortality
+
+        inp = Inputs(
+            spouse_a_age_start=70,
+            spouse_b_age_start=68,
+            spouse_a_retire_age=70,
+            spouse_b_retire_age=68,
+            annuity=AnnuityInputs(
+                balance_today=200_000,
+                monthly_at_start=1_000,
+                start_age=70,
+                tax_kind="qualified",
+            ),
+        )
+        cfg = Config(
+            horizon_age=85,
+            mortality=Mortality(year_of_death_a=2, pension_survivor_pct=0.5),
+        )
+        df = simulate(cfg, inp)
+        # Year 1 (both alive): balance drops by ~$12k.
+        # Year 2 (A dies, B survives): payment = $6k, balance drop ~$6k.
+        # Year 3 (B alone, A dead): payment = $6k, balance drop ~$6k.
+        balances = df.set_index("spouse_a_age")["annuity_balance"]
+        # Year 0 → 1: full $12k drop (both alive).
+        delta_y1 = balances.iloc[0] - balances.iloc[1]
+        assert delta_y1 == pytest.approx(12_000, abs=1)
+        # Year 1 → 2: A dies in year 2, payment scales to 50% → $6k drop.
+        delta_y2 = balances.iloc[1] - balances.iloc[2]
+        assert delta_y2 == pytest.approx(6_000, abs=1), (
+            f"survivor-year balance drop must equal scaled payment, got {delta_y2:.2f}"
+        )
+        # Year 2 → 3: still $6k/yr (post-death survivor pace).
+        delta_y3 = balances.iloc[2] - balances.iloc[3]
+        assert delta_y3 == pytest.approx(6_000, abs=1)
+
+    def test_total_dollars_paid_match_balance_drained(self):
+        # Stronger invariant: across the full payout horizon, the
+        # cumulative cash actually received by the household must
+        # equal the total amount drained from the contract balance.
+        # (Pre-fix the balance was over-drained by 2× the survivor
+        # haircut every post-death year.)
+        from tax_optimizer.mortality import Mortality
+
+        inp = Inputs(
+            spouse_a_age_start=70,
+            spouse_b_age_start=68,
+            spouse_a_retire_age=70,
+            spouse_b_retire_age=68,
+            annuity=AnnuityInputs(
+                balance_today=200_000,
+                monthly_at_start=1_000,
+                start_age=70,
+                tax_kind="qualified",
+            ),
+        )
+        cfg = Config(
+            horizon_age=95,
+            mortality=Mortality(year_of_death_a=2, pension_survivor_pct=0.5),
+        )
+        df = simulate(cfg, inp)
+        # Cumulative payments = sum of the annuity_taxable column
+        # (contract is qualified, so no tax-free split).
+        total_paid = df["annuity_taxable"].sum()
+        # Total drained = starting balance minus ending balance.
+        drained = (
+            df["annuity_balance"].iloc[0] + 12_000
+            - df["annuity_balance"].iloc[-1]
+        )
+        # The +$12k offset accounts for the year-0 in-flow (year 0
+        # already shows the post-payment balance in the dataframe).
+        # We just compare total_paid vs drained directly.
+        total_drained_raw = (
+            inp.annuity.balance_today - df["annuity_balance"].iloc[-1]
+        )
+        # Conservation: dollars out of the contract = dollars
+        # received by the household.
+        assert total_paid == pytest.approx(total_drained_raw, abs=1.0)
 
 
 class TestPrePayoutGrowth:

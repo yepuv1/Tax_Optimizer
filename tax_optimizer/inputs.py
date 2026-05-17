@@ -534,6 +534,46 @@ class Inputs:
                 f"inputs.annuity.cost_basis must be >= 0; got "
                 f"{self.annuity.cost_basis!r}."
             )
+        # When ``household_kind == "single"`` the simulator forces
+        # ``alive_b = False`` from year 0 and uses Single tax /
+        # FICA / IRMAA / SS-provisional tables. Pre-fix every
+        # ``spouse_b_*`` numeric default (balances, salary, contribs,
+        # employer match, IRA, health premium, SS PIA, age) was
+        # still seeded — the simulator silently ignored most but
+        # the starting balances and taxable_brokerage seed counted
+        # against household net worth, and the SS module read the
+        # spouse-B PIA into the deceased-record survivor-benefit
+        # branch. Zero everything spouse-B-shaped in one place so
+        # the discriminator becomes load-bearing.
+        if self.household_kind == "single":
+            self.spouse_b_age_start = 0
+            self.spouse_b_retire_age = 0
+            self.spouse_b_total_contrib_pct = 0.0
+            self.spouse_b_roth_401k_pct = 0.0
+            self.spouse_b_after_tax_401k_pct = 0.0
+            self.spouse_b_mega_backdoor_enabled = False
+            self.spouse_b_traditional_ira_contrib = 0.0
+            self.spouse_b_roth_ira_contrib = 0.0
+            self.spouse_b_backdoor_roth = False
+            self.spouse_b_employer_match_rate = 0.0
+            self.spouse_b_employer_match_max_pct = 0.0
+            # Starting balances: keep the dataclass instance but zero
+            # every spouse-B field. This preserves any explicit
+            # spouse_a_* / shared (taxable_brokerage / hsa) values the
+            # caller passed.
+            self.starting.spouse_b_pretax_401k = 0.0
+            self.starting.spouse_b_roth_ira = 0.0
+            self.starting.spouse_b_pretax_ira = 0.0
+            # Income.
+            self.income.spouse_b_gross = 0.0
+            # Health premiums.
+            self.health_premiums.spouse_b_medical = 0.0
+            self.health_premiums.spouse_b_dental = 0.0
+            self.health_premiums.spouse_b_vision = 0.0
+            # Social Security: spouse B never claimed and has no PIA.
+            self.ss.monthly_spouse_b = 0.0
+            self.ss.start_age_b = None  # falls back to ss.start_age
+            self.ss.fra_b = self.ss.fra_a  # avoid orphan reads
         if self.annual_expenses != _ANNUAL_EXPENSES_LEGACY_DEFAULT:
             warnings.warn(
                 "Inputs.annual_expenses is deprecated and ignored by the "

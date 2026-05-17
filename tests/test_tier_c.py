@@ -608,10 +608,25 @@ class TestStepUpInBasis:
     def test_disabled_by_default_keeps_old_behaviour(self) -> None:
         cfg = Config(mortality=Mortality(year_of_death_a=10))
         df = simulate(cfg, Inputs())
-        # No automatic basis bump.
+        # No automatic basis bump: the basis/balance ratio must not
+        # jump (a step-up would slam basis up to ~taxable_balance,
+        # which is the test_basis_resets_to_fmv_on_first_death case).
+        # A small absolute basis growth is allowed — surviving-spouse
+        # SS / pension cash surplus legitimately deposits into the
+        # taxable account as new basis (this surfaced after the
+        # working-year cash_inflow fix that adds pension+SS to
+        # cash_inflow during phased retirement).
         pre = df.iloc[9]
         post = df.iloc[10]
-        assert post["cumulative_basis"] <= pre["cumulative_basis"] + 1e-3
+        pre_ratio = pre["cumulative_basis"] / max(pre["taxable_balance"], 1.0)
+        post_ratio = post["cumulative_basis"] / max(post["taxable_balance"], 1.0)
+        # Step-up to FMV would push the ratio toward 1.0 (a >0.5
+        # jump in the enabled test). Without step-up, the ratio can
+        # only drift slowly with new deposits.
+        assert post_ratio - pre_ratio < 0.05, (
+            f"Disabled stepup must not slam basis to FMV; "
+            f"ratio jumped {post_ratio - pre_ratio:.3f}"
+        )
 
 
 # =====================================================================

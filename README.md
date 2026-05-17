@@ -703,22 +703,148 @@ Federal bracket numbers, IRS Uniform Lifetime divisors, pension-formula coeffici
 
 ## Acronyms
 
-| Acronym | Full Form | Context |
-|---------|-----------|---------|
-| **MFJ** | Married Filing Jointly | Tax filing status for couples |
-| **RMD** | Required Minimum Distribution | IRS-mandated annual retirement account withdrawals starting at age 72 |
-| **LTCG** | Long-Term Capital Gains | Investment gains taxed at preferential rates (vs. ordinary income) |
-| **NIIT** | Net Investment Income Tax | 3.8% tax on investment income for high earners |
-| **IRMAA** | Income-Related Monthly Adjustment Amount | Medicare premium surcharge based on modified adjusted gross income |
-| **SS** | Social Security | Federal retirement / survivor benefits program |
-| **IRC** | Internal Revenue Code | U.S. federal tax law |
-| **NW** | Net Worth | Total assets minus liabilities |
-| **CVaR** | Conditional Value at Risk | Expected value in the worst α% of outcomes (risk metric) |
-| **LTC** | Long-Term Care | Extended care / nursing-home expenses |
-| **TCJA** | Tax Cuts and Jobs Act | 2017 U.S. tax reform (many provisions sunset in 2026) |
-| **CLI** | Command-Line Interface | Text-based program interface |
-| **NPV** | Net Present Value | Present-day value of future cash flows |
-| **ACA** | Affordable Care Act | U.S. healthcare law affecting pre-Medicare premium subsidies |
+Comprehensive glossary of every acronym that appears in the package,
+docs, dashboard, scenario files, and action report — grouped by
+domain so you can scan to the relevant block.
+
+### Tax & income
+
+| Acronym | Full form | Context |
+|---|---|---|
+| **MFJ** | Married Filing Jointly | Default federal filing status for the modeled couple. |
+| **AGI** | Adjusted Gross Income | Total income net of above-the-line deductions; gates most thresholds. |
+| **MAGI** | Modified AGI | AGI with a handful of add-backs; governs IRMAA, ACA APTC, and IRA-deductibility / direct-Roth phase-outs. |
+| **LTCG** | Long-Term Capital Gains | Held >1 year; taxed at the preferential 0 / 15 / 20% brackets. |
+| **QDIV** | Qualified Dividends | Dividends taxed at LTCG rates rather than ordinary rates. |
+| **NIIT** | Net Investment Income Tax | 3.8% surtax on investment income above the MFJ $250k threshold. |
+| **AMT** | Alternative Minimum Tax (IRC §55) | Parallel tax system; the federal module computes TMT and takes `max(AMT, regular)`. |
+| **AMTI** | Alternative Minimum Taxable Income | AMT base after preference add-backs. |
+| **TMT** | Tentative Minimum Tax | The pre-comparison number used inside the AMT calculation. |
+| **FICA** | Federal Insurance Contributions Act | Payroll tax = OASDI + Medicare; reconciled at the household level via Form 8959. |
+| **OASDI** | Old-Age, Survivors, and Disability Insurance | The Social-Security half of FICA; subject to the SSWB cap. |
+| **SDI** | State Disability Insurance | CA / NJ / NY / RI / HI per-spouse payroll surcharge. |
+| **VPDI** | Voluntary Plan Disability Insurance | CA private-plan alternative to SDI. |
+| **SALT** | State And Local Tax | Itemized deduction (TCJA-capped at $10,000); noted as AMT preference. |
+| **IRC** | Internal Revenue Code | U.S. federal tax law. |
+| **IRS** | Internal Revenue Service | Federal tax administrator. |
+| **FTB** | Franchise Tax Board | California state tax authority. |
+| **TCJA** | Tax Cuts and Jobs Act | 2017 reform; many provisions sunset in 2026. The regime swap models this. |
+| **OBBBA** | One Big Beautiful Bill Act | 2025 statute that added the temporary §70103 "senior bonus" deduction for filers 65+ (modeled in `regimes.py`). |
+| **SECURE** | Setting Every Community Up for Retirement Enhancement Act | 2019/2022 legislation; introduced the 10-year inherited-IRA drawdown applied in `metrics.py`. |
+| **JCT** | Joint Committee on Taxation | Source for the bracket-extension projections used in the TCJA-extended regime. |
+| **ACA** | Affordable Care Act | Drives the pre-Medicare premium subsidy path. |
+| **APTC** | Advance Premium Tax Credit | The ACA subsidy paid directly to the insurer. |
+| **FPL** | Federal Poverty Level | Income reference used by the ACA subsidy formula (not yet ×household-size-aware here). |
+| **ACS** | American Community Survey | Census source quoted in `inputs.py` for the default household calibration. |
+
+### Retirement & health accounts
+
+| Acronym | Full form | Context |
+|---|---|---|
+| **IRA** | Individual Retirement Account | Traditional / direct-Roth / backdoor pathways in `ira.py`. |
+| **SEP** | Simplified Employee Pension (IRA) | Pooled with Traditional under the backdoor pro-rata rule (IRC §408(d)(2)). |
+| **SEPP** | Substantially Equal Periodic Payments | IRC §72(t) early-withdrawal exemption; out-of-scope flag noted in the annuity guide. |
+| **RMD** | Required Minimum Distribution | IRS Uniform Lifetime divisors per spouse (ages 72–110). |
+| **HSA** | Health Savings Account | Triple-tax-advantaged; medical-only pre-65, general retirement bucket from 65. |
+| **HDHP** | High-Deductible Health Plan | Eligibility requirement to contribute to an HSA. |
+| **ESPP** | Employee Stock Purchase Plan | Falls under `inputs.income.*` extras; not separately modeled. |
+| **ISO** | Incentive Stock Option | Bargain-element AMT preference; documented as out-of-scope in `federal.py`. |
+| **MBR** | Mega-Backdoor Roth | After-tax 401(k) → in-plan Roth conversion path; gated by `spouse_*_mega_backdoor_enabled`. |
+| **FMV** | Fair Market Value | Used for the step-up-in-basis bookkeeping on a first-spouse death. |
+
+### Social Security & Medicare
+
+| Acronym | Full form | Context |
+|---|---|---|
+| **SS** | Social Security | Federal retirement / survivor benefits. |
+| **SSA** | Social Security Administration | Issues PIAs, COLAs, and the IRMAA two-year MAGI lookback. |
+| **SSWB** | Social Security Wage Base | Annual OASDI cap (indexed forward in the FICA path). |
+| **PIA** | Primary Insurance Amount | Monthly SS benefit at FRA. |
+| **FRA** | Full Retirement Age | 66 / 66+months / 67 depending on birth year. |
+| **COLA** | Cost-of-Living Adjustment | Annual uplift on SS, some pensions, and (optionally) annuities. |
+| **IRMAA** | Income-Related Monthly Adjustment Amount | Medicare premium surcharge based on MAGI; uses a two-year lookback. |
+| **CMS** | Centers for Medicare & Medicaid Services | Publishes the IRMAA tier table used in `irmaa.py`. |
+
+### Pension (cash-balance)
+
+| Acronym | Full form | Context |
+|---|---|---|
+| **BP RAP** | BP Retirement Accumulation Plan | The specific cash-balance plan the projector in `pension.py` is calibrated against. |
+| **RAP** | Retirement Accumulation Plan | Generic name for a cash-balance plan; same module supports analogues. |
+| **NRD** | Normal Retirement Date | Age the pension's level monthly annuity is quoted at. |
+| **SPD** | Summary Plan Description | Source document for the pay-credit tiers and interest floors. |
+
+### Markets & finance
+
+| Acronym | Full form | Context |
+|---|---|---|
+| **CAGR** | Compound Annual Growth Rate | Geometric mean of yearly returns; quoted in market-model outputs. |
+| **CPI** | Consumer Price Index | Inflation series used for COLA and bracket indexing. |
+| **CAPE** | Cyclically Adjusted Price-to-Earnings ratio | Shiller P/E; `LognormalModel` can scale `equity_mu` by `cape_long_run / cape_today`. |
+| **CMA** | Capital Market Assumptions | Vanguard / Horizon / JPMorgan return forecasts wired into `lognormal_from_cma()`. |
+| **LTCMA** | Long-Term Capital Market Assumptions | JPMorgan's annual CMA publication (one of the shipped presets). |
+| **CFP** | Certified Financial Planner | Professional credential mentioned in the action-plan caveats. |
+| **ETF** | Exchange-Traded Fund | Cost / turnover reference used in the dashboard help text. |
+| **REIT** | Real Estate Investment Trust | Pass-through structure; not modeled as its own asset class yet. |
+| **TIPS** | Treasury Inflation-Protected Securities | Listed under "not yet modeled" multi-asset extensions. |
+| **YTM** | Yield to Maturity | Bond-return reference used in market-model docs. |
+| **YTD** | Year To Date | Reporting timeframe shorthand. |
+| **ROI** | Return On Investment | Used in `market_models.md` to rank candidate model upgrades. |
+| **FX** | Foreign Exchange | Surface in multi-factor model comparisons (Wilkie / GEMS) — out of scope here. |
+
+### Retirement-planning literature & community
+
+| Acronym | Full form | Context |
+|---|---|---|
+| **FIRE** | Financial Independence, Retire Early | Audience segment referenced in the market-model survey. |
+| **ERN** | Early Retirement Now | Karsten Jeske's blog; cited for the CAPE-based SWR work. |
+| **SWR** | Safe Withdrawal Rate | The "4% rule" family; one comparison axis for the withdrawal strategies. |
+| **VPW** | Variable Percentage Withdrawal | Bogleheads dynamic alternative to a constant SWR. |
+| **DIY** | Do-It-Yourself | How the tool's audience segment is described in the market-model survey. |
+
+### Risk & statistics
+
+| Acronym | Full form | Context |
+|---|---|---|
+| **NW** | Net Worth | Terminal after-tax NW is the primary point-estimate objective. |
+| **NPV** | Net Present Value | Lifetime-tax discounting in `metrics.py`. |
+| **PV** | Present Value | Generic discounting shorthand. |
+| **CVaR** | Conditional Value at Risk | Average of the worst α% of Monte Carlo terminal-NW outcomes. |
+| **MC** | Monte Carlo | The stochastic-path simulator (`monte_carlo.py`). |
+| **KPI** | Key Performance Indicator | Metric tile in the Dash UI's Overview tab. |
+| **IID** | Independent and Identically Distributed | The default Lognormal-draw assumption. |
+| **GARCH** | Generalized AutoRegressive Conditional Heteroskedasticity | Volatility-clustering model called out as deliberately out-of-scope. |
+| **RNG** | Random Number Generator | NumPy `Generator` instance threaded through every path. |
+| **PRNG** | Pseudo-Random Number Generator | The seed used by `differential_evolution`. |
+| **LTC** | Long-Term Care | Final-years spending shock in the smile / custom profiles. |
+
+### Technical / software
+
+| Acronym | Full form | Context |
+|---|---|---|
+| **CLI** | Command-Line Interface | `python -m tax_optimizer`. |
+| **API** | Application Programming Interface | The `tax_optimizer` Python surface. |
+| **UI** | User Interface | The Plotly Dash dashboard. |
+| **UX** | User Experience | Referenced in dashboard help copy. |
+| **HTML** | HyperText Markup Language | Default file format for the action report. |
+| **CSS** | Cascading Style Sheets | Report and dashboard styling. |
+| **DOM** | Document Object Model | Stable ids for the dashboard's help tooltips. |
+| **JSON** | JavaScript Object Notation | Scenario file format. |
+| **PDF** | Portable Document Format | Optional report format (requires the `[pdf]` extra + WeasyPrint). |
+| **SVG** | Scalable Vector Graphics | Figure export format. |
+| **WSGI** | Web Server Gateway Interface | `tax-optimizer-app-prod` runs the Dash app under `waitress`. |
+| **LRU** | Least Recently Used | Cache discipline for the runner result store. |
+| **UUID** | Universally Unique Identifier | Run-id keying for the runner cache and chat citations. |
+| **POSIX** | Portable Operating System Interface | Console-script launch convention. |
+| **TTY** | Teletypewriter | Used to detect interactive stdout for Rich pretty-printing. |
+| **TL;DR** | Too Long; Didn't Read | First section of the action report. |
+
+### Internal markers (codebase / palette)
+
+| Acronym | Full form | Context |
+|---|---|---|
+| **TC** | Tier C | Internal feature / test-case tags in `simulator.py` comments (e.g. `TC-6` for the IRA-only backdoor pro-rata fix, `TC-11` for the IRMAA lookback). |
+| **CB** | Color-blind | Palette qualifier in `dash_app/figures.py` (`CB-friendlier`, `CB-distinguishable`). |
 
 ## Disclaimer
 

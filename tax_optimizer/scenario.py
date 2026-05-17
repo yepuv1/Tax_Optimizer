@@ -176,10 +176,21 @@ def apply_scenario(
             f"Update your scenario JSON: {moves}."
         )
 
-    if config_patch:
-        cfg = _apply_config_dict(cfg, config_patch)
-    if inputs_patch:
-        inputs = _apply_inputs_dict(inputs, inputs_patch)
+    # Wrap dataclass `__post_init__` ValueError raises into
+    # ScenarioError so downstream callers (CLI, Dash app) can catch
+    # both shapes uniformly. Without this, a typo like
+    # `inputs.household_kind: "married"` raised a bare ValueError that
+    # the Dash run-banner couldn't easily distinguish from an internal
+    # exception.
+    try:
+        if config_patch:
+            cfg = _apply_config_dict(cfg, config_patch)
+        if inputs_patch:
+            inputs = _apply_inputs_dict(inputs, inputs_patch)
+    except ScenarioError:
+        raise
+    except ValueError as exc:
+        raise ScenarioError(f"Scenario validation failed: {exc}") from exc
     return cfg, inputs
 
 
@@ -256,10 +267,15 @@ def apply_set_overrides(
         target = cfg_patch if root == "config" else inputs_patch
         _nest_set(target, rest, value)
 
-    if cfg_patch:
-        cfg = _apply_config_dict(cfg, cfg_patch)
-    if inputs_patch:
-        inputs = _apply_inputs_dict(inputs, inputs_patch)
+    try:
+        if cfg_patch:
+            cfg = _apply_config_dict(cfg, cfg_patch)
+        if inputs_patch:
+            inputs = _apply_inputs_dict(inputs, inputs_patch)
+    except ScenarioError:
+        raise
+    except ValueError as exc:
+        raise ScenarioError(f"--set validation failed: {exc}") from exc
     return cfg, inputs
 
 

@@ -210,12 +210,15 @@ class TestStateTaxAndSDIReduction:
         cfg_with, inp_with = _two_earner_setup(
             spouse_a_medical=10_000.0,
         )
-        cfg_base = Config(horizon_age=50, start_year=2026, state_regime=CA)
-        cfg_with = Config(horizon_age=50, start_year=2026, state_regime=CA)
+        # Pin start_year to 2024 (1.1% SDI rate) so the test pins the
+        # reduction without depending on the EDD-published year-by-year
+        # schedule (1.2% in 2025, 0.9% in 2026).
+        cfg_base = Config(horizon_age=50, start_year=2024, state_regime=CA)
+        cfg_with = Config(horizon_age=50, start_year=2024, state_regime=CA)
         df_base = simulate(cfg_base, inp_base)
         df_with = simulate(cfg_with, inp_with)
 
-        # SDI 1.1% × $10k = $110.
+        # 2024 SDI 1.1% × $10k = $110.
         sdi_reduction = df_base.iloc[0]["state_sdi"] - df_with.iloc[0]["state_sdi"]
         assert sdi_reduction == pytest.approx(10_000 * 0.011, abs=2.0)
 

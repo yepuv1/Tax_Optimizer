@@ -658,6 +658,67 @@ class TestLtcShockAnchoredToLife:
         )
         assert rec == pytest.approx(160_000.0)
 
+    def test_simulator_uses_horizon_when_only_one_spouse_has_death(self) -> None:
+        # Pre-fix the simulator anchored LTC to whichever spouse had a
+        # year_of_death set, even when the OTHER spouse was alive to
+        # horizon. So in an MFJ household where only spouse A has a
+        # death year (B alive to horizon), LTC fired at A's death
+        # rather than at the household's actual end-of-life (the
+        # horizon, since B never dies). Post-fix the household's last
+        # year is the horizon, so LTC fires near horizon.
+        from tax_optimizer import Config, Inputs
+        from tax_optimizer.inputs import CurrentContrib, StartingBalances
+        from tax_optimizer.mortality import Mortality
+        from tax_optimizer.simulator import simulate
+        from tax_optimizer.spending import (
+            LongTermCareShock,
+            SpendingPhase,
+            SpendingProfile,
+        )
+
+        # 2-year LTC shock at $60k/yr (today's dollars). Mortality:
+        # spouse A dies at year 5, spouse B is alive to horizon (15
+        # years). Horizon - LTC.years = 14. So LTC should fire in
+        # the final 2 years (year_offset 14, 15), NOT at year 3, 4
+        # (the two years before A's death).
+        #
+        # We zero the HSA so the LTC cost actually shows up on the
+        # `spending_need` row (HSA paydown otherwise zeroes the
+        # excess medical-need above $50k base, which would obscure
+        # the test signal).
+        cfg = Config(
+            horizon_age=65,  # spouse_a starts at 50 → 16-yr horizon
+            mortality=Mortality(
+                year_of_death_a=5,
+                # year_of_death_b stays None → alive to horizon.
+            ),
+            spending=SpendingProfile(
+                base_spending=50_000.0,
+                inflation=0.0,
+                phases=[SpendingPhase(0, 100, 1.0, "flat")],
+                ltc_shock=LongTermCareShock(years=2, annual_cost_today=60_000.0),
+            ),
+            inflation=0.0,
+        )
+        inp = Inputs(
+            starting=StartingBalances(hsa=0.0),
+            contrib=CurrentContrib(hsa_family=0.0),
+        )
+        df = simulate(cfg, inp)
+        spend = df["spending_need"].tolist()
+        n = len(spend)
+        # Years 3, 4 (pre-A-death window): no LTC bump.
+        assert max(spend[3], spend[4]) < 90_000.0, (
+            f"LTC must NOT fire pre-A's-death; "
+            f"yrs 3,4 spending={spend[3]:,.0f},{spend[4]:,.0f}"
+        )
+        # Final 2 years (horizon-aligned): LTC fires.
+        last_two_min = min(spend[n - 2], spend[n - 1])
+        assert last_two_min > 100_000.0, (
+            f"LTC must fire in the final 2 years near horizon; "
+            f"got spend[-2:]={spend[n-2]:,.0f},{spend[n-1]:,.0f}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # F7 / F8 — min_balance and MC ruin both include HSA post-65

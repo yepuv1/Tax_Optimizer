@@ -197,6 +197,70 @@ class TestSimulateWidowsPenalty:
         assert not df.iloc[20]["alive_a"]
 
 
+class TestNonNegativeBalances:
+    """Defensive balance-clamp regression. Pre-fix the cascade leg
+    that subtracts ``state.taxable -= withdraws["taxable"]`` could
+    leave a tiny negative residue from rounding (the basis-fraction
+    multiplication on ``cumulative_basis`` was clamped, but the
+    underlying ``state.taxable`` and ``state.roth`` were not).
+    Post-fix every liquid balance is clamped to >= 0 at the end of
+    each simulated year.
+    """
+
+    def test_taxable_and_roth_never_negative_in_default_run(self) -> None:
+        df = simulate(Config(), Inputs())
+        assert (df["taxable_balance"] >= 0).all(), (
+            f"taxable_balance went negative; min={df['taxable_balance'].min()}"
+        )
+        assert (df["roth_balance"] >= 0).all(), (
+            f"roth_balance went negative; min={df['roth_balance'].min()}"
+        )
+        assert (df["cumulative_basis"] >= 0).all(), (
+            f"cumulative_basis went negative; "
+            f"min={df['cumulative_basis'].min()}"
+        )
+        assert (df["hsa_balance"] >= 0).all(), (
+            f"hsa_balance went negative; min={df['hsa_balance'].min()}"
+        )
+
+    def test_aggressive_drawdown_keeps_balances_nonneg(self) -> None:
+        # Stress: small starting balances + high spending → cascade
+        # has to drain everything fast. The clamp must hold even when
+        # the cascade gross-up bumps up against rounding limits.
+        from tax_optimizer.inputs import StartingBalances
+        from tax_optimizer.spending import SpendingProfile
+
+        inp = Inputs(
+            spouse_a_age_start=70,
+            spouse_b_age_start=70,
+            spouse_a_retire_age=70,
+            spouse_b_retire_age=70,
+            starting=StartingBalances(
+                spouse_a_pretax_401k=50_000,
+                spouse_b_pretax_401k=50_000,
+                spouse_a_roth_ira=20_000,
+                taxable_brokerage=20_000,
+                hsa=5_000,
+            ),
+        )
+        cfg = Config(
+            horizon_age=85,
+            spending=SpendingProfile.flat(base_spending=80_000.0),
+        )
+        df = simulate(cfg, inp)
+        for col in (
+            "taxable_balance",
+            "roth_balance",
+            "cumulative_basis",
+            "hsa_balance",
+            "pretax_balance",
+        ):
+            assert (df[col] >= 0).all(), (
+                f"{col} went negative under aggressive drawdown; "
+                f"min={df[col].min():.6f}"
+            )
+
+
 class TestSimulateRegimeChange:
     def test_regime_label_changes_at_offset(self) -> None:
         cfg = Config(
