@@ -80,6 +80,17 @@ def _strategy_result(name: str, cfg: Config, inputs: Inputs) -> StrategyResult:
 
 _VALID_OBJECTIVES = ("terminal", "cvar", "p_success")
 
+# The Monte-Carlo path count used *inside* each fitness evaluation for
+# `cvar` / `p_success` objectives. Each DE generation makes
+# ``popsize × dim`` calls to the objective and each call simulates
+# ``opt_n_paths`` independent paths, so this multiplies the optimizer
+# wall-clock linearly. 50 paths gives a stable enough CVaR estimate
+# for ranking decision vectors without pushing the Dash run into
+# multi-minute territory (the user-facing "MC paths" knob is
+# separately for the *post-optimization* fan chart, which can use
+# 500-2000 paths since it only runs once).
+_DEFAULT_OPT_N_PATHS_STOCHASTIC = 50
+
 
 def _build_four(
     cfg: Config,
@@ -89,6 +100,7 @@ def _build_four(
     objective: str = "terminal",
     maxiter: int = 20,
     popsize: int = 10,
+    opt_n_paths: int | None = None,
 ) -> dict[str, StrategyResult]:
     """Construct the canonical four strategies (S0–S3).
 
@@ -96,6 +108,15 @@ def _build_four(
     differential-evolution optimizer that builds S3. Pre-fix these
     were hard-coded at runner level so the Dash UI couldn't surface
     them; the Dash run controls now expose all three.
+
+    ``opt_n_paths`` controls the Monte-Carlo path count *inside* each
+    optimizer fitness evaluation (ignored for the deterministic
+    ``terminal`` objective). When ``None`` we use a runner-level
+    default of 50 paths — small enough that a 200-fitness-evaluation
+    DE budget finishes in tens of seconds, large enough that the
+    CVaR / p_success ranking is stable across runs. Pass an
+    explicit integer to override (e.g. for headless overnight runs
+    where wall-clock is no concern).
     """
     if objective not in _VALID_OBJECTIVES:
         raise ValueError(
@@ -108,6 +129,11 @@ def _build_four(
         # SciPy's differential_evolution requires popsize >= 4.
         raise ValueError("popsize must be >= 4")
 
+    if opt_n_paths is None:
+        opt_n_paths = _DEFAULT_OPT_N_PATHS_STOCHASTIC
+    if opt_n_paths < 1:
+        raise ValueError("opt_n_paths must be >= 1")
+
     s0 = (cfg, inputs)
     s1 = (
         cfg,
@@ -117,6 +143,7 @@ def _build_four(
     s3_cfg, s3_inputs, _x = optimize_household(
         cfg, inputs,
         objective=objective,
+        n_paths=opt_n_paths,
         maxiter=maxiter,
         popsize=popsize,
         seed=seed,
@@ -140,6 +167,7 @@ def run_scenario(
     objective: str = "terminal",
     maxiter: int = 20,
     popsize: int = 10,
+    opt_n_paths: int | None = None,
 ) -> RunResult:
     """Dispatch on `mode` and return a populated `RunResult`.
 
@@ -153,6 +181,14 @@ def run_scenario(
     now surface them so users can pick CVaR or probability-of-
     success objectives and tune optimizer cost vs. solution
     quality.
+
+    `opt_n_paths` is the per-fitness MC path count for stochastic
+    objectives (`cvar` / `p_success`). It is *separate* from
+    `n_paths`, which controls the post-optimization fan-chart MC.
+    The optimizer makes hundreds of fitness evaluations, so its
+    inner MC defaults to a smaller value (50 paths) to keep the
+    Dash run interactive; users can pass an explicit override for
+    higher-fidelity headless runs.
     """
     import time
 
@@ -174,6 +210,7 @@ def run_scenario(
             objective=objective,
             maxiter=maxiter,
             popsize=popsize,
+            opt_n_paths=opt_n_paths,
         )
         winner_name = max(
             strategies, key=lambda n: strategies[n].summary["terminal_after_tax"]

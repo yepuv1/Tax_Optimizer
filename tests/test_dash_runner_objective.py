@@ -114,6 +114,76 @@ class TestValidation:
         with pytest.raises(ValueError, match="popsize"):
             _build_four(cfg, inp, seed=0, popsize=3)
 
+    def test_opt_n_paths_below_one_raises(self) -> None:
+        cfg, inp = _small()
+        with pytest.raises(ValueError, match="opt_n_paths"):
+            _build_four(cfg, inp, seed=0, opt_n_paths=0)
+
+
+class TestOptimizerInternalNPaths:
+    """The optimizer's *inner* MC path count (`opt_n_paths`) is
+    distinct from the post-optimization fan-chart path count
+    (`n_paths`). The latter ran-once-per-strategy can afford 200-2000
+    paths; the former runs hundreds of times inside the DE loop and
+    must stay small or the Dash UI hangs.
+    """
+
+    def test_default_opt_n_paths_is_50(self) -> None:
+        cfg, inp = _small()
+        with patch(
+            "dash_app.runner.optimize_household",
+            return_value=(cfg, inp, {}),
+        ) as m:
+            run_scenario(
+                cfg, inp,
+                mode="four_strategies",
+                seed=0,
+                objective="cvar",
+            )
+        assert m.call_args.kwargs["n_paths"] == 50, (
+            "stochastic objectives should default to 50 inner-MC "
+            "paths for Dash interactivity; got "
+            f"{m.call_args.kwargs['n_paths']}"
+        )
+
+    def test_explicit_opt_n_paths_overrides_default(self) -> None:
+        cfg, inp = _small()
+        with patch(
+            "dash_app.runner.optimize_household",
+            return_value=(cfg, inp, {}),
+        ) as m:
+            run_scenario(
+                cfg, inp,
+                mode="four_strategies",
+                seed=0,
+                objective="cvar",
+                opt_n_paths=200,
+            )
+        assert m.call_args.kwargs["n_paths"] == 200
+
+    def test_runner_n_paths_does_not_leak_into_optimizer(self) -> None:
+        """The runner's user-facing `n_paths` argument controls the
+        post-optimization fan-chart MC; it must NOT get passed
+        through to ``optimize_household``'s inner MC (where it would
+        spike the fitness-evaluation cost ~4× and re-introduce the
+        Dash hang).
+        """
+        cfg, inp = _small()
+        with patch(
+            "dash_app.runner.optimize_household",
+            return_value=(cfg, inp, {}),
+        ) as m_opt:
+            run_scenario(
+                cfg, inp,
+                mode="four_strategies",
+                seed=0,
+                objective="cvar",
+                n_paths=2_000,  # Big — would hang if it leaked
+            )
+        # Optimizer's inner MC should still default to 50 even
+        # though the user requested a 2,000-path post-MC.
+        assert m_opt.call_args.kwargs["n_paths"] == 50
+
 
 class TestDashLayoutControls:
     def test_layout_exposes_three_optimizer_controls(self) -> None:

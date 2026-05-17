@@ -268,7 +268,18 @@ def optimize_household(
 
     # Coarse grid initialization for the first three axes (the Tier-A
     # baseline). Higher-dim runs skip the grid and rely on DE init.
-    if len(meta) <= 3:
+    #
+    # Stochastic objectives (`cvar` / `p_success`) skip the grid
+    # entirely: every grid call runs a Monte-Carlo simulation
+    # (`simulate_paths(n_paths=N)`) and at the default 4×4×|brackets|
+    # = 80 calls × ~0.2-0.8s/call this adds 15-60s of pre-DE work to
+    # an already-expensive run *before* the differential-evolution
+    # loop even starts. The DE Sobol initialization already does a
+    # comparable global sweep, so the grid was duplicate work for
+    # stochastic objectives. Deterministic `terminal` keeps the grid
+    # because each call is ~5ms and the grid catches the typical
+    # household's local optimum cheaply.
+    if len(meta) <= 3 and objective == "terminal":
         grid_results = []
         for v in np.linspace(0, 1, 4):
             for b in np.linspace(0, 1, 4):

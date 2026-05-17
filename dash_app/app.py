@@ -730,6 +730,43 @@ def make_app() -> dash.Dash:
 
     # ---- Run --------------------------------------------------------
 
+    # Pre-run advisory: this clientside callback fires the *moment*
+    # the user clicks Run and writes "Running..." into the status
+    # banner before the Python `_run` callback below begins its
+    # synchronous work. Without this nudge, picking the CVaR /
+    # p_success objective looked like a hang because the optimizer's
+    # inner Monte-Carlo can take 30-90s and Dash gave the user no
+    # feedback until the callback returned. The server-side `_run`
+    # callback writes its own status (success / failure) when
+    # finished and supersedes this message.
+    app.clientside_callback(
+        """
+        function(n_clicks, objective, mode) {
+            if (!n_clicks) {
+                return window.dash_clientside.no_update;
+            }
+            var stochastic = (objective === 'cvar' ||
+                              objective === 'p_success');
+            if (mode === 'single') {
+                return 'Running... (single sim, ~1s)';
+            }
+            if (stochastic) {
+                return ('Running... (stochastic optimizer with '
+                        + objective + ' objective; expect 30-90s — '
+                        + 'each fitness evaluation runs a Monte-'
+                        + 'Carlo). The page will not respond until '
+                        + 'the run finishes.');
+            }
+            return 'Running... (four-strategy optimizer, ~5-15s)';
+        }
+        """,
+        Output("run-status", "children", allow_duplicate=True),
+        Input("run-btn", "n_clicks"),
+        State("opt-objective", "value"),
+        State("run-mode", "value"),
+        prevent_initial_call=True,
+    )
+
     @app.callback(
         Output("run-result", "data"),
         Output("run-status", "children", allow_duplicate=True),
